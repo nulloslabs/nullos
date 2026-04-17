@@ -1,0 +1,15 @@
+#pragma once
+
+#define isdigit(c) ((c) >= '0' && (c) <= '9')
+#define islower(c) ((c) >= 'a' && (c) <= 'z')
+#define isupper(c) ((c) >= 'A' && (c) <= 'Z')
+#define isalpha(c) (islower(c) || isupper(c))
+#define isalnum(c) (isalpha(c) || isdigit(c))
+#define isspace(c) ((c)==' '||(c)=='\t'||(c)=='\n'||(c)=='\r'||(c)=='\f'||(c)=='\v')
+#define isxdigit(c) (isdigit(c)||((c)>='a'&&(c)<='f')||((c)>='A'&&(c)<='F'))
+#define isprint(c) ((c) >= 32 && (c) < 127)
+#define isascii(c) ((c) >= 0 && (c) < 128)
+#define ispunct(c) (isprint(c) && !isalnum(c) && (c) != ' ')
+#define iscntrl(c) ((c) < 32 || (c) == 127)
+#define toupper(c) (islower(c) ? (c) - 32 : (c))
+#define tolower(c) (isupper(c) ? (c) + 32 : (c))

@@ -1,0 +1,16 @@
+*.o
+*.d
+nullkrnl*
+*.unstripped
+*.tar.gz
+*.iso
+
+iso/main/
+rootfs/main/
+tools/limine/
+
+userspace/init
+userspace/login
+userspace/libc.a
+userspace/libc.so
+userspace/crt0.o
