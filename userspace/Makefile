@@ -13,8 +13,6 @@ userspace:
 	@$(MAKE) -C main
 
 clean:
-	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/libc.so $(SUBDIR)/login"
-	@rm -rf libc.so login
 	@$(MAKE) -C main clean
 
 mrproper: clean
