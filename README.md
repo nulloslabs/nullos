@@ -3,6 +3,7 @@
 A secure, fast and private hobby OS.
 
 ## ✨ Features
+
 | Status | Feature | Notes |
 | :--- | :--- | :--- |
 | Half-done | USB support | Only works on QEMU. |
