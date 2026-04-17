@@ -16,21 +16,23 @@ DEP :=
 define PROG_template
 $(shell echo $(1) | tr a-z A-Z)_OBJ = $(1).o
 DEP += $$($(shell echo $(1) | tr a-z A-Z)_OBJ:.o=.d)
-../../$(1): $$($(shell echo $(1) | tr a-z A-Z)_OBJ)
+../../$(1): $$($(shell echo $(1) | tr a-z A-Z)_OBJ) ../../crt0.o ../../libc.so
 	@printf "  %-7s %s\n" "LD" "$(SUBDIR)/$(1)"
 	@$(LD) $(LDFLAGS) ../../crt0.o $$($(shell echo $(1) | tr a-z A-Z)_OBJ) -o $$@ -Wl,--no-dynamic-linker -l:libc.so
+
+# Print info if up to date
+ifeq ($$(shell \
+	if [ ! -f ../../$(1) ]; then echo 0; exit; fi; \
+	if [ $(1).c -nt ../../$(1) ] || [ ../../crt0.o -nt ../../$(1) ] || [ ../../libc.so -nt ../../$(1) ]; then echo 0; exit; fi; \
+	echo 1),1)
+$$(info $$(empty)  INFO    $$(SUBDIR)/$(1) is already up to date)
+endif
 endef
 $(foreach p,$(PROGS),$(eval $(call PROG_template,$(p))))
 
 -include $(DEP)
 
-all: $(foreach p,$(PROGS),$(p)_info ../../$(p))
-
-define PROG_info_template
-$(1)_info:
-	@if $$(MAKE) -q ../../$(1); then printf "  %-7s %s\n" "INFO" "$$(SUBDIR)/$(1) is already up to date"; fi
-endef
-$(foreach p,$(PROGS),$(eval $(call PROG_info_template,$(p))))
+all: $(addprefix ../../,$(PROGS))
 
 %.o: %.c
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/main/progs/$@"

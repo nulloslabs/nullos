@@ -10,32 +10,37 @@ endif
 
 include ../../config.mk
 
-# NOTE: crt0.S is a seperate object, not part of libc.
-SRC = unistd.c string.c stdio.c fcntl.c errno.c ioctl.c stat.c dirent.c mount.c wait.c
+SRC = $(wildcard *.c) $(wildcard *.S)
 OBJ = $(SRC:.c=.o)
+OBJ := $(OBJ:.S=.o)
 DEP = $(OBJ:.o=.d)
 
 -include $(DEP)
 
-all: crt0_info ../../crt0.o libc_so_info ../../libc.so libc_a_info ../../libc.a
+# Print info if up to date
+ifeq ($(shell \
+	if [ ! -f ../../libc.so ]; then echo 0; exit; fi; \
+	for f in $(SRC); do if [ "$$f" -nt "../../libc.so" ]; then echo 0; exit; fi; done; \
+	echo 1),1)
+$(info $(empty)  INFO    $(SUBDIR)/libc.so is already up to date)
+endif
 
-crt0_info:
-	@if $(MAKE) -q ../../crt0.o; then printf "  %-7s %s\n" "INFO" "$(SUBDIR)/crt0.o is already up to date"; fi
+ifeq ($(shell \
+	if [ ! -f ../../libc.a ]; then echo 0; exit; fi; \
+	for f in $(SRC); do if [ "$$f" -nt "../../libc.a" ]; then echo 0; exit; fi; done; \
+	echo 1),1)
+$(info $(empty)  INFO    $(SUBDIR)/libc.a is already up to date)
+endif
 
-libc_so_info:
-	@if $(MAKE) -q ../../libc.so; then printf "  %-7s %s\n" "INFO" "$(SUBDIR)/libc.so is already up to date"; fi
-
-libc_a_info:
-	@if $(MAKE) -q ../../libc.a; then printf "  %-7s %s\n" "INFO" "$(SUBDIR)/libc.a is already up to date"; fi
+all: ../../libc.so ../../libc.a
 
 %.o: %.c
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/main/libc/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
-../../crt0.o: crt0.S
-	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/crt0.o"
+%.o: %.S
+	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/main/libc/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
-	@rm -f ../../crt0.d
 
 ../../libc.so: $(OBJ)
 	@printf "  %-7s %s\n" "LD" "$(SUBDIR)/libc.so"
@@ -47,7 +52,7 @@ libc_a_info:
 
 clean:
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/libc/*.o $(SUBDIR)/main/libc/*.d"
-	@rm -rf $(OBJ) $(DEP) ../../crt0.o ../../libc.so ../../libc.a
+	@rm -rf $(OBJ) $(DEP) ../../libc.so ../../libc.a
 
 mrproper: clean
 
