@@ -58,6 +58,3 @@ This project is licensed under the **GNU General Public License v3.0**. See the 
 ## 🤝 Contributing
 
 NullOS is currently a solo hobby project, but technical discussions and bug reports are always welcome!
-
----
-*Developed with ❤️.*
