@@ -1,6 +1,6 @@
 # NullOS
 
-A secure, fast and private hobby OS.
+A secure, fast and privacy-focused hobby OS.
 
 ## ✨ Features
 
