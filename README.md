@@ -17,7 +17,7 @@ A secure, fast and privacy-focused hobby OS.
 | Done | Serial port support |
 | Done | Syscall support |
 | Done | ELF executable support |
-| Done | SMP support |
+| Done | MP support |
 | Done | Networking and networking card support |
 
 ## 🛠️ Build Requirements
