@@ -8,6 +8,7 @@ nullkrnl*
 iso/main/
 rootfs/main/
 tools/limine/
+kernel/include/limine/
 
 userspace/init
 userspace/login
