@@ -518,11 +518,9 @@ void puts(const char *s) {
     spin_unlock_irqrestore(&term_lock, rflags);
 }
 
-void printf(const char *fmt, ...) {
+void vprintf(const char *fmt, va_list args) {
     uint64_t rflags;
     spin_lock_irqsave(&term_lock, &rflags);
-    va_list args;
-    va_start(args, fmt);
     for (const char *p = fmt; *p != '\0'; p++) {
         if (*p != '%') {
             putc_unlocked(*p);
@@ -623,6 +621,13 @@ void printf(const char *fmt, ...) {
                 break;
         }
     }
-    va_end(args);
     spin_unlock_irqrestore(&term_lock, rflags);
+}
+
+void printf(const char *fmt, ...) {
+    // No spinlocks here since vprintf already has spinlocks
+    va_list args;
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
 }

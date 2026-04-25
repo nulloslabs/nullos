@@ -2,6 +2,7 @@
 
 #include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stdarg.h>
 #include <limine/limine.h>
 #include <io/framebuffer.h>
 
@@ -24,4 +25,5 @@ void scroll(struct limine_framebuffer *fb);
 void clrscr(void);
 void putc(char c);
 void puts(const char *s);
+void vprintf(const char *fmt, va_list args);
 void printf(const char *fmt, ...);
