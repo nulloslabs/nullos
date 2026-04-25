@@ -27,6 +27,21 @@ static void write_ohci(volatile uint32_t *base, uint32_t reg, uint32_t val) {
     *(volatile uint32_t*)((uint8_t*)base + reg) = val;
 }
 
+static uint32_t read_ohci_port_with_settle(volatile uint32_t *base, uint32_t port_reg,
+                                           int force_port_power, int attempts, uint64_t delay_ms) {
+    uint32_t status = 0;
+    for (int i = 0; i < attempts; i++) {
+        status = read_ohci(base, port_reg);
+        if (status != 0x00000000) return status;
+        if (force_port_power) {
+            // In per-port switching mode (PSM=1), set PPS on each port.
+            write_ohci(base, port_reg, OHCI_PORT_PPS);
+        }
+        if (delay_ms) sleep(delay_ms);
+    }
+    return status;
+}
+
 static ohci_ed_t *alloc_ohci_ed(void) {
     ohci_ed_t *ed = (ohci_ed_t *)malloc(sizeof(ohci_ed_t) + 16);
     ed = (ohci_ed_t *)(((uint64_t)ed + 15) & ~15ULL);
@@ -72,9 +87,14 @@ static int ohci_control_transfer(usb_hcd_t *hcd, usb_device_t *dev,
     (void)hcd;
     uint32_t addr = dev->address;
     int ls = (dev->speed == USB_SPEED_LOW);
+    uint8_t data_dir_in = ((setup->bmRequestType & USB_REQTYPE_DIR_IN) != 0);
+    uint32_t max_pkt = dev->max_packet_size;
+    if (max_pkt != 8 && max_pkt != 16 && max_pkt != 32 && max_pkt != 64) {
+        max_pkt = 8;
+    }
 
     ohci_ed_t *ed = alloc_ohci_ed();
-    ed->control = addr | (0 << 7) | (ls << 13) | (8 << 16); // EP0, MaxPkt 8
+    ed->control = addr | (0 << 7) | (ls << 13) | (max_pkt << 16); // EP0
 
     // Setup TD
     ohci_td_t *td_setup = alloc_ohci_td();
@@ -86,24 +106,29 @@ static int ohci_control_transfer(usb_hcd_t *hcd, usb_device_t *dev,
     // Data TD (optional)
     ohci_td_t *td_data = NULL;
     if (length > 0) {
+        uint32_t data_dp = data_dir_in ? 2u : 1u;
+        uint32_t data_round = data_dir_in ? (1u << 18) : 0u;
         td_data = alloc_ohci_td();
-        td_data->control = (1 << 18) | (2 << 19) | (3 << 24) | (0x0F << 28); // R=1, DP=IN(10), T=DATA1(11), CC=0xF
+        td_data->control = data_round | (data_dp << 19) | (3u << 24) | (0x0Fu << 28); // DATA1
         td_data->cbp = (uint32_t)virt_to_phys(data);
         td_data->be = td_data->cbp + length - 1;
         td_setup->next_td = (uint32_t)virt_to_phys(td_data);
     }
 
-    // Status TD — toggle opposite of data phase, and MUST terminate the chain
+    // Status TD is always DATA1 with opposite direction to the data stage.
     ohci_td_t *td_status = alloc_ohci_td();
-    int status_dp = (length > 0) ? 1 : 2;  // Data IN -> status OUT(01), no data -> status IN(10)
-    uint8_t status_toggle = (length > 0) ? 0 : 3;  // T=DATA0 if data phase, T=DATA1 if no data
-    td_status->control = (status_dp << 19) | (status_toggle << 24) | (0x0F << 28); // R=0, DP from status_dp, CC=0xF
-    td_status->next_td = 0x01;  // MUST set Terminate bit — end of TD chain
+    uint32_t status_dp = (length > 0) ? (data_dir_in ? 1u : 2u) : 2u;
+    td_status->control = (status_dp << 19) | (3u << 24) | (0x0Fu << 28);
+
+    // OHCI ED queue ends when HeadP == TailP, so use an explicit dummy tail TD.
+    ohci_td_t *td_tail = alloc_ohci_td();
+    td_tail->next_td = 0;
+    td_status->next_td = (uint32_t)virt_to_phys(td_tail);
     if (td_data) td_data->next_td = (uint32_t)virt_to_phys(td_status);
     else td_setup->next_td = (uint32_t)virt_to_phys(td_status);
 
     ed->head_td = (uint32_t)virt_to_phys(td_setup);
-    ed->tail_td = (uint32_t)virt_to_phys(td_status) + sizeof(ohci_td_t);  // HC stops when head == tail (points AFTER last TD)
+    ed->tail_td = (uint32_t)virt_to_phys(td_tail);
 
     write_ohci(ohci_ctrl.regs, OHCI_CTRL_HEAD_ED, (uint32_t)virt_to_phys(ed));
     write_ohci(ohci_ctrl.regs, OHCI_CMDSTATUS, OHCI_CMDSTS_CLF);
@@ -404,22 +429,33 @@ void init_ohci(pci_device_t *dev) {
     uint32_t rha = read_ohci(regs, OHCI_RHDESCRIPTORA);
     ohci_ctrl.num_ports = (rha & 0xFF);
     printf("OHCI: HcRhDescriptorA=0x%08X  num_ports=%d\n", rha, ohci_ctrl.num_ports);
-
-    // Port power: HcRhDescriptorA bit 9 (NPS = No Power Switching)
+    // Port power mode:
+    //   bit 9 NPS = 1 => no power switching (ports always powered)
+    //   bit 8 PSM = 0 => global power switching via RHSTATUS.LPSC
+    //   bit 8 PSM = 1 => per-port power switching via RHPORTSTATUS.PPS
     // If NPS=0, we must explicitly enable port power.
     // POTPGT (bits 31:24) = Power On To Power Good Time in units of 2ms.
     int nps = (rha >> 9) & 1;
+    int psm = (rha >> 8) & 1;
+    int per_port_power = (!nps && psm);
     uint32_t potpgt_ms = ((rha >> 24) & 0xFF) * 2;
     if (potpgt_ms == 0) potpgt_ms = 100; // Default 100ms if not specified
-
-    if (!nps) {
-        printf("OHCI: NPS=0, enabling global port power (POTPGT=%dms)...\n", potpgt_ms);
+    if (nps) {
+        printf("OHCI: NPS=1, ports always powered.\n");
+        sleep(100); // Give ports time to stabilise anyway
+    } else if (!psm) {
+        printf("OHCI: NPS=0 PSM=0, enabling global port power (POTPGT=%dms)...\n", potpgt_ms);
         // Set LPSC (bit 16) in HcRhStatus = Set Global Power
         write_ohci(regs, OHCI_RHSTATUS, (1 << 16));
         sleep(potpgt_ms);
     } else {
-        printf("OHCI: NPS=1, ports always powered.\n");
-        sleep(100); // Give ports time to stabilise anyway
+        printf("OHCI: NPS=0 PSM=1, enabling per-port power on %d ports (POTPGT=%dms)...\n",
+               ohci_ctrl.num_ports, potpgt_ms);
+        for (int i = 0; i < ohci_ctrl.num_ports; i++) {
+            uint32_t port_reg = OHCI_RHPORTSTATUS_BASE + (i * 4);
+            write_ohci(regs, port_reg, OHCI_PORT_PPS);
+        }
+        sleep(potpgt_ms);
     }
 
     // PCI read flush to ensure MMIO writes are visible
@@ -428,7 +464,7 @@ void init_ohci(pci_device_t *dev) {
     // Debug: print port status after power-on
     for (int i = 0; i < ohci_ctrl.num_ports; i++) {
         uint32_t port_reg = OHCI_RHPORTSTATUS_BASE + (i * 4);
-        uint32_t status = read_ohci(regs, port_reg);
+        uint32_t status = read_ohci_port_with_settle(regs, port_reg, per_port_power, 8, 5);
         printf("OHCI: Port %d: status=0x%08X after power-on\n", i, status);
     }
 
@@ -445,11 +481,11 @@ void init_ohci(pci_device_t *dev) {
     // Initial port scan (like EHCI/xHCI) - detect already-connected devices
     for (int i = 0; i < ohci_ctrl.num_ports; i++) {
         uint32_t port_reg = OHCI_RHPORTSTATUS_BASE + (i * 4);
-        uint32_t status = read_ohci(regs, port_reg);
+        uint32_t status = read_ohci_port_with_settle(regs, port_reg, per_port_power, 12, 5);
 
-        // If port reads 0x00000000 after power stabilisation, it's physically absent
+        // If a port still reads 0 after settle retries, skip for now.
         if (status == 0x00000000) {
-            printf("OHCI: Port %d: Reads 0x00000000, skipping.\n", i);
+            printf("OHCI: Port %d: Still reads 0x00000000 after settle retries, skipping.\n", i);
             continue;
         }
 
@@ -491,25 +527,41 @@ bool is_ohci_ready(void) {
     return ohci_ctrl.initialized;
 }
 
-void ohci_rescan_ports(void) {
+void ohci_rescan_ports(int port_hint) {
     if (!ohci_ctrl.initialized) return;
     volatile uint32_t *regs = ohci_ctrl.regs;
     if (!regs) {
         printf("OHCI: No MMIO mapping available.\n");
         return;
     }
+    uint32_t rha = read_ohci(regs, OHCI_RHDESCRIPTORA);
+    int nps = (rha >> 9) & 1;
+    int psm = (rha >> 8) & 1;
+    int per_port_power = (!nps && psm);
 
-    printf("OHCI: Rescanning %d ports...\n", ohci_ctrl.num_ports);
+    int start_port = 0;
+    int end_port = ohci_ctrl.num_ports;
+    if (port_hint >= 0 && port_hint < ohci_ctrl.num_ports) {
+        start_port = port_hint;
+        end_port = port_hint + 1;
+        printf("OHCI: Rescanning handoff port %d.\n", port_hint);
+    } else {
+        printf("OHCI: Rescanning %d ports...\n", ohci_ctrl.num_ports);
+    }
 
-    for (int i = 0; i < ohci_ctrl.num_ports; i++) {
+    for (int i = start_port; i < end_port; i++) {
         uint32_t port_reg = OHCI_RHPORTSTATUS_BASE + (i * 4);
-        uint32_t status = read_ohci(regs, port_reg);
-        printf("OHCI: Port %d: Initial status=0x%08X (CCS=%d, PES=%d, PRSC=%d)\n", i, status,
-               !!(status & OHCI_PORT_CCS), !!(status & OHCI_PORT_PES), !!(status & OHCI_PORT_PRSC));
-
-        // Skip completely invalid ports (0x00000000 = no port register / invalid MMIO)
+        uint32_t status0 = read_ohci(regs, port_reg);
+        uint32_t status = status0;
         if (status == 0x00000000) {
-            printf("OHCI: Port %d: Invalid/absent port register (0x00000000), skipping.\n", i);
+            status = read_ohci_port_with_settle(regs, port_reg, per_port_power, 8, 5);
+        }
+        printf("OHCI: Port %d: Initial status=0x%08X Settled status=0x%08X (CCS=%d, PES=%d, PRSC=%d)\n",
+               i, status0, status,
+               !!(status & OHCI_PORT_CCS), !!(status & OHCI_PORT_PES), !!(status & OHCI_PORT_PRSC));
+        // If still zero after retries, skip for now.
+        if (status == 0x00000000) {
+            printf("OHCI: Port %d: Still 0x00000000 after settle retries, skipping.\n", i);
             continue;
         }
 

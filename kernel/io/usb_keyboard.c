@@ -5,6 +5,7 @@
 #include <io/keyboard.h>
 #include <io/terminal.h>
 #include <io/ehci.h>  // For ehci_poll_keyboards
+#include <io/hpet.h>
 #include <mm/mm.h>
 #include <main/string.h>
 
@@ -301,6 +302,63 @@ static int usb_find_boot_keyboard_interface(uint8_t *buf, uint16_t total_len) {
     return 0;
 }
 
+typedef struct {
+    uint8_t *raw;
+    uint8_t *page;
+} usb_dma_scratch_t;
+
+static int usb_alloc_dma_scratch(usb_dma_scratch_t *scratch) {
+    if (!scratch) return -1;
+    scratch->raw = NULL;
+    scratch->page = NULL;
+
+    // Allocate enough headroom to carve out one 4KB aligned DMA-safe page.
+    uint8_t *raw = (uint8_t *)malloc(8192);
+    if (!raw) return -1;
+
+    uintptr_t aligned = ((uintptr_t)raw + 4095ULL) & ~4095ULL;
+    if (aligned + 4096ULL > (uintptr_t)raw + 8192ULL) {
+        free(raw);
+        return -1;
+    }
+
+    scratch->raw = raw;
+    scratch->page = (uint8_t *)aligned;
+    memset(scratch->page, 0, 4096);
+    return 0;
+}
+
+static void usb_free_dma_scratch(usb_dma_scratch_t *scratch) {
+    if (!scratch) return;
+    if (scratch->raw) free(scratch->raw);
+    scratch->raw = NULL;
+    scratch->page = NULL;
+}
+
+static int usb_control_transfer_retry(usb_hcd_t *hcd, usb_device_t *dev,
+                                      usb_setup_packet_t *setup, void *data, uint16_t length,
+                                      int retries, uint64_t retry_delay_ms) {
+    if (retries < 1) retries = 1;
+    int ret = -1;
+    for (int i = 0; i < retries; i++) {
+        ret = hcd->control_transfer(hcd, dev, setup, data, length);
+        if (ret >= 0) return ret;
+        if (i + 1 < retries && retry_delay_ms) sleep(retry_delay_ms);
+    }
+    return ret;
+}
+
+static uint8_t usb_next_probe_address = 1;
+
+static int usb_allocate_probe_address(uint8_t *out_addr) {
+    if (!out_addr) return -1;
+    if (usb_next_probe_address == 0 || usb_next_probe_address > 127) {
+        return -1;
+    }
+    *out_addr = usb_next_probe_address++;
+    return 0;
+}
+
 // ============================================================================
 // USB keyboard initialisation — verifies device is actually a boot keyboard
 // before committing any resources.
@@ -357,88 +415,130 @@ void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
     memset(rbuf,  0, 8);
     memset(rbuf2, 0, 8);
 
+    usb_dma_scratch_t dma = {0};
+    if (usb_alloc_dma_scratch(&dma) < 0) {
+        printf("USB: Failed to allocate DMA scratch for port %d.\n", port_id);
+        free(rbuf);
+        free(rbuf2);
+        return;
+    }
+
+    // Keep all control transfer payloads in one DMA-safe page so EHCI/OHCI
+    // never see buffers that straddle a 4KB boundary.
+    usb_setup_packet_t *setup = (usb_setup_packet_t *)(dma.page + 0);
+    uint8_t *desc_buf = dma.page + 64;
+    uint8_t *cfg_buf = dma.page + 128;
+
     // Temporarily use a local device slot at address 0 for probing.
     // We'll commit it to the global registry only if this is a keyboard.
     usb_device_t *dev = &usb_devices[usb_device_count];
-    uint8_t new_address = usb_device_count + 1;
+    uint8_t new_address = 0;
+    if (usb_allocate_probe_address(&new_address) < 0) {
+        printf("USB: No free device addresses left for port %d.\n", port_id);
+        goto fail_probe;
+    }
     dev->address          = 0;
     dev->speed            = speed;
+    dev->max_packet_size  = (speed == USB_SPEED_HIGH) ? 64 : 8;
     dev->port_id          = port_id;
     dev->interrupt_toggle = 0;
     dev->hcd_data         = NULL;
+    memset(desc_buf, 0, 64);
 
-    usb_setup_packet_t setup;
+    // ---- Step 1: GET_DESCRIPTOR (Device, first 8 bytes at address 0) ----
+    setup->bmRequestType = USB_REQTYPE_DIR_IN  | USB_REQTYPE_STANDARD | USB_REQTYPE_DEVICE;
+    setup->bRequest      = USB_REQ_GET_DESCRIPTOR;
+    setup->wValue        = (USB_DESC_DEVICE << 8) | 0;
+    setup->wIndex        = 0;
+    setup->wLength       = 8;
+    if (usb_control_transfer_retry(hcd, dev, setup, desc_buf, 8, 4, 10) < 0) {
+        printf("USB: GET_DESCRIPTOR(device,8) failed on port %d.\n", port_id);
+        goto fail_probe;
+    }
+    uint8_t ep0_mps = desc_buf[7];
+    if (speed == USB_SPEED_HIGH) ep0_mps = 64;
+    if (ep0_mps != 8 && ep0_mps != 16 && ep0_mps != 32 && ep0_mps != 64) {
+        ep0_mps = (speed == USB_SPEED_HIGH) ? 64 : 8;
+    }
+    dev->max_packet_size = ep0_mps;
 
-    // ---- Step 1: SET_ADDRESS ----
-    setup.bmRequestType = USB_REQTYPE_DIR_OUT | USB_REQTYPE_STANDARD | USB_REQTYPE_DEVICE;
-    setup.bRequest      = USB_REQ_SET_ADDRESS;
-    setup.wValue        = new_address;
-    setup.wIndex        = 0;
-    setup.wLength       = 0;
-    if (hcd->control_transfer(hcd, dev, &setup, NULL, 0) < 0) {
+    // ---- Step 2: SET_ADDRESS ----
+    setup->bmRequestType = USB_REQTYPE_DIR_OUT | USB_REQTYPE_STANDARD | USB_REQTYPE_DEVICE;
+    setup->bRequest      = USB_REQ_SET_ADDRESS;
+    setup->wValue        = new_address;
+    setup->wIndex        = 0;
+    setup->wLength       = 0;
+    if (usb_control_transfer_retry(hcd, dev, setup, NULL, 0, 3, 10) < 0) {
         printf("USB: SET_ADDRESS failed on port %d.\n", port_id);
-        free(rbuf); free(rbuf2);
-        return;
+        goto fail_probe;
     }
     dev->address = new_address;
-    for (volatile int i = 0; i < 50000; i++); // Device needs time to apply address
+    // USB 2.0 requires at least 2ms before using the new address.
+    sleep(20);
 
-    // ---- Step 2: GET_DESCRIPTOR (Device Descriptor, 18 bytes) ----
-    // Read into a local descriptor buffer — not the keyboard report buffer.
-    uint8_t desc_buf[64];
-    memset(desc_buf, 0, sizeof(desc_buf));
+    // ---- Step 3: GET_DESCRIPTOR (Device Descriptor, 18 bytes) ----
+    memset(desc_buf, 0, 64);
 
-    setup.bmRequestType = USB_REQTYPE_DIR_IN  | USB_REQTYPE_STANDARD | USB_REQTYPE_DEVICE;
-    setup.bRequest      = USB_REQ_GET_DESCRIPTOR;
-    setup.wValue        = (USB_DESC_DEVICE << 8) | 0;
-    setup.wIndex        = 0;
-    setup.wLength       = 18;
-    if (hcd->control_transfer(hcd, dev, &setup, desc_buf, 18) < 0) {
+    setup->bmRequestType = USB_REQTYPE_DIR_IN  | USB_REQTYPE_STANDARD | USB_REQTYPE_DEVICE;
+    setup->bRequest      = USB_REQ_GET_DESCRIPTOR;
+    setup->wValue        = (USB_DESC_DEVICE << 8) | 0;
+    setup->wIndex        = 0;
+    setup->wLength       = 18;
+    if (usb_control_transfer_retry(hcd, dev, setup, desc_buf, 18, 5, 20) < 0) {
         printf("USB: GET_DESCRIPTOR(device) failed on port %d.\n", port_id);
-        free(rbuf); free(rbuf2);
-        return;
+        goto fail_probe;
     }
 
     usb_device_descriptor_t *ddev = (usb_device_descriptor_t *)desc_buf;
+    dev->vendor_id = ddev->idVendor;
+    dev->product_id = ddev->idProduct;
 
     // Reject devices whose top-level class is not interface-defined (0x00) or HID (0x03).
     // Mass storage is 0x08, audio is 0x01, CDC is 0x02, hub is 0x09, etc.
     if (ddev->bDeviceClass != 0x00 && ddev->bDeviceClass != USB_HID_CLASS) {
         printf("USB: Port %d: Not a HID device (class=0x%02X), ignoring.\n",
                port_id, ddev->bDeviceClass);
-        free(rbuf); free(rbuf2);
-        return;
+        goto fail_probe;
     }
 
-    // ---- Step 3: GET_DESCRIPTOR (Configuration Descriptor, enough to cover
-    //              the first interface descriptor at minimum) ----
-    // 9 bytes config + 9 bytes interface + up to 9 bytes HID = 27 bytes;
-    // read 64 to be safe with any extra class-specific descriptors in between.
-    uint8_t cfg_buf[64];
-    memset(cfg_buf, 0, sizeof(cfg_buf));
-
-    setup.bmRequestType = USB_REQTYPE_DIR_IN  | USB_REQTYPE_STANDARD | USB_REQTYPE_DEVICE;
-    setup.bRequest      = USB_REQ_GET_DESCRIPTOR;
-    setup.wValue        = (USB_DESC_CONFIGURATION << 8) | 0;
-    setup.wIndex        = 0;
-    setup.wLength       = sizeof(cfg_buf);
-    int cfg_ret = hcd->control_transfer(hcd, dev, &setup, cfg_buf, sizeof(cfg_buf));
-    if (cfg_ret < 0) {
+    // ---- Step 4a: GET_DESCRIPTOR (Configuration header, 9 bytes) ----
+    memset(cfg_buf, 0, 64);
+    setup->bmRequestType = USB_REQTYPE_DIR_IN  | USB_REQTYPE_STANDARD | USB_REQTYPE_DEVICE;
+    setup->bRequest      = USB_REQ_GET_DESCRIPTOR;
+    setup->wValue        = (USB_DESC_CONFIGURATION << 8) | 0;
+    setup->wIndex        = 0;
+    setup->wLength       = sizeof(usb_config_descriptor_t);
+    if (usb_control_transfer_retry(hcd, dev, setup, cfg_buf, sizeof(usb_config_descriptor_t), 4, 10) < 0) {
         printf("USB: GET_DESCRIPTOR(config) failed on port %d.\n", port_id);
-        free(rbuf); free(rbuf2);
-        return;
+        goto fail_probe;
     }
 
+    // ---- Step 4b: GET_DESCRIPTOR (Configuration body, clamped to 64 bytes) ----
     usb_config_descriptor_t *dcfg = (usb_config_descriptor_t *)cfg_buf;
+    uint16_t cfg_read_len = dcfg->wTotalLength;
+    if (cfg_read_len < sizeof(usb_config_descriptor_t)) {
+        cfg_read_len = sizeof(usb_config_descriptor_t);
+    }
+    if (cfg_read_len > 64) cfg_read_len = 64;
+
+    if (cfg_read_len > sizeof(usb_config_descriptor_t)) {
+        memset(cfg_buf, 0, 64);
+        setup->wLength = cfg_read_len;
+        if (usb_control_transfer_retry(hcd, dev, setup, cfg_buf, cfg_read_len, 4, 10) < 0) {
+            printf("USB: GET_DESCRIPTOR(config body) failed on port %d.\n", port_id);
+            goto fail_probe;
+        }
+    }
+
+    dcfg = (usb_config_descriptor_t *)cfg_buf;
     uint16_t total_len = dcfg->wTotalLength;
-    if (total_len > sizeof(cfg_buf)) total_len = sizeof(cfg_buf);
+    if (total_len > cfg_read_len) total_len = cfg_read_len;
 
     // Walk descriptors looking for a boot-keyboard interface
     if (!usb_find_boot_keyboard_interface(cfg_buf, total_len)) {
         printf("USB: Port %d: No boot keyboard interface found (class check failed).\n",
                port_id);
-        free(rbuf); free(rbuf2);
-        return;
+        goto fail_probe;
     }
 
     // ---- This is confirmed to be a boot keyboard — commit resources ----
@@ -453,23 +553,30 @@ void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
     kbd_list[kbd_total].repeat_timer    = 0;
     kbd_total++;
 
-    // ---- Step 4: SET_CONFIGURATION 1 ----
-    setup.bmRequestType = USB_REQTYPE_DIR_OUT | USB_REQTYPE_STANDARD | USB_REQTYPE_DEVICE;
-    setup.bRequest      = USB_REQ_SET_CONFIGURATION;
-    setup.wValue        = dcfg->bConfigurationValue;
-    setup.wIndex        = 0;
-    setup.wLength       = 0;
-    hcd->control_transfer(hcd, dev, &setup, NULL, 0);
+    // ---- Step 5: SET_CONFIGURATION 1 ----
+    setup->bmRequestType = USB_REQTYPE_DIR_OUT | USB_REQTYPE_STANDARD | USB_REQTYPE_DEVICE;
+    setup->bRequest      = USB_REQ_SET_CONFIGURATION;
+    setup->wValue        = dcfg->bConfigurationValue;
+    setup->wIndex        = 0;
+    setup->wLength       = 0;
+    hcd->control_transfer(hcd, dev, setup, NULL, 0);
 
-    // ---- Step 5: SET_PROTOCOL 0 (Boot Protocol) ----
-    setup.bmRequestType = USB_REQTYPE_DIR_OUT | USB_REQTYPE_CLASS | USB_REQTYPE_INTERFACE;
-    setup.bRequest      = USB_REQ_SET_PROTOCOL;
-    setup.wValue        = 0; // 0 = Boot Protocol
-    setup.wIndex        = 0; // Interface 0
-    setup.wLength       = 0;
-    hcd->control_transfer(hcd, dev, &setup, NULL, 0);
+    // ---- Step 6: SET_PROTOCOL 0 (Boot Protocol) ----
+    setup->bmRequestType = USB_REQTYPE_DIR_OUT | USB_REQTYPE_CLASS | USB_REQTYPE_INTERFACE;
+    setup->bRequest      = USB_REQ_SET_PROTOCOL;
+    setup->wValue        = 0; // 0 = Boot Protocol
+    setup->wIndex        = 0; // Interface 0
+    setup->wLength       = 0;
+    hcd->control_transfer(hcd, dev, setup, NULL, 0);
 
     printf("%s: Boot keyboard confirmed on port %d (address %d, vid=%04X pid=%04X).\n",
            hcd->name, port_id, dev->address,
            ddev->idVendor, ddev->idProduct);
+    usb_free_dma_scratch(&dma);
+    return;
+
+fail_probe:
+    free(rbuf);
+    free(rbuf2);
+    usb_free_dma_scratch(&dma);
 }

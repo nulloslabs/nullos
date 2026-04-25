@@ -5,6 +5,8 @@ ifeq ($(filter --silent,$(MAKEFLAGS)),)
 MAKEFLAGS += --silent
 endif
 
+include config.mk
+
 all: iso
 
 kernel:
@@ -23,8 +25,8 @@ iso:
 	@$(MAKE) -C iso
 
 run:
-	@printf "  %-7s %s\n" "RUN" "iso/system.iso"
-	@qemu-system-x86_64 -cdrom iso/system.iso -enable-kvm -smp 1 -m 512 -serial stdio -audiodev alsa,id=audio0 -device ac97,audiodev=audio0 -netdev user,id=net0 -device rtl8139,netdev=net0
+	@printf "  %-7s %s\n" "RUN" "$(ISOFILE)"
+	@qemu-system-x86_64 -cdrom $(ISOFILE) -enable-kvm -smp 1 -m 512 -serial stdio -audiodev alsa,id=audio0 -device ac97,audiodev=audio0 -netdev user,id=net0 -device rtl8139,netdev=net0
 
 clean:
 	@$(MAKE) -C kernel clean

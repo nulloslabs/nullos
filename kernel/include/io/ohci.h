@@ -124,4 +124,4 @@ typedef struct {
 void init_ohci(pci_device_t *dev);
 void poll_ohci_ports(void);
 bool is_ohci_ready(void);
-void ohci_rescan_ports(void);
+void ohci_rescan_ports(int port_hint);

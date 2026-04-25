@@ -37,13 +37,13 @@ iso: tools kernel rootfs
 		cp ../config/limine.conf main/boot; \
 		cp ../config/splash.jpg main/boot; \
 		cp -a ../config/fonts main/boot; \
-		$(XORRISO) -as mkisofs $(XORRISOFLAGS) main -o system.iso > /dev/null 2>&1; \
-		../tools/limine/limine bios-install system.iso > /dev/null 2>&1; \
+		$(XORRISO) -as mkisofs $(XORRISOFLAGS) main -o $(ISOFILE) > /dev/null 2>&1; \
+		../tools/limine/limine bios-install $(ISOFILE) > /dev/null 2>&1; \
 	fi
 
 clean:
-	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/system.iso .stamp .rebuilt"
-	@rm -rf system.iso .stamp .rebuilt
+	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/$(ISOFILE) .stamp .rebuilt"
+	@rm -rf $(ISOFILE) .stamp .rebuilt
 
 mrproper: clean
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/"

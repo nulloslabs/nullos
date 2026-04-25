@@ -44,6 +44,23 @@ static uint32_t ehci_portsc_preserve(uint32_t portsc) {
     return portsc & ~(EHCI_PORT_CSC | EHCI_PORT_PEDC | EHCI_PORT_OCC);
 }
 
+// Read PORTSC with bounded settle retries.
+// Real hardware may transiently return 0x00000000 while port power/routing settles.
+static uint32_t ehci_read_portsc_with_settle(volatile uint8_t *op, uint32_t port_reg,
+                                             int ppc, int attempts, uint64_t delay_ms) {
+    uint32_t portsc = 0;
+    for (int i = 0; i < attempts; i++) {
+        portsc = ehci_op_read32(op, port_reg);
+        if (portsc != 0x00000000) return portsc;
+        if (ppc) {
+            // In PPC mode, explicitly keep PP asserted while waiting for settle.
+            ehci_op_write32(op, port_reg, EHCI_PORT_PP);
+        }
+        if (delay_ms) sleep(delay_ms);
+    }
+    return portsc;
+}
+
 /* Notify the correct OHCI/UHCI companion controller after EHCI sets PORT_OWNER.
  * port_idx: the EHCI port that was handed off.
  * Uses HCSPARAMS N_PCC to compute which companion controller owns that port. */
@@ -53,16 +70,17 @@ static void notify_ehci_companion(ehci_controller_t *ctrl, int port_idx) {
     sleep(25);
 
     if (is_ohci_ready()) {
-        // Single OHCI instance — port mapping not required for most OHCI
-        // companion setups (typically only one OHCI per EHCI on non-Intel HW).
-        ohci_rescan_ports();
+        // Target only the handed-off root port to avoid resetting/scanning all
+        // OHCI ports on every EHCI handoff event.
+        ohci_rescan_ports(port_idx);
     } else if (is_uhci_ready()) {
         // Compute which UHCI companion controller owns this EHCI port.
         // EHCI HCSPARAMS N_PCC tells us how many EHCI ports each UHCI owns.
         // companion_idx = port_idx / n_pcc, matching PCI enumeration order.
         int n_pcc = ctrl->n_pcc;
         int companion_idx = (n_pcc > 0) ? (port_idx / n_pcc) : 0;
-        rescan_uhci_ports(companion_idx);
+        int companion_port = (n_pcc > 0) ? (port_idx % n_pcc) : 0;
+        rescan_uhci_ports(companion_idx, companion_port);
     } else {
         printf("EHCI: No OHCI/UHCI companion controller available for handoff (port %d)!\n", port_idx);
     }
@@ -90,6 +108,31 @@ static ehci_qtd_t *alloc_ehci_qtd(void) {
     qtd->next_qtd = 0x01; // Terminate
     qtd->alt_next_qtd = 0x01;
     return qtd;
+}
+
+static int ehci_fill_qtd_buffers(ehci_qtd_t *qtd, void *buf, uint16_t len) {
+    if (!qtd) return -1;
+    memset(qtd->buffer, 0, sizeof(qtd->buffer));
+    if (!buf || len == 0) return 0;
+
+    uint64_t phys0 = virt_to_phys(buf);
+    if (phys0 > 0xFFFFFFFFULL) return -1;
+    qtd->buffer[0] = (uint32_t)phys0;
+
+    // qTD has up to 5 page pointers. buffer[0] keeps the original byte offset;
+    // subsequent pointers hold page bases for continuation pages.
+    uint64_t offset0 = phys0 & 0xFFFULL;
+    if (len <= (uint16_t)(4096 - offset0)) return 0;
+
+    uint64_t consumed = 4096 - offset0;
+    for (int i = 1; i < 5 && consumed < len; i++) {
+        uint8_t *virt_next = (uint8_t *)buf + consumed;
+        uint64_t phys_next = virt_to_phys(virt_next);
+        if (phys_next > 0xFFFFFFFFULL) return -1;
+        qtd->buffer[i] = (uint32_t)(phys_next & ~0xFFFULL);
+        consumed += 4096;
+    }
+    return 0;
 }
 
 // ============================================================================
@@ -144,11 +187,13 @@ static int ehci_control_transfer(usb_hcd_t *hcd, usb_device_t *dev,
     ehci_controller_t *ctrl = (ehci_controller_t *)hcd->hcd_data;
     uint8_t addr = dev->address;
     uint8_t qh_speed = (dev->speed == USB_SPEED_LOW) ? 1 : ((dev->speed == USB_SPEED_HIGH) ? 2 : 0);
+    uint8_t data_dir_in = ((setup->bmRequestType & USB_REQTYPE_DIR_IN) != 0);
 
-    // USB 2.0 spec §9.6.1: Initial EP0 max packet length
-    // - High-speed: 64 bytes
-    // - Full/Low-speed: 8 bytes
-    uint32_t max_pkt = (dev->speed == USB_SPEED_HIGH) ? 64 : 8;
+    // For control EP0, high-speed is always 64. For FS/LS use the probed bMaxPacketSize0.
+    uint32_t max_pkt = (dev->speed == USB_SPEED_HIGH) ? 64 : dev->max_packet_size;
+    if (max_pkt != 8 && max_pkt != 16 && max_pkt != 32 && max_pkt != 64) {
+        max_pkt = (dev->speed == USB_SPEED_HIGH) ? 64 : 8;
+    }
 
     // Clear QH overlay before reuse to prevent stale Active bits from blocking transfer
     ctrl->async_qh->current_qtd = 0;
@@ -173,25 +218,24 @@ static int ehci_control_transfer(usb_hcd_t *hcd, usb_device_t *dev,
 
     ehci_qtd_t *td_setup = alloc_ehci_qtd();
     td_setup->token = TOK_SETUP();
-    td_setup->buffer[0] = (uint32_t)virt_to_phys(setup);
+    if (ehci_fill_qtd_buffers(td_setup, setup, 8) < 0) return -1;
     td_setup->next_qtd = 0x01;
     td_setup->alt_next_qtd = 0x01;
 
     ehci_qtd_t *td_data = NULL;
     if (length > 0) {
         td_data = alloc_ehci_qtd();
-        td_data->token = TOK_DATA(1, length, 1);
-        td_data->buffer[0] = (uint32_t)virt_to_phys(data);
+        td_data->token = TOK_DATA(data_dir_in, length, 1);
+        if (ehci_fill_qtd_buffers(td_data, data, length) < 0) return -1;
         td_data->next_qtd = 0x01;
         td_data->alt_next_qtd = 0x01;
         td_setup->next_qtd = (uint32_t)virt_to_phys(td_data);
     }
 
     ehci_qtd_t *td_status = alloc_ehci_qtd();
-    uint8_t dir_in = (length > 0) ? 0 : 1;
-    // After DATA1 data phase, status uses DATA0 (toggle bit 0). If no data, status uses DATA1 (toggle bit 1).
-    uint8_t status_toggle = (length > 0) ? 0 : 1;
-    td_status->token = TOK_STATUS(dir_in, status_toggle);
+    uint8_t status_dir_in = (length > 0) ? (uint8_t)!data_dir_in : 1;
+    // USB control status stage always uses DATA1.
+    td_status->token = TOK_STATUS(status_dir_in, 1);
     if (td_data) td_data->next_qtd = (uint32_t)virt_to_phys(td_status);
     else td_setup->next_qtd = (uint32_t)virt_to_phys(td_status);
     td_status->next_qtd = 0x01;
@@ -600,24 +644,15 @@ void init_ehci(pci_device_t *dev) {
 
     for (int i = 0; i < ctrl->num_ports; i++) {
         uint32_t port_reg = EHCI_OP_PORTSC_BASE + (i * 4);
-        uint32_t portsc = ehci_op_read32(op, port_reg);
-
-        // On real hardware with PPC=1, PORTSC may still read 0x00000000 after
-        // the global power-on sleep if this port's PP hasn't settled yet.
-        // Perform a single read; if it's still zero, the port is physically absent.
-        if (portsc == 0x00000000 && ppc) {
-            // Force PP on one more time and read back immediately
-            ehci_op_write32(op, port_reg, EHCI_PORT_PP);
-            portsc = ehci_op_read32(op, port_reg);
-        }
+        uint32_t portsc = ehci_read_portsc_with_settle(op, port_reg, ppc, 12, 5);
 
         printf("EHCI: Port %d: PORTSC=0x%08X (PP=%d CCS=%d PED=%d)\n",
                i, portsc, !!(portsc & EHCI_PORT_PP),
                !!(portsc & EHCI_PORT_CCS), !!(portsc & EHCI_PORT_PED));
-
+        // If still zero after settle retries, skip for now.
         // If still 0x00000000 after that single retry, the port does not exist.
         if (portsc == 0x00000000) {
-            printf("EHCI: Port %d: Reads 0x00000000, skipping.\n", i);
+            printf("EHCI: Port %d: Still reads 0x00000000 after settle retries, skipping.\n", i);
             continue;
         }
 
@@ -681,7 +716,9 @@ static void arm_keyboard_ehci(ehci_controller_t *ctrl) {
                        | EHCI_QTD_IOC
                        | (((uint32_t)(dev->interrupt_toggle & 1)) << 31);
         qtd->token = token;
-        qtd->buffer[0] = (uint32_t)virt_to_phys(buf);
+        if (ehci_fill_qtd_buffers(qtd, buf, 8) < 0) {
+            continue;
+        }
         ctrl->intr_qh->next_qtd = (uint32_t)virt_to_phys(qtd);
         ctrl->pending_dev = dev;
         ctrl->pending_kbd_idx = k;

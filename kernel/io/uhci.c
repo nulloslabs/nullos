@@ -387,9 +387,9 @@ bool is_uhci_ready(void) {
 }
 
 // Scan the companion controller at ctrl_idx for newly handed-off devices.
-// Pass -1 to scan all initialized controllers (used as fallback when port
-// mapping is unknown).
-void rescan_uhci_ports(int ctrl_idx) {
+// ctrl_idx  < 0 => all initialized controllers.
+// port_hint < 0 => all ports on selected controller(s), otherwise only that port.
+void rescan_uhci_ports(int ctrl_idx, int port_hint) {
     int start = (ctrl_idx < 0) ? 0 : ctrl_idx;
     int end   = (ctrl_idx < 0) ? uhci_count : (ctrl_idx + 1);
 
@@ -405,7 +405,14 @@ void rescan_uhci_ports(int ctrl_idx) {
         uint16_t port_regs[] = { UHCI_PORTSC1, UHCI_PORTSC2 };
         uint16_t num_ports = ctrl->num_ports ? ctrl->num_ports : 2;
 
-        for (int i = 0; i < num_ports && i < 2; i++) {
+        int port_start = 0;
+        int port_end = (num_ports < 2) ? num_ports : 2;
+        if (port_hint >= 0 && port_hint < port_end) {
+            port_start = port_hint;
+            port_end = port_hint + 1;
+        }
+
+        for (int i = port_start; i < port_end; i++) {
             uint16_t status = inw(io_base + port_regs[i]);
             printf("UHCI[%d]: Port %d: Initial status=0x%04X (CCS=%d, PED=%d, CSC=%d)\n",
                    c, i, status, !!(status & UHCI_PORT_CCS), !!(status & UHCI_PORT_PED), !!(status & UHCI_PORT_CSC));

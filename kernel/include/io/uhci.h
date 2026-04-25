@@ -88,4 +88,4 @@ typedef struct {
 void init_uhci(pci_device_t *dev);
 void poll_uhci_ports(void);
 bool is_uhci_ready(void);
-void rescan_uhci_ports(int ctrl_idx);
+void rescan_uhci_ports(int ctrl_idx, int port_hint);
