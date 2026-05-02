@@ -429,12 +429,7 @@ void init_ohci(pci_device_t *dev) {
     uint32_t rha = read_ohci(regs, OHCI_RHDESCRIPTORA);
     ohci_ctrl.num_ports = (rha & 0xFF);
     printf("OHCI: HcRhDescriptorA=0x%08X  num_ports=%d\n", rha, ohci_ctrl.num_ports);
-    // Port power mode:
-    //   bit 9 NPS = 1 => no power switching (ports always powered)
-    //   bit 8 PSM = 0 => global power switching via RHSTATUS.LPSC
-    //   bit 8 PSM = 1 => per-port power switching via RHPORTSTATUS.PPS
-    // If NPS=0, we must explicitly enable port power.
-    // POTPGT (bits 31:24) = Power On To Power Good Time in units of 2ms.
+
     int nps = (rha >> 9) & 1;
     int psm = (rha >> 8) & 1;
     int per_port_power = (!nps && psm);
@@ -500,12 +495,17 @@ void init_ohci(pci_device_t *dev) {
                 if (read_ohci(regs, port_reg) & OHCI_PORT_PRSC) break;
                 sleep_us(100);
             }
+
             write_ohci(regs, port_reg, OHCI_PORT_PRSC);
+            sleep(2);
 
             // Clear CSC
             if (read_ohci(regs, port_reg) & OHCI_PORT_CSC) {
                 write_ohci(regs, port_reg, OHCI_PORT_CSC);
             }
+
+            write_ohci(regs, port_reg, OHCI_PORT_PES);
+            sleep(10);
             
             // Verify port is still enabled after reset
             status = read_ohci(regs, port_reg);
@@ -520,9 +520,6 @@ void init_ohci(pci_device_t *dev) {
     }
 }
 
-// ============================================================================
-// Companion query/notification for EHCI handoff
-// ============================================================================
 bool is_ohci_ready(void) {
     return ohci_ctrl.initialized;
 }
@@ -603,7 +600,11 @@ void ohci_rescan_ports(int port_hint) {
             if (read_ohci(regs, port_reg) & OHCI_PORT_PRSC) break;
             sleep_us(100);
         }
+
         write_ohci(regs, port_reg, OHCI_PORT_PRSC);
+        sleep(2);
+        write_ohci(regs, port_reg, OHCI_PORT_PES);
+        sleep(10);
 
         status = read_ohci(regs, port_reg);
         if (status & OHCI_PORT_PES) {
