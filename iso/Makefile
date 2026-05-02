@@ -28,7 +28,7 @@ iso: tools kernel rootfs
 	    [ system.iso -nt ../config/limine.conf ]; then \
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/system.iso is already up to date"; \
 	else \
-		printf "  %-7s %s\n" "MKISO" "$(SUBDIR)/system.iso"; \
+		printf "  %-7s %s\n" "XORRISO" "$(SUBDIR)/system.iso"; \
 		mkdir -p main/boot main/EFI/BOOT; \
 		cp ../tools/limine/limine-bios.sys ../tools/limine/limine-bios-cd.bin ../tools/limine/limine-uefi-cd.bin main/boot; \
 		cp ../tools/limine/BOOTX64.EFI main/EFI/BOOT; \
