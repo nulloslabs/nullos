@@ -12,7 +12,7 @@
 #include <main/scheduler.h>
 #include <main/limine_req.h>
 #include <main/acpi.h>
-#include <io/font.h>
+#include <io/fonts.h>
 #include <main/boot_args.h>
 #include <io/pci.h>
 #include <main/sse.h>
@@ -28,20 +28,17 @@
 #include <main/madt.h>
 
 void kmain(void) {
-    if (!fb_req.response || fb_req.response->framebuffer_count < 1) return;
-    struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
-
     cli();
     clrscr();
+    init_default_font();
     parse_boot_args();
     init_sse();
     init_gdt();
     init_idt();
     remap_pic();
-    init_heap();
+    init_mm();
     init_rootfs();
     init_devfs();
-    if (!((fb->width == 640 && fb->height == 480) || (fb->width == 800 && fb->height == 600))) panic("Unsupported resolution.");
     show_cursor(true);
     init_pmm();
     init_vmm();
@@ -67,6 +64,7 @@ void kmain(void) {
 
     sti();
 
+    // Execute init process
     const char *init_path = "/init";
     char *init_argv[] = { (char*)init_path, NULL };
     char *init_envp[] = { NULL };

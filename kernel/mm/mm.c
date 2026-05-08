@@ -74,43 +74,26 @@ void free(void* ptr) {
     }
 }
 
-void init_mm(void* start_addr, size_t total_size) {
-    free_list_start = (struct memory_header*)start_addr;
-    free_list_start->size = total_size - sizeof(struct memory_header);
-    free_list_start->is_free = 1;
-    free_list_start->next = NULL;
-    printf("MM: Initialized MM.\n");
-}
+void init_mm(void) {
+    if (hhdm_req.response == NULL)
+        panic("Didn't get HHDM response.");
 
-void init_heap(void) {
-    if (hhdm_req.response == NULL) {
-        panic("Didn't get hhdm response?");
-    }
     hhdm_offset = hhdm_req.response->offset;
-
     struct limine_memmap_response *memmap = mm_req.response;
-    void* heap_start = NULL;
-    size_t heap_len = 0;
 
     for (uint64_t i = 0; i < memmap->entry_count; i++) {
         struct limine_memmap_entry *entry = memmap->entries[i];
-        if (entry->type == LIMINE_MEMMAP_USABLE) {
-            if (entry->length >= (16 * 1024 * 1024)) {
-                heap_start = (void*)(entry->base + hhdm_offset);
-                heap_len = 16 * 1024 * 1024; // Use exactly 16MB for the heap
-
-                // Shrink the memmap entry so init_pmm won't mark heap pages as free
-                entry->base += heap_len;
-                entry->length -= heap_len;
-                break;
-            }
+        if (entry->type == LIMINE_MEMMAP_USABLE && entry->length >= (16 * 1024 * 1024)) {
+            free_list_start = (struct memory_header*)(entry->base + hhdm_offset);
+            free_list_start->size = (16 * 1024 * 1024) - sizeof(struct memory_header);
+            free_list_start->is_free = 1;
+            free_list_start->next = NULL;
+            entry->base += 16 * 1024 * 1024;
+            entry->length -= 16 * 1024 * 1024;
+            printf("MM: Initialized MM.\n");
+            return;
         }
     }
 
-    if (heap_start != NULL) {
-        init_mm(heap_start, heap_len);
-    } else {
-        panic("No usable memory found for memory management.");
-    }
-    printf("MM: Initialized heap.\n");
+    panic("No usable memory found for MM.");
 }

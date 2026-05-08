@@ -8,12 +8,11 @@ struct memory_header {
     struct memory_header *next;
 };
 
-// Start of our memory chain
+// Start of the memory chain
 extern struct memory_header *free_list_start;
 extern uint64_t hhdm_offset;
 
-void init_mm(void* start_addr, size_t total_size);
-void init_heap(void);
+void init_mm(void);
 void* malloc(size_t size);
 void* realloc(void* ptr, size_t size);
 void free(void* ptr);

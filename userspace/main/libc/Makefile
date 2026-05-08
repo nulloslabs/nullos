@@ -17,21 +17,6 @@ DEP = $(OBJ:.o=.d)
 
 -include $(DEP)
 
-# Print info if up to date
-ifeq ($(shell \
-	if [ ! -f ../../libc.so ]; then echo 0; exit; fi; \
-	for f in $(SRC); do if [ "$$f" -nt "../../libc.so" ]; then echo 0; exit; fi; done; \
-	echo 1),1)
-$(info $(empty)  INFO    $(SUBDIR)/libc.so is already up to date)
-endif
-
-ifeq ($(shell \
-	if [ ! -f ../../libc.a ]; then echo 0; exit; fi; \
-	for f in $(SRC); do if [ "$$f" -nt "../../libc.a" ]; then echo 0; exit; fi; done; \
-	echo 1),1)
-$(info $(empty)  INFO    $(SUBDIR)/libc.a is already up to date)
-endif
-
 all: ../../libc.so ../../libc.a
 
 %.o: %.c
@@ -43,12 +28,20 @@ all: ../../libc.so ../../libc.a
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 ../../libc.so: $(OBJ)
-	@printf "  %-7s %s\n" "LD" "$(SUBDIR)/libc.so"
-	@$(LD) $(LDFLAGS) -shared $^ -o $@ -Wl,-soname,libc.so
+	@if [ -f ../../libc.so ] && { for f in $(SRC); do [ "$$f" -nt "../../libc.so" ] && exit 1; done; true; }; then \
+		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/libc.so is already up to date"; \
+	else \
+		printf "  %-7s %s\n" "LD" "$(SUBDIR)/libc.so"; \
+		$(LD) $(LDFLAGS) -shared $^ -o $@ -Wl,-soname,libc.so; \
+	fi
 
 ../../libc.a: $(OBJ)
-	@printf "  %-7s %s\n" "AR" "$(SUBDIR)/libc.a"
-	@$(AR) $(ARFLAGS) rcs $@ $^
+	@if [ -f ../../libc.a ] && { for f in $(SRC); do [ "$$f" -nt "../../libc.a" ] && exit 1; done; true; }; then \
+		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/libc.a is already up to date"; \
+	else \
+		printf "  %-7s %s\n" "AR" "$(SUBDIR)/libc.a"; \
+		$(AR) $(ARFLAGS) rcs $@ $^; \
+	fi
 
 clean:
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/libc/*.o $(SUBDIR)/main/libc/*.d"
@@ -56,4 +49,4 @@ clean:
 
 mrproper: clean
 
-.PHONY: all clean mrproper
+.PHONY: all ../../libc.so ../../libc.a clean mrproper

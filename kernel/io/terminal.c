@@ -3,7 +3,7 @@
 #include <freestanding/stdarg.h>
 #include <io/framebuffer.h>
 #include <main/string.h>
-#include <io/font.h>
+#include <io/fonts.h>
 #include <io/serial.h>
 #include <main/limine_req.h>
 #include <main/spinlock.h>
@@ -432,7 +432,7 @@ static void putc_unlocked(char c) {
                     putc_bb(c, cursor_x, cursor_y, fg_color, bg_color);
                     flush_region_backbuffer(fb, cursor_x, cursor_y, current_font_w, current_font_h);
                 } else {
-                    putc_fb(fb, c, cursor_x, cursor_y, fg_color, bg_color);
+                    putc_fb(c, cursor_x, cursor_y, fg_color, bg_color);
                 }
 
                 cursor_x += current_font_w;
