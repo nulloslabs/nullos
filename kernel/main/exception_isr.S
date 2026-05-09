@@ -1,15 +1,7 @@
 .intel_syntax noprefix
 
 .section .text
-.global isr0
-.global isr4
-.global isr5
-.global isr6
-.global isr7
-.global isr8
-.global isr13
-.global isr14
-.global isr30
+// We dont put our ISRS here, our macros already handle that
 .global isrrsv
 .global isrhdr
 
@@ -46,52 +38,35 @@ Table of all CPU faults:
   31: Reserved | Does not push an error code
 */
 
-isr0:
-    push 0       // dummy error code
-    push 0       /* this might seem weird but trust me bro
-                                                                  - coolguy09 2026 */
-    jmp isrhdr
+.macro ISR_NOERR vector
+    .global isr\vector
+    isr\vector:
+        push 0              // dummy error code
+        push \vector        // vector number
+        jmp isrhdr
+.endm
 
-isr4:
-    push 0       // dummy error code
-    push 4       // vector number
-    jmp isrhdr
+.macro ISR_ERR vector
+    .global isr\vector
+    isr\vector:
+        push \vector        // vector number (error code already on stack)
+        jmp isrhdr
+.endm
 
-isr5:
-    push 0       // dummy error code
-    push 5       // vector number
-    jmp isrhdr
+ISR_NOERR 0
+ISR_NOERR 4
+ISR_NOERR 5
+ISR_NOERR 6
+ISR_NOERR 7
+ISR_ERR   8
+ISR_ERR   13
+ISR_ERR   14
+ISR_ERR   30
 
-isr6:
-    push 0       // dummy error code
-    push 6       // vector number
-    jmp isrhdr
-
-isr7:
-    push 0       // dummy error code
-    push 7       // vector number
-    jmp isrhdr
-
-isr8:
-    push 8       // vector number
-    jmp isrhdr
-
-isr13:
-    push 13       // vector number
-    jmp isrhdr
-
-isr14:
-    push 14       // vector number
-    jmp isrhdr
-
-isr30:
-    push 30       // vector number
-    jmp isrhdr
-
-// Exception for reserved (22-27, 31) ISRs
+// Reserved ISRs (22-27, 31): dummy error code + sentinel vector 512
 isrrsv:
-    push 0         // dummy error code
-    push 512    // we know that nothing else is gonna use vector 22-27 and 31, so just pass 512 (reserved exception)
+    push 0      // dummy error code
+    push 512    // sentinel: reserved exception
     jmp isrhdr
 
 isrhdr:
@@ -110,11 +85,16 @@ isrhdr:
     mov ax, es
     push rax
 
-    // Swap GS if we came from user space
-    // Frame: 8 (r11) + 8 (r10) + 8 (r9) + 8 (r8) + 8 (rcx) + 8 (rdx) + 8 (rsi) + 8 (rdi) 
-    //        + 8 (es) + 8 (ds) = 80 bytes
-    // Then 8 (vector) + 8 (error) + 8 (RIP) + 8 (CS)
-    mov rax, [rsp + 80 + 24] // Offset to CS
+    // Swap GS if we came from user space.
+    // Frame layout from RSP:
+    //   +0..+79  = saved regs (r11, r10, r9, r8, rcx, rdx, rsi, rdi, es, ds)
+    //   +80      = vector
+    //   +88      = error code
+    //   +96      = RIP
+    //   +104     = CS
+    //   +112     = RFLAGS
+    //   +120     = RSP (user)
+    mov rax, [rsp + 80 + 24]    // CS
     test al, 3
     jz .no_swap_entry
     swapgs
@@ -125,22 +105,17 @@ isrhdr:
     mov ds, ax
     mov es, ax
 
-    // Arguments for exception_panic(vector, error_code, rip, rsp, cs)
-    // RSP + 80 + 0  = vector
-    // RSP + 80 + 8  = error code
-    // RSP + 80 + 16 = rip
-    // RSP + 80 + 24 = cs
-    // RSP + 80 + 40 = rsp
-    mov rdi, [rsp + 80]      // vector number
-    mov rsi, [rsp + 80 + 8]  // error code
-    mov rdx, [rsp + 80 + 16] // rip
-    mov rcx, [rsp + 80 + 40] // rsp
-    mov r8,  [rsp + 80 + 24] // cs (5th argument)
+    // exception_panic(vector, error_code, rip, rsp, cs)
+    mov rdi, [rsp + 80]         // vector number
+    mov rsi, [rsp + 80 + 8]     // error code
+    mov rdx, [rsp + 80 + 16]    // rip
+    mov rcx, [rsp + 80 + 40]    // rsp
+    mov r8,  [rsp + 80 + 24]    // cs
 
     call exception_panic
 
-    // Swap GS back if we are returning to user space
-    mov rax, [rsp + 80 + 24] // Offset to CS
+    // Swap GS back if returning to user space
+    mov rax, [rsp + 80 + 24]    // CS
     test al, 3
     jz .no_swap_exit
     swapgs
@@ -160,7 +135,7 @@ isrhdr:
     pop rdx
     pop rsi
     pop rdi
-    
-    // Cleanup vector and error code
+
+    // Clean up vector and error code
     add rsp, 16
     iretq
