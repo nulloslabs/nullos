@@ -181,7 +181,6 @@ uint8_t pci_request_irq(pci_device_t *dev, void (*handler)(void)) {
     uint8_t line = r & 0xFF;
     if (line == 0xFF) return 0;
     pci_register_intx_handler(line, handler);
-           dev->bus, dev->dev, dev->func, line, LEGACY_IRQ_BASE + line);
     return LEGACY_IRQ_BASE + line;
 }
 
