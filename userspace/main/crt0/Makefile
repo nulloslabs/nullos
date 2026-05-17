@@ -18,7 +18,7 @@ crt0: crt0.S
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/crt0.o is already up to date"; \
 	else \
 		printf "  %-7s %s\n" "AS" "$(SUBDIR)/crt0.o.unstripped" && \
-		$(CC) $(CFLAGS) -c $< -o $@ && \
+		$(CC) $(CFLAGS) -c $< -o ../../crt0.o.unstripped && \
 		printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/crt0.o" && \
 		$(STRIP) $(STRIPFLAGS) --strip-debug ../../crt0.o.unstripped -o ../../crt0.o; \
 	fi
