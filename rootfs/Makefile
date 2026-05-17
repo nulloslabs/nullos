@@ -8,7 +8,7 @@ endif
 include config.mk
 
 .DEFAULT_GOAL := all
-DEP := config.mk $(USERSPACE_OUTPUTS) $(shell find main/ -type f 2>/dev/null)
+DEP := $(wildcard ../userspace/main/progs/*.c) $(shell find main/ -type f 2>/dev/null) config.mk ../userspace/libc.so ../userspace/libc.a ../userspace/crt0.o
 
 all: rootfs
 
@@ -23,7 +23,7 @@ rootfs:
 		cp ../userspace/libc.so ../userspace/libc.a ../userspace/crt0.o main/usr/lib && \
 		cp -a ../userspace/include/ main/usr && \
 		cp ../userspace/init main && \
-		cp ../userspace/login main/usr/bin && \
+		$(foreach prog,$(patsubst ../userspace/main/progs/%.c,%,$(wildcard ../userspace/main/progs/*.c)),cp ../userspace/$(prog) main/usr/bin &&) true && \
 		$(TAR) $(TARFLAGS) -f rootfs.tar.gz -C main .; \
 	else \
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/rootfs.tar.gz is already up to date"; \

@@ -5,7 +5,6 @@ ifeq ($(filter --silent,$(MAKEFLAGS)),)
 MAKEFLAGS += --silent
 endif
 
-# IDK why this works :sob:
 .DEFAULT_GOAL := all
 
 include ../../config.mk
@@ -16,7 +15,7 @@ DEP :=
 define PROG_template
 $(shell echo $(1) | tr a-z A-Z)_OBJ = $(1).o
 DEP += $$($(shell echo $(1) | tr a-z A-Z)_OBJ:.o=.d)
-../../$(1): $$($(shell echo $(1) | tr a-z A-Z)_OBJ) ../../crt0.o ../../libc.so
+../../$(1): $$($(shell echo $(1) | tr a-z A-Z)_OBJ)
 	@printf "  %-7s %s\n" "LD" "$(SUBDIR)/$(1)"; \
 	$(LD) $(LDFLAGS) ../../crt0.o $$($(shell echo $(1) | tr a-z A-Z)_OBJ) -o $$@ -Wl,--no-dynamic-linker -l:libc.so
 	$(eval BUILT := 1)
@@ -25,16 +24,23 @@ $(foreach p,$(PROGS),$(eval $(call PROG_template,$(p))))
 
 -include $(DEP)
 
-all: $(addprefix ../../,$(PROGS))
-	@start=$$(date +%s) && \
-	needs_build=0 && \
+all: progs
+
+progs: $(foreach p,$(PROGS),$(p).o)
+	@needs_build=0; \
 	for p in $(PROGS); do \
-		if [ $$(date +%s -r ../../$$p 2>/dev/null || echo 0) -ge $$start ]; then \
-			needs_build=1 && break; \
+		if [ ! -f ../../$$p ] || [ $$p.o -nt ../../$$p ]; then \
+			needs_build=1; break; \
+		fi; \
+	done; \
+	for p in $(PROGS); do \
+		if [ ! -f ../../$$p ] || [ $$p.o -nt ../../$$p ]; then \
+			printf "  %-7s %s\n" "LD" "$(SUBDIR)/$$p"; \
+			$(LD) $(LDFLAGS) ../../crt0.o $$p.o -o ../../$$p -Wl,--no-dynamic-linker -l:libc.so; \
 		fi; \
 	done; \
 	if [ $$needs_build -eq 0 ]; then \
-		printf "  %-7s %s\n" "INFO" "$$(echo $(PROGS) | tr ' ' '\n' | sed 's|^|$(SUBDIR)/|' | tr '\n' ',' | sed 's/,$$//' | sed 's/,/, /g') $$([ $$(echo $(PROGS) | wc -w) -eq 1 ] && echo 'is' || echo 'are') already up to date"; \
+		printf "  %-7s %s\n" "INFO" "$$(echo $(PROGS) | tr ' ' '\n' | sed 's|^|$(SUBDIR)/|' | paste -sd ' ' -) $$([ $$(echo $(PROGS) | wc -w) -eq 1 ] && echo 'is' || echo 'are') already up to date"; \
 	fi
 
 %.o: %.c

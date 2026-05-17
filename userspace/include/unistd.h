@@ -16,3 +16,5 @@ pid_t fork(void);
 pid_t waitpid(pid_t pid, int *wstatus, int options);
 pid_t getpid(void);
 pid_t getppid(void);
+int brk(void *addr);
+void *sbrk(intptr_t increment);

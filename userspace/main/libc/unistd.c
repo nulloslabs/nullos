@@ -5,6 +5,9 @@
 #include <unistd.h>
 #include <errno.h>
 
+// Variables for functions
+static void *current_program_break = NULL;
+
 int64_t syscall(int64_t num, ...) {
     va_list args;
     va_start(args, num);
@@ -80,4 +83,16 @@ pid_t getpid(void) {
 
 pid_t getppid(void) {
     return (pid_t)syscall(SYS_getppid);
+}
+
+int brk(void *addr) {
+    return (int)syscall(SYS_brk, addr);
+}
+
+void *sbrk(intptr_t increment) {
+    if (current_program_break == NULL) current_program_break = (void *)(uintptr_t)brk(NULL);
+    void *prev = current_program_break;
+    void *new_break = (void *)((uintptr_t)current_program_break + increment);
+    current_program_break = (void *)(uintptr_t)brk(new_break);
+    return prev;
 }

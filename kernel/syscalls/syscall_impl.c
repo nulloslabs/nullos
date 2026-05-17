@@ -288,7 +288,7 @@ void sys_write(syscall_frame_t *frame) {
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
 
-    if (fd == 1 || fd == 2) {
+    if (entry->type == FD_STREAM) {
         char kbuf[256];
         uint64_t processed = 0;
         while (processed < count) {

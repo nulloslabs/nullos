@@ -18,10 +18,7 @@ task_t* current_task_ptr = &tasks[0];
 volatile int sched_lock = 0;
 static spinlock_t task_lock = SPINLOCK_INIT;
 
-// WARNING: NOT TO BE USED BY KERNEL, ONLY USED AS A "SCRATCH TOY" FOR CPU!!
-static void idle_task(void) {
-    idle();
-}
+static void idle_task(void) { idle(); }
 
 pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_t initial_rsp) {
     uint64_t flags;

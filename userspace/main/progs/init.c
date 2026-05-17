@@ -11,10 +11,9 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    char *login_argv[] = { "/usr/bin/login", NULL };
+    char *login_argv[] = { "/usr/bin/login", NULL }; // 
     char *login_envp[] = { NULL };
 
-    /*
     for (;;) {
         pid_t pid = fork();
         if (pid == 0) {
@@ -29,8 +28,12 @@ int main(int argc, char **argv) {
             perror("Init: fork() failed");
             return 1;
         }
-    }*/
-    execve("/usr/bin/test", NULL, NULL);
-    for (;;);
-    return 1; // wtf how did we exit the loop, give error
+    }
+
+    /* >be me
+       >make an os
+       >i make loop
+       >program exits from loop
+       >wtf.jpg */
+    return 1;
 }

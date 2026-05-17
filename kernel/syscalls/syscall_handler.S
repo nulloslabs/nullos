@@ -4,15 +4,11 @@
 .extern current_task_ptr
 
 syscall_entry:
-    // entering from Ring 3
-    // `syscall` sets RIP=LSTAR, CS=STAR(47:32), SS=STAR(47:32)+8, RFLAGS=RFLAGS & ~SFMASK
-    // RSP STILL POINTS TO USER STACK
-
     // switch to kernel stack
     mov r12, rsp
     mov rsp, [rip + current_task_ptr]
-    mov rsp, [rsp + 16]
-    add rsp, 4096
+    mov rsp, [rsp + 40]
+    add rsp, 32768
 
     // build syscall_frame_t
     push r15
