@@ -132,7 +132,7 @@ void init_ac97(pci_device_t *dev) {
         bdl[i].flags = 0x8000; // IOC (Interrupt on Completion)
     }
 
-    register_pci_interrupt_handler(ac97_poll);
+    pci_request_irq(dev, ac97_poll);
 
     ac97_ready = true;
 }
@@ -185,3 +185,4 @@ bool ac97_is_playing(void) {
     uint8_t sr = nabm_read8(NABM_PCM_OUT_SR);
     return !(sr & (1 << 0)); // DCH (DMA Controller Halted) bit
 }
+

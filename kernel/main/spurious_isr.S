@@ -1,12 +1,12 @@
 .intel_syntax noprefix
-.global isr_spurious
+.global isrspr
 .extern current_apic_mode
 .extern lapic_base
 .extern eoi_pic
 
 // Catch-all ISR for unhandled interrupt vectors.
 // Just sends EOI and returns — prevents #GP from missing IDT entries.
-isr_spurious:
+isrspr:
     push rax
     push rbx
     push rcx

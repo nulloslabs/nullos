@@ -43,13 +43,5 @@ void parse_boot_args(void) {
         printf("Boot Arguments: Parsed boot arguments.\n");
         return;
     }
-    const char *val = get_arg_value(args, "serial");
-    
-    if (val) {
-        if (strncasecmp(val, "COM1", 4) == 0) g_debug_port = COM1;
-        else if (strncasecmp(val, "COM2", 4) == 0) g_debug_port = COM2;
-        else if (strncasecmp(val, "COM3", 4) == 0) g_debug_port = COM3;
-        else if (strncasecmp(val, "COM4", 4) == 0) g_debug_port = COM4;
-    }
     printf("Boot Arguments: Parsed boot arguments.\n");
 }

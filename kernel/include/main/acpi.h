@@ -108,25 +108,6 @@ typedef enum {
     AML_NONE = 0, AML_INT, AML_METHOD, AML_REGION, AML_FIELD, AML_BUFFER
 } aml_type_t;
 
-// ACPI resource descriptor types (from _CRS evaluation)
-typedef enum {
-    ACPI_RES_IO = 0,        // I/O port range
-    ACPI_RES_MMIO,          // Memory-mapped I/O (AddressSpace)
-    ACPI_RES_IRQ,           // IRQ number
-    ACPI_RES_DMA,           // DMA channel
-} acpi_res_type_t;
-
-// Single resource entry
-typedef struct {
-    acpi_res_type_t type;
-    uint8_t         io_space_id;    // 0 = Memory, 1 = SystemIO
-    uint64_t        base;           // Base address (IO port or physical MMIO)
-    uint64_t        length;         // Length in bytes
-    uint32_t        irq;            // IRQ number (for ACPI_RES_IRQ)
-    int             valid;          // 1 if this entry is valid
-} acpi_resource_t;
-
-#define ACPI_MAX_RESOURCES 16
 
 // ACPI device object (represents a device in the namespace)
 typedef struct {
@@ -135,7 +116,6 @@ typedef struct {
     char       hid_str[AML_NAME_MAX]; // _HID as string (e.g. "PNP0A03")
     uint64_t   adr;                  // _ADR value (for PCI: seg<<16 | bus<<8 | dev<<3 | func<<0)
     uint64_t   uid;                  // _UID value
-    int        has_crs;              // 1 if _CRS exists
     int        has_hid;              // 1 if _HID exists
     int        has_adr;              // 1 if _ADR exists
 } acpi_device_t;
@@ -147,10 +127,6 @@ typedef struct {
     int            count;
 } acpi_device_registry_t;
 
-typedef struct {
-    acpi_resource_t resources[ACPI_MAX_RESOURCES];
-    int             count;
-} acpi_resource_list_t;
 
 typedef struct {
     char       path[AML_NAME_MAX];
@@ -174,25 +150,18 @@ typedef struct {
     };
 } aml_obj_t;
 
-// Result types
-#define RET_VAL  0  // normal integer result
-#define RET_VOID 1  // void (no value)
-#define RET_RET  2  // return statement hit
-
 typedef struct { uint64_t v; int t; } aml_val_t;
-#define V(x)  ((aml_val_t){.v=(x),.t=RET_VAL})
-#define VOID  ((aml_val_t){.t=RET_VOID})
-#define RET(x)((aml_val_t){.v=(x),.t=RET_RET})
+#define VALUE(x)  ((aml_val_t){.v=(x),.t=0})
+#define VOID  ((aml_val_t){.t=1})
+#define RET(x)((aml_val_t){.v=(x),.t=2})
 
 #define PM1_CNT_BM_RLD       (1u << 1)
 #define PM1_CNT_SLP_TYP_MASK (0x7u << 10)
 #define PM1_CNT_SLP_EN       (1u << 13)
 #define PM1_CNT_WRITE_MASK   (PM1_CNT_SLP_TYP_MASK | PM1_CNT_SLP_EN | PM1_CNT_BM_RLD)
 
-void evaluate_acpi_crs(const char *device_path, acpi_resource_list_t *out);
 void enumerate_acpi_devices(void);
 const acpi_device_t* find_acpi_pci_device(uint8_t bus, uint8_t dev, uint8_t func);
-int get_acpi_usb_resources(uint8_t bus, uint8_t dev, uint8_t func, acpi_resource_list_t *out);
 int get_acpi_device_count(void);
 const acpi_device_registry_t* get_acpi_devices(void);
 void* find_acpi_table(const char* sig);

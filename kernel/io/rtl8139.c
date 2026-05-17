@@ -111,7 +111,7 @@ void init_rtl8139(pci_device_t *dev) {
     write_rtl32(RTL_TCR, 0x03000700);
     write_rtl16(RTL_IMR, RTL_INT_ROK | RTL_INT_TOK | RTL_INT_RER | RTL_INT_TER | RTL_INT_RXOVW);
 
-    register_pci_interrupt_handler(rtl8139_poll);
+    pci_request_irq(dev, rtl8139_poll);
     rtl8139.tx_slot = 0;
     rtl8139.ready = true;
     rx_callback = net_rx;
@@ -158,3 +158,4 @@ bool rtl8139_send(const void *data, uint16_t len) {
 void rtl8139_get_mac(uint8_t mac[6]) {
     memcpy(mac, rtl8139.mac, 6);
 }
+

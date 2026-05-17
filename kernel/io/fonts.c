@@ -697,7 +697,7 @@ void init_default_font(void) {
         // We can't print the output without the font, so just silently halt
         halt();
     }
-    printf("Fonts: Initialized the default font.\n"); // Now we can use functions like printf() again!
+    printf("Fonts: Initialized %dx%d font.\n", current_font_w, current_font_h); // Now we can use functions like printf() again!
 }
 
 void change_font(const char *path, uint8_t w, uint8_t h) {

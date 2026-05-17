@@ -150,8 +150,6 @@ typedef struct __attribute__((packed)) {
 // ============================================================================
 // USB Device (runtime state)
 // ============================================================================
-#define USB_MAX_ENDPOINTS 16
-
 typedef struct usb_device {
     uint8_t  address;        // Device address on the bus (1-127)
     uint8_t  speed;          // USB_SPEED_*
@@ -161,6 +159,7 @@ typedef struct usb_device {
     uint8_t  port_id;        // Physical port identifier on the HCD
     uint8_t  interrupt_toggle; // DATA0/DATA1 for interrupt transfers
     void    *hcd_data;       // HCD-specific per-device data
+    struct usb_device *next;
 } usb_device_t;
 
 // ============================================================================
@@ -180,11 +179,12 @@ typedef struct usb_hcd {
 // ============================================================================
 // Global USB device registry
 // ============================================================================
-#define USB_MAX_DEVICES 32
-
-extern usb_device_t usb_devices[USB_MAX_DEVICES];
-extern int usb_device_count;
+extern usb_device_t *usb_devices_head;
 extern usb_hcd_t *usb_active_hcd;
 
 void register_usb_hcd(usb_hcd_t *hcd);
+int  usb_allocate_address(int hint);
+void usb_release_address(uint8_t addr);
+usb_device_t* usb_allocate_device(void);
+void unregister_usb_device(usb_device_t *dev);
 void poll_usb_hcds(void);

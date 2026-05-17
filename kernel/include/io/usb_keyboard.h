@@ -3,8 +3,6 @@
 #include <io/pci.h>
 #include <io/usb.h>
 
-#define MAX_USB_KEYBOARDS 4
-
 // Keyboard device entry (also used by HCI drivers for polling)
 typedef struct {
     usb_device_t *dev;
@@ -16,7 +14,8 @@ typedef struct {
     int repeat_timer;         // Per-keyboard repeat timer counter
 } kbd_entry_t;
 
-extern kbd_entry_t kbd_list[MAX_USB_KEYBOARDS];
+extern kbd_entry_t *kbd_list;
+extern int kbd_max_total;
 extern int kbd_total;
 
 void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id);

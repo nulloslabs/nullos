@@ -265,40 +265,7 @@ void init_uhci(pci_device_t *dev) {
 
     ctrl->io_base = (uint16_t)io_base;
 
-    // ---- ACPI _CRS validation of I/O base ----
-    acpi_resource_list_t res_list = {0};
-    if (get_acpi_usb_resources(dev->bus, dev->dev, dev->func, &res_list)) {
-        ctrl->acpi_validated = 1;
-        printf("UHCI[%d]: ACPI _CRS confirmed %d resources.\n", uhci_count, res_list.count);
-        for (int r = 0; r < res_list.count; r++) {
-            acpi_resource_t *res = &res_list.resources[r];
-            if (!res->valid) continue;
-            if (res->type == ACPI_RES_IO) {
-                printf("UHCI[%d]:   IO range 0x%04X-0x%04X\n", uhci_count,
-                       (uint16_t)res->base, (uint16_t)(res->base + res->length - 1));
-                /* Validate that PCI BAR I/O base falls within ACPI range */
-                uint16_t bar_lo = (uint16_t)io_base;
-                uint16_t acpi_lo = (uint16_t)res->base;
-                uint16_t acpi_hi = (uint16_t)(res->base + res->length - 1);
-                if (bar_lo >= acpi_lo && bar_lo <= acpi_hi) {
-                    printf("UHCI[%d]:   PCI BAR I/O 0x%04X is within ACPI range -- VALID.\n",
-                           uhci_count, bar_lo);
-                } else {
-                    printf("UHCI[%d]:   WARNING: PCI BAR I/O 0x%04X is OUTSIDE ACPI range!\n",
-                           uhci_count, bar_lo);
-                }
-            }
-            else if (res->type == ACPI_RES_IRQ) {
-                printf("UHCI[%d]:   IRQ %u\n", uhci_count, res->irq);
-            }
-        }
-        /* Use ACPI port count if available (UHCI typically has 2 ports per controller) */
-        /* UHCI always has 2 ports, but ACPI can tell us if the controller is actually present */
-        ctrl->num_ports = 2; /* UHCI fixed at 2 ports */
-    } else {
-        printf("UHCI[%d]: No ACPI _CRS match -- using PCI BAR only.\n", uhci_count);
-        ctrl->num_ports = 2;
-    }
+    ctrl->num_ports = 2; // UHCI always has 2 ports
 
     uint32_t cmd = read_pci(dev->bus, dev->dev, dev->func, 0x04);
     cmd |= (1 << 0) | (1 << 2);

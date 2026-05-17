@@ -6,7 +6,7 @@ A secure, fast and privacy-focused hobby OS.
 
 | Status | Feature | Notes |
 | :--- | :--- | :--- |
-| Half-done | USB support | Only works on QEMU. |
+| Done | USB support | Only UHCI. |
 | Done | ACPI support |
 | Done | PCI support |
 | Done | Sound card support |

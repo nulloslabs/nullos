@@ -8,29 +8,45 @@
 #include <io/terminal.h>
 #include <io/usb.h>
 #include <io/uhci.h>
-#include <io/ohci.h>
-#include <io/ehci.h>
-#include <io/xhci.h>
 
-pci_device_t pci_devices[256];
+pci_device_t pci_devices[MAX_PCI_DEVICES];
 int pci_device_count = 0;
-void (*irq43_handlers[4])(void) = { 0 };
-int irq43_count = 0;
 
-void register_pci_interrupt_handler(void (*handler)(void)) {
-    if (irq43_count < 4) {
-        irq43_handlers[irq43_count++] = handler;
-    }
-}
+#define MAX_INTX_SHARED 8
+typedef struct {
+    void (*fns[MAX_INTX_SHARED])(void);
+    int   count;
+} intx_chain_t;
 
-void handle_pci_interrupt(void) {
-    for (int i = 0; i < irq43_count; i++) {
-        if (irq43_handlers[i]) {
-            irq43_handlers[i]();
+static void (*msi_handlers[256])(void) = { 0 };
+static intx_chain_t intx_chains[16] = { 0 }; // legacy IRQs 0..15
+
+static uint8_t next_msi_vector = MSI_VECTOR_BASE;
+
+// Called from every per-vector ISR stub in pci_isr.S
+void pci_dispatch(uint8_t vector) {
+    if (vector >= LEGACY_IRQ_BASE && vector < LEGACY_IRQ_BASE + 16) {
+        intx_chain_t *c = &intx_chains[vector - LEGACY_IRQ_BASE];
+        for (int i = 0; i < c->count; i++) {
+            if (c->fns[i]) c->fns[i]();
         }
+        return;
     }
+    void (*h)(void) = msi_handlers[vector];
+    if (h) h();
 }
 
+void pci_register_msi_handler(uint8_t vector, void (*handler)(void)) {
+    msi_handlers[vector] = handler;
+}
+
+void pci_register_intx_handler(uint8_t irq_line, void (*handler)(void)) {
+    if (irq_line >= 16) return;
+    intx_chain_t *c = &intx_chains[irq_line];
+    if (c->count < MAX_INTX_SHARED) c->fns[c->count++] = handler;
+}
+
+// ---- PCI config-space helpers -------------------------------------------
 uint32_t read_pci(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg) {
     outl(0xCF8, 0x80000000u | ((uint32_t)bus<<16) | ((uint32_t)dev<<11)
                              | ((uint32_t)func<<8) | (reg & 0xFC));
@@ -62,38 +78,123 @@ pci_device_t* find_pci_class(uint8_t class, uint8_t subclass, uint8_t progif) {
     return NULL;
 }
 
-void set_pci_d0(pci_device_t *dev) {
+// ---- Capability-list walking --------------------------------------------
+static uint8_t pci_find_cap(pci_device_t *dev, uint8_t cap_id) {
     uint32_t status_cmd = read_pci(dev->bus, dev->dev, dev->func, 0x04);
-    // Bit 4 of Status register is bit 20 of register 0x04
-    if (!(status_cmd & (1 << 20))) {
-        return; // No capabilities list
+    if (!(status_cmd & (1 << 20))) return 0; // no caps list
+
+    uint8_t ptr = read_pci(dev->bus, dev->dev, dev->func, 0x34) & 0xFC;
+    while (ptr) {
+        uint32_t hdr = read_pci(dev->bus, dev->dev, dev->func, ptr);
+        if ((hdr & 0xFF) == cap_id) return ptr;
+        ptr = ((hdr >> 8) & 0xFF) & 0xFC;
     }
+    return 0;
+}
 
-    uint8_t cap_ptr = read_pci(dev->bus, dev->dev, dev->func, 0x34) & 0xFF;
-    cap_ptr &= 0xFC; // Capability pointers are dword-aligned
+// ---- Power management ---------------------------------------------------
+void set_pci_d0(pci_device_t *dev) {
+    uint8_t cap = pci_find_cap(dev, 0x01);
+    if (!cap) return;
 
-    while (cap_ptr) {
-        uint32_t cap_header = read_pci(dev->bus, dev->dev, dev->func, cap_ptr);
-        uint8_t cap_id = cap_header & 0xFF;
-        uint8_t next_ptr = ((cap_header >> 8) & 0xFF) & 0xFC;
-
-        if (cap_id == 0x01) { // Power Management
-            uint32_t pmcsr = read_pci(dev->bus, dev->dev, dev->func, cap_ptr + 4);
-            if ((pmcsr & 0x03) != 0) { // Not in D0
-                printf("PCI: Transitioning %02x:%02x.%x from D%d to D0\n", dev->bus, dev->dev, dev->func, pmcsr & 0x03);
-                pmcsr &= ~0x03; // Mask out PowerState (bits 1:0) to 0 (D0)
-                write_pci(dev->bus, dev->dev, dev->func, cap_ptr + 4, pmcsr);
-                // The PCI spec requires a 10ms delay when transitioning from D3hot to D0
-                extern void sleep(uint64_t ms);
-                sleep(10);
-            }
-            break;
-        }
-
-        cap_ptr = next_ptr;
+    uint32_t pmcsr = read_pci(dev->bus, dev->dev, dev->func, cap + 4);
+    if ((pmcsr & 0x03) != 0) {
+        printf("PCI: Transitioning %02x:%02x.%x from D%d to D0\n",
+               dev->bus, dev->dev, dev->func, pmcsr & 0x03);
+        pmcsr &= ~0x03;
+        write_pci(dev->bus, dev->dev, dev->func, cap + 4, pmcsr);
+        extern void sleep(uint64_t ms);
+        sleep(10);
     }
 }
 
+// ---- Legacy INTx helpers ------------------------------------------------
+uint8_t pci_get_intx_vector(pci_device_t *dev) {
+    uint32_t r = read_pci(dev->bus, dev->dev, dev->func, 0x3C);
+    uint8_t line = r & 0xFF;
+    if (line == 0xFF) return 0; // not connected
+    return LEGACY_IRQ_BASE + line;
+}
+
+static void pci_set_intx_disable(pci_device_t *dev, int disable) {
+    uint32_t cmd = read_pci(dev->bus, dev->dev, dev->func, 0x04);
+    if (disable) cmd |=  (1 << 10);
+    else         cmd &= ~(1 << 10);
+    write_pci(dev->bus, dev->dev, dev->func, 0x04, cmd);
+}
+
+// ---- MSI ----------------------------------------------------------------
+// Returns the vector assigned to this device, or 0 on failure (device
+// doesn't support MSI, or we ran out of vectors). On success, INTx is
+// disabled and the device will deliver interrupts as a unique vector.
+uint8_t pci_enable_msi(pci_device_t *dev) {
+    uint8_t cap = pci_find_cap(dev, 0x05);
+    if (!cap) return 0;
+
+    if (next_msi_vector >= MSI_VECTOR_END) {
+        printf("PCI: out of MSI vectors\n");
+        return 0;
+    }
+    uint8_t vector = next_msi_vector++;
+
+    // Read Message Control (upper 16 bits of cap dword 0)
+    uint32_t mc_dword = read_pci(dev->bus, dev->dev, dev->func, cap);
+    uint16_t mc = (mc_dword >> 16) & 0xFFFF;
+    int is_64bit = mc & (1 << 7);
+
+    // Address: deliver to BSP (LAPIC ID 0). Format: 0xFEE00000 | (apic_id<<12)
+    uint32_t addr_lo = 0xFEE00000u; // edge-trigger, fixed delivery, RH=0, DM=0
+    uint32_t addr_hi = 0;
+
+    // Data: vector, fixed delivery (000), edge, assert
+    uint32_t data = vector;
+
+    write_pci(dev->bus, dev->dev, dev->func, cap + 0x04, addr_lo);
+    if (is_64bit) {
+        write_pci(dev->bus, dev->dev, dev->func, cap + 0x08, addr_hi);
+        write_pci(dev->bus, dev->dev, dev->func, cap + 0x0C, data & 0xFFFF);
+    } else {
+        write_pci(dev->bus, dev->dev, dev->func, cap + 0x08, data & 0xFFFF);
+    }
+
+    // Set MSI Enable (bit 0 of Message Control), force MME=0 (1 vector).
+    mc |= 1;          // MSI Enable
+    mc &= ~(7 << 4);  // MME = 0 -> 1 message
+    uint32_t new_mc_dword = (mc_dword & 0x0000FFFF) | ((uint32_t)mc << 16);
+    write_pci(dev->bus, dev->dev, dev->func, cap, new_mc_dword);
+
+    // Mask legacy INTx so it never fires for this device again.
+    pci_set_intx_disable(dev, 1);
+
+    printf("PCI: %02x:%02x.%x using MSI vector %d\n",
+           dev->bus, dev->dev, dev->func, vector);
+    return vector;
+}
+
+// One-shot helper: try MSI, fall back to legacy INTx. Returns assigned
+// vector. Driver should register its handler on the returned vector.
+uint8_t pci_request_irq(pci_device_t *dev, void (*handler)(void)) {
+    uint8_t v = pci_enable_msi(dev);
+    if (v) {
+        pci_register_msi_handler(v, handler);
+        return v;
+    }
+    // Fall back to legacy INTx. Make sure INTx is *enabled* (clear bit 10).
+    pci_set_intx_disable(dev, 0);
+    uint32_t r = read_pci(dev->bus, dev->dev, dev->func, 0x3C);
+    uint8_t line = r & 0xFF;
+    if (line == 0xFF) {
+        printf("PCI: %02x:%02x.%x has no IRQ line\n",
+               dev->bus, dev->dev, dev->func);
+        return 0;
+    }
+    pci_register_intx_handler(line, handler);
+    printf("PCI: %02x:%02x.%x using INTx IRQ%d (vector %d)\n",
+           dev->bus, dev->dev, dev->func, line, LEGACY_IRQ_BASE + line);
+    return LEGACY_IRQ_BASE + line;
+}
+
+// ---- Enumeration --------------------------------------------------------
 void init_pci(void) {
     for (uint16_t bus = 0; bus < 256; bus++) {
         for (uint8_t dev = 0; dev < 32; dev++) {
@@ -110,7 +211,7 @@ void init_pci(void) {
                     .subclass = (uint8_t)(cc >> 16),
                     .progif = (uint8_t)(cc >> 8),
                 };
-                if (pci_device_count >= 256) return;
+                if (pci_device_count >= MAX_PCI_DEVICES) return;
             }
         }
     }
@@ -124,12 +225,12 @@ void init_pci_drivers(void) {
         uint16_t device;
         void (*init)(pci_device_t*);
     } known_pci_drivers[] = {
-        {"AC97", AC97_VENDOR, AC97_DEVICE, init_ac97},
+        {"AC97",    AC97_VENDOR,    AC97_DEVICE,    init_ac97},
         {"RTL8139", RTL8139_VENDOR, RTL8139_DEVICE, init_rtl8139},
-        {"E1000", E1000_VENDOR, E1000_DEVICE, init_e1000}
+        {"E1000",   E1000_VENDOR,   E1000_DEVICE,   init_e1000}
     };
 
-    for (int i = 0; i < sizeof(known_pci_drivers)/sizeof(known_pci_drivers[0]); i++) {
+    for (int i = 0; i < (int)(sizeof(known_pci_drivers)/sizeof(known_pci_drivers[0])); i++) {
         pci_device_t *dev = find_pci(known_pci_drivers[i].vendor, known_pci_drivers[i].device);
         if (dev) {
             printf("PCI: Found driver for %s.\n", known_pci_drivers[i].name);
@@ -143,12 +244,9 @@ void init_pci_drivers(void) {
         void (*init)(pci_device_t*);
     } known_usb_drivers[] = {
         {"UHCI", USB_PROGIF_UHCI, init_uhci},
-        {"OHCI", USB_PROGIF_OHCI, init_ohci},
-        {"EHCI", USB_PROGIF_EHCI, init_ehci},
-        {"xHCI", USB_PROGIF_XHCI, init_xhci},
     };
 
-    for (int i = 0; i < sizeof(known_usb_drivers)/sizeof(known_usb_drivers[0]); i++) {
+    for (int i = 0; i < (int)(sizeof(known_usb_drivers)/sizeof(known_usb_drivers[0])); i++) {
         for (int j = 0; j < pci_device_count; j++) {
             if (pci_devices[j].class == USB_PCI_CLASS &&
                 pci_devices[j].subclass == USB_PCI_SUBCLASS &&
@@ -158,5 +256,5 @@ void init_pci_drivers(void) {
             }
         }
     }
-
 }
+

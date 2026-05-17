@@ -34,7 +34,6 @@ iso: tools kernel rootfs
 		cp ../kernel/nullkrnl main/boot && \
 		cp ../rootfs/rootfs.tar.gz main/boot && \
 		cp ../config/limine.conf main/boot && \
-		cp ../config/splash.jpg main/boot && \
 		$(XORRISO) -as mkisofs $(XORRISOFLAGS) main -o $(ISOFILE) > /dev/null 2>&1 && \
 		../tools/limine/limine bios-install $(ISOFILE) > /dev/null 2>&1; \
 	fi

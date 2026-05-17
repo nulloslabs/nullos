@@ -194,17 +194,6 @@ static void dev_eval_uid(const char *scope) {
     dev->uid = obj->ival;
 }
 
-static void dev_check_crs(const char *scope) {
-    char path[AML_NAME_MAX];
-    fmt_path(path, AML_NAME_MAX, scope, "._CRS");
-    aml_obj_t *obj = ns_exact(path);
-    if (!obj) return;
-    if (obj->type != AML_METHOD && obj->type != AML_BUFFER && obj->type != AML_INT) return;
-    acpi_device_t *dev = dev_registry_add(scope);
-    if (!dev) return;
-    dev->has_crs = 1;
-}
-
 // ---- PkgLength ----
 
 // Returns total package length (including the pkglen bytes themselves).
@@ -512,11 +501,11 @@ static aml_val_t eval(uint8_t **pp, uint8_t *end, aml_ctx_t *ctx) {
     uint8_t op=**pp;
 
     // Integer literals
-    if (is_int_op(op)) return V(parse_int(pp));
+    if (is_int_op(op)) return VALUE(parse_int(pp));
 
     // Locals / Args
-    if (op>=0x60&&op<=0x67) { (*pp)++; return V(ctx->locals[op-0x60]); }
-    if (op>=0x68&&op<=0x6E) { (*pp)++; return V(ctx->args[op-0x68]); }
+    if (op>=0x60&&op<=0x67) { (*pp)++; return VALUE(ctx->locals[op-0x60]); }
+    if (op>=0x68&&op<=0x6E) { (*pp)++; return VALUE(ctx->args[op-0x68]); }
 
     // NoOp
     if (op==0xA3) { (*pp)++; return VOID; }
@@ -529,7 +518,7 @@ static aml_val_t eval(uint8_t **pp, uint8_t *end, aml_ctx_t *ctx) {
         (*pp)++;
         aml_val_t src=eval(pp,end,ctx);
         store_to(pp,end,ctx,src.v);
-        return V(src.v);
+        return VALUE(src.v);
     }
 
     // CopyObjectOp: same semantics as Store for our purposes
@@ -537,7 +526,7 @@ static aml_val_t eval(uint8_t **pp, uint8_t *end, aml_ctx_t *ctx) {
         (*pp)++;
         aml_val_t src=eval(pp,end,ctx);
         store_to(pp,end,ctx,src.v);
-        return V(src.v);
+        return VALUE(src.v);
     }
 
     // IfOp
@@ -548,7 +537,7 @@ static aml_val_t eval(uint8_t **pp, uint8_t *end, aml_ctx_t *ctx) {
         aml_val_t cond=eval(pp,pe,ctx);
         aml_val_t result=VOID;
         if (cond.v) {
-            while (*pp<pe) { result=eval(pp,pe,ctx); if(result.t==RET_RET){*pp=pe;break;} }
+            while (*pp<pe) { result=eval(pp,pe,ctx); if(result.t==2){*pp=pe;break;} }
         }
         *pp=pe;
         // Check for trailing ElseOp
@@ -557,7 +546,7 @@ static aml_val_t eval(uint8_t **pp, uint8_t *end, aml_ctx_t *ctx) {
             uint8_t *es=*pp; uint32_t el=pkglen(pp); uint8_t *ee=es+el;
             if (ee>end) ee=end;
             if (!cond.v) {
-                while (*pp<ee) { result=eval(pp,ee,ctx); if(result.t==RET_RET){*pp=ee;break;} }
+                while (*pp<ee) { result=eval(pp,ee,ctx); if(result.t==2){*pp=ee;break;} }
             }
             *pp=ee;
         }
@@ -586,47 +575,47 @@ static aml_val_t eval(uint8_t **pp, uint8_t *end, aml_ctx_t *ctx) {
         aml_val_t a=eval(pp,end,ctx); aml_val_t b=eval(pp,end,ctx);
         uint64_t res=a.v+b.v;
         store_to(pp,end,ctx,res);
-        return V(res);
+        return VALUE(res);
     }
 
     // SubtractOp
     if (op==0x74) {
         (*pp)++;
         aml_val_t a=eval(pp,end,ctx); aml_val_t b=eval(pp,end,ctx);
-        uint64_t res=a.v-b.v; store_to(pp,end,ctx,res); return V(res);
+        uint64_t res=a.v-b.v; store_to(pp,end,ctx,res); return VALUE(res);
     }
 
     // AndOp
     if (op==0x7B) {
         (*pp)++;
         aml_val_t a=eval(pp,end,ctx); aml_val_t b=eval(pp,end,ctx);
-        uint64_t res=a.v&b.v; store_to(pp,end,ctx,res); return V(res);
+        uint64_t res=a.v&b.v; store_to(pp,end,ctx,res); return VALUE(res);
     }
 
     // OrOp
     if (op==0x7D) {
         (*pp)++;
         aml_val_t a=eval(pp,end,ctx); aml_val_t b=eval(pp,end,ctx);
-        uint64_t res=a.v|b.v; store_to(pp,end,ctx,res); return V(res);
+        uint64_t res=a.v|b.v; store_to(pp,end,ctx,res); return VALUE(res);
     }
 
     // LNotOp: returns 0xFFFFFFFF if operand is 0, else 0
-    if (op==0x92) { (*pp)++; aml_val_t v=eval(pp,end,ctx); return V(v.v?0:0xFFFFFFFFu); }
+    if (op==0x92) { (*pp)++; aml_val_t v=eval(pp,end,ctx); return VALUE(v.v?0:0xFFFFFFFFu); }
 
     // LAndOp, LOrOp
-    if (op==0x90) { (*pp)++; aml_val_t a=eval(pp,end,ctx); aml_val_t b=eval(pp,end,ctx); return V((a.v&&b.v)?0xFFFFFFFFu:0); }
-    if (op==0x91) { (*pp)++; aml_val_t a=eval(pp,end,ctx); aml_val_t b=eval(pp,end,ctx); return V((a.v||b.v)?0xFFFFFFFFu:0); }
+    if (op==0x90) { (*pp)++; aml_val_t a=eval(pp,end,ctx); aml_val_t b=eval(pp,end,ctx); return VALUE((a.v&&b.v)?0xFFFFFFFFu:0); }
+    if (op==0x91) { (*pp)++; aml_val_t a=eval(pp,end,ctx); aml_val_t b=eval(pp,end,ctx); return VALUE((a.v||b.v)?0xFFFFFFFFu:0); }
 
     // Comparison ops
-    if (op==0x93) { (*pp)++; aml_val_t a=eval(pp,end,ctx); aml_val_t b=eval(pp,end,ctx); return V(a.v==b.v?0xFFFFFFFFu:0); }
-    if (op==0x94) { (*pp)++; aml_val_t a=eval(pp,end,ctx); aml_val_t b=eval(pp,end,ctx); return V(a.v>b.v?0xFFFFFFFFu:0); }
-    if (op==0x95) { (*pp)++; aml_val_t a=eval(pp,end,ctx); aml_val_t b=eval(pp,end,ctx); return V(a.v<b.v?0xFFFFFFFFu:0); }
+    if (op==0x93) { (*pp)++; aml_val_t a=eval(pp,end,ctx); aml_val_t b=eval(pp,end,ctx); return VALUE(a.v==b.v?0xFFFFFFFFu:0); }
+    if (op==0x94) { (*pp)++; aml_val_t a=eval(pp,end,ctx); aml_val_t b=eval(pp,end,ctx); return VALUE(a.v>b.v?0xFFFFFFFFu:0); }
+    if (op==0x95) { (*pp)++; aml_val_t a=eval(pp,end,ctx); aml_val_t b=eval(pp,end,ctx); return VALUE(a.v<b.v?0xFFFFFFFFu:0); }
 
     // NotifyOp: 2 args, no result - skip (not needed for shutdown)
     if (op==0x86) { (*pp)++; eval(pp,end,ctx); eval(pp,end,ctx); return VOID; }
 
     // SizeOfOp
-    if (op==0x87) { (*pp)++; eval(pp,end,ctx); return V(0); }
+    if (op==0x87) { (*pp)++; eval(pp,end,ctx); return VALUE(0); }
 
     // IndexOp: Index(src, idx, dst)
     if (op==0x88) {
@@ -644,7 +633,7 @@ static aml_val_t eval(uint8_t **pp, uint8_t *end, aml_ctx_t *ctx) {
         uint8_t ext=*(*pp)++;
         if (ext==0x22||ext==0x21) { eval(pp,end,ctx); return VOID; }  // Sleep/Stall
         if (ext==0x31)            { return VOID; }                      // DebugOp (lvalue)
-        if (ext==0x23)            { (*pp)+=2; return V(0); }            // AcquireOp
+        if (ext==0x23)            { (*pp)+=2; return VALUE(0); }            // AcquireOp
         if (ext==0x27)            { eval(pp,end,ctx); return VOID; }    // ReleaseOp
         if (ext==0x12)            { eval(pp,end,ctx); return VOID; }    // CondRefOf
         return VOID;
@@ -655,8 +644,8 @@ static aml_val_t eval(uint8_t **pp, uint8_t *end, aml_ctx_t *ctx) {
         char name[AML_NAME_MAX]; parse_path(pp, name);
         aml_obj_t *obj=ns_find(ctx->scope, name);
         if (obj) {
-            if (obj->type==AML_INT)    return V(obj->ival);
-            if (obj->type==AML_FIELD)  return V(fld_read(obj));
+            if (obj->type==AML_INT)    return VALUE(obj->ival);
+            if (obj->type==AML_FIELD)  return VALUE(fld_read(obj));
             if (obj->type==AML_METHOD) {
                 if (ctx->depth>=AML_DEPTH_MAX) return VOID;
                 aml_ctx_t ch={0}; ch.depth=ctx->depth+1;
@@ -667,9 +656,8 @@ static aml_val_t eval(uint8_t **pp, uint8_t *end, aml_ctx_t *ctx) {
                 for (int i=0; i<obj->method.argc && *pp<end; i++) {
                     aml_val_t a=eval(pp,end,ctx); ch.args[i]=a.v;
                 }
-                // Execute and return result as plain value (not RET_RET to caller)
                 aml_val_t r=exec_body(obj->method.body, obj->method.blen, &ch);
-                return V(r.v);
+                return VALUE(r.v);
             }
         }
         return VOID;
@@ -684,13 +672,13 @@ static aml_val_t exec_body(uint8_t *body, uint32_t blen, aml_ctx_t *ctx) {
     aml_val_t last=VOID;
     while (p<end) {
         last=eval(&p,end,ctx);
-        if (last.t==RET_RET) return last;
+        if (last.t==2) return last;
     }
     return last;
 }
 
 // ============================================================================
-// ACPI Device Enumeration & _CRS Evaluation
+// ACPI Device Enumeration
 // ============================================================================
 
 // Track which scopes are device objects during AML scan augmentation 
@@ -719,14 +707,13 @@ static void aml_scan_devices(uint8_t *start, uint8_t *end, const char *scope) {
                 char rn[AML_NAME_MAX]; parse_path(&p, rn);
                 char fn[AML_NAME_MAX]; abs_path(scope, rn, fn);
 
-                // This is a Device() object — scan its children for _HID, _ADR, _CRS 
+                // This is a Device() object — scan its children for _HID, _ADR
                 aml_scan_devices(ps, pe, fn);
 
-                // Evaluate _HID, _ADR, _UID, _CRS for this device 
+                // Evaluate _HID, _ADR, _UID for this device 
                 dev_eval_hid(fn);
                 dev_eval_adr(fn);
                 dev_eval_uid(fn);
-                dev_check_crs(fn);
 
                 p = pe;
                 continue;
@@ -757,259 +744,6 @@ static void aml_scan_devices(uint8_t *start, uint8_t *end, const char *scope) {
     }
 }
 
-// ---- _CRS ResourceTemplate parser ----
-
-static void crs_parse_raw_aml(uint8_t *aml, uint32_t aml_len, acpi_resource_list_t *out) {
-    uint8_t *p = aml;
-    uint8_t *end = aml + aml_len;
-    out->count = 0;
-
-    while (p + 1 < end && out->count < ACPI_MAX_RESOURCES) {
-        uint8_t b = *p;
-
-        // ---- Small item: bit7=0, bits6:3=tag, bits2:0=length ----
-        // ACPI 6.4 §6.4.2: small item tags:
-        //   0x01 = IRQ, 0x02 = DMA, 0x04 = Start Dependent, 0x05 = End Dependent,
-        //   0x06 = IO Port, 0x07 = Fixed IO Port, 0x0E = Vendor Small, 0x0F = End Tag
-        if ((b & 0x80) == 0) {
-            int type = (b >> 3) & 0x0F;
-            int len  = b & 0x07;
-            uint8_t *data = p + 1;
-            if (data + len > end) break;
-
-            if (type == 0x0F) {
-                // End Tag (0x79) — stop parsing
-                break;
-            }
-            if (type == 0x01 && len >= 2) {
-                // IRQ Descriptor — 2-byte IRQ mask, bits[i]=1 means IRQ i active
-                uint16_t mask = (uint16_t)data[0] | ((uint16_t)data[1] << 8);
-                for (int i = 0; i < 16 && out->count < ACPI_MAX_RESOURCES; i++) {
-                    if (mask & (1u << i)) {
-                        acpi_resource_t *irq = &out->resources[out->count++];
-                        irq->type = ACPI_RES_IRQ;
-                        irq->irq  = (uint32_t)i;
-                        irq->valid = 1;
-                    }
-                }
-            }
-            if (type == 0x06 && len >= 7) {
-                // IO Port Descriptor (0x47):
-                //   data[0]=Info, data[1-2]=AddrMin, data[3-4]=AddrMax,
-                //   data[5]=Align, data[6]=Length
-                acpi_resource_t *res = &out->resources[out->count++];
-                res->type = ACPI_RES_IO;
-                res->io_space_id = 1;
-                res->base   = (uint64_t)data[1] | ((uint64_t)data[2] << 8);
-                res->length = (uint64_t)data[6];
-                res->valid  = 1;
-            }
-            if (type == 0x07 && len >= 3) {
-                // Fixed IO Port Descriptor (0x4B):
-                //   data[0-1]=BaseAddr, data[2]=Length
-                acpi_resource_t *res = &out->resources[out->count++];
-                res->type = ACPI_RES_IO;
-                res->io_space_id = 1;
-                res->base   = (uint64_t)data[0] | ((uint64_t)data[1] << 8);
-                res->length = (uint64_t)data[2];
-                res->valid  = 1;
-            }
-            p += 1 + len;
-            continue;
-        }
-
-        // ---- Large item: bit7=1, bits6:0=tag, bytes 1-2=length (LE) ----
-        // ACPI 6.4 §6.4.3 large item tags:
-        //   0x01=Memory24, 0x02=GenericRegister, 0x04=VendorLarge,
-        //   0x05=Memory32, 0x06=FixedMemory32,
-        //   0x07=DWordAddressSpace, 0x08=WordAddressSpace,
-        //   0x09=ExtendedInterrupt, 0x0A=QWordAddressSpace,
-        //   0x0B=ExtendedAddressSpace
-        int type = b & 0x7F;
-        if (p + 3 > end) break;
-        uint16_t len = (uint16_t)p[1] | ((uint16_t)p[2] << 8);
-        uint8_t *data = p + 3;   // data[0] is byte 3 of descriptor
-        if (data + len > end) break;
-
-        acpi_resource_t *res = &out->resources[out->count];
-
-        if (type == 0x01 && len >= 9) {
-            // Memory 24 Descriptor (0x81):
-            //   data[0]=Info, data[1-2]=BaseMin(<<8), data[3-4]=BaseMax(<<8),
-            //   data[5-6]=Align, data[7-8]=Length(<<8)
-            res->type = ACPI_RES_MMIO;
-            res->io_space_id = 0;
-            res->base   = ((uint64_t)data[1] | ((uint64_t)data[2] << 8)) << 8;
-            res->length = ((uint64_t)data[7] | ((uint64_t)data[8] << 8)) << 8;
-            res->valid  = 1;
-            out->count++;
-        }
-        else if (type == 0x05 && len >= 17) {
-            // Memory 32 Descriptor (0x85):
-            //   data[0]=Info, data[1-4]=BaseMin, data[5-8]=BaseMax,
-            //   data[9-12]=Align, data[13-16]=Length
-            res->type = ACPI_RES_MMIO;
-            res->io_space_id = 0;
-            res->base   = (uint64_t)data[1]  | ((uint64_t)data[2]  <<  8)
-                        | ((uint64_t)data[3]  << 16) | ((uint64_t)data[4]  << 24);
-            res->length = (uint64_t)data[13] | ((uint64_t)data[14] <<  8)
-                        | ((uint64_t)data[15] << 16) | ((uint64_t)data[16] << 24);
-            res->valid  = 1;
-            out->count++;
-        }
-        else if (type == 0x06 && len >= 9) {
-            // Fixed Memory 32 Descriptor (0x86):
-            //   data[0]=Info, data[1-4]=BaseAddr, data[5-8]=Length
-            res->type = ACPI_RES_MMIO;
-            res->io_space_id = 0;
-            res->base   = (uint64_t)data[1] | ((uint64_t)data[2] <<  8)
-                        | ((uint64_t)data[3] << 16) | ((uint64_t)data[4] << 24);
-            res->length = (uint64_t)data[5] | ((uint64_t)data[6] <<  8)
-                        | ((uint64_t)data[7] << 16) | ((uint64_t)data[8] << 24);
-            res->valid  = 1;
-            out->count++;
-        }
-        else if (type == 0x07 && len >= 23) {
-            // DWord Address Space Descriptor (0x87) — most common for USB MMIO:
-            //   data[0]=ResourceType(0=Mem,1=IO), data[1]=GenFlags, data[2]=TypeFlags,
-            //   data[3-6]=Granularity, data[7-10]=AddrMin, data[11-14]=AddrMax,
-            //   data[15-18]=TranslationOffset, data[19-22]=AddrLength
-            uint8_t atype = data[0];
-            if (atype == 0) {
-                res->type = ACPI_RES_MMIO;
-                res->io_space_id = 0;
-                res->base   = (uint64_t)data[7]  | ((uint64_t)data[8]  <<  8)
-                            | ((uint64_t)data[9]  << 16) | ((uint64_t)data[10] << 24);
-                res->length = (uint64_t)data[19] | ((uint64_t)data[20] <<  8)
-                            | ((uint64_t)data[21] << 16) | ((uint64_t)data[22] << 24);
-                res->valid  = 1;
-                out->count++;
-            } else if (atype == 1) {
-                res->type = ACPI_RES_IO;
-                res->io_space_id = 1;
-                res->base   = (uint64_t)data[7]  | ((uint64_t)data[8]  <<  8)
-                            | ((uint64_t)data[9]  << 16) | ((uint64_t)data[10] << 24);
-                res->length = (uint64_t)data[19] | ((uint64_t)data[20] <<  8)
-                            | ((uint64_t)data[21] << 16) | ((uint64_t)data[22] << 24);
-                res->valid  = 1;
-                out->count++;
-            } else if (atype == 3 && out->count < ACPI_MAX_RESOURCES) {
-                // Interrupt via DWord Address Space (rare — prefer Extended Interrupt below)
-                acpi_resource_t *irq = &out->resources[out->count++];
-                irq->type = ACPI_RES_IRQ;
-                irq->irq  = (uint64_t)data[7]  | ((uint64_t)data[8]  <<  8)
-                           | ((uint64_t)data[9]  << 16) | ((uint64_t)data[10] << 24);
-                irq->valid = 1;
-            }
-        }
-        else if (type == 0x09 && len >= 6) {
-            // Extended Interrupt Descriptor (0x89):
-            //   data[0]=Flags, data[1]=InterruptCount,
-            //   data[2+i*4 .. 5+i*4] = IRQ[i] (32-bit LE each)
-            uint8_t count = data[1];
-            for (int i = 0; i < count && out->count < ACPI_MAX_RESOURCES; i++) {
-                if ((uint16_t)(2 + (uint16_t)(i + 1) * 4) > len) break;
-                acpi_resource_t *irq = &out->resources[out->count++];
-                irq->type = ACPI_RES_IRQ;
-                irq->irq  = (uint32_t)data[2 + i*4]        | ((uint32_t)data[3 + i*4] <<  8)
-                           | ((uint32_t)data[4 + i*4] << 16) | ((uint32_t)data[5 + i*4] << 24);
-                irq->valid = 1;
-            }
-        }
-        else if (type == 0x0A && len >= 43) {
-            // QWord Address Space Descriptor (0x8A) — for 64-bit MMIO:
-            //   data[0]=ResourceType, data[1]=GenFlags, data[2]=TypeFlags,
-            //   data[3-10]=Granularity, data[11-18]=AddrMin, data[19-26]=AddrMax,
-            //   data[27-34]=TranslationOffset, data[35-42]=AddrLength
-            if (data[0] == 0) {
-                res->type = ACPI_RES_MMIO;
-                res->io_space_id = 0;
-                res->base =
-                    (uint64_t)data[11] | ((uint64_t)data[12] <<  8) |
-                    ((uint64_t)data[13] << 16) | ((uint64_t)data[14] << 24) |
-                    ((uint64_t)data[15] << 32) | ((uint64_t)data[16] << 40) |
-                    ((uint64_t)data[17] << 48) | ((uint64_t)data[18] << 56);
-                res->length =
-                    (uint64_t)data[35] | ((uint64_t)data[36] <<  8) |
-                    ((uint64_t)data[37] << 16) | ((uint64_t)data[38] << 24) |
-                    ((uint64_t)data[39] << 32) | ((uint64_t)data[40] << 40) |
-                    ((uint64_t)data[41] << 48) | ((uint64_t)data[42] << 56);
-                res->valid  = 1;
-                out->count++;
-            }
-        }
-        // else: skip unsupported large item types (0x02 GenReg, 0x04 VendorLarge,
-        //        0x08 WordAddressSpace, 0x0B ExtendedAddressSpace)
-
-        p += 3 + len;
-    }
-}
-
-void evaluate_acpi_crs(const char *device_path, acpi_resource_list_t *out) {
-    memset(out, 0, sizeof(acpi_resource_list_t));
-
-    if (!device_path) return;
-
-    // Build path to _CRS 
-    char crs_path[AML_NAME_MAX];
-    fmt_path(crs_path, AML_NAME_MAX, device_path, "._CRS");
-
-    aml_obj_t *crs_obj = ns_exact(crs_path);
-    if (!crs_obj) return;
-
-    if (crs_obj->type == AML_BUFFER) {
-        // Name(_CRS, Buffer{...}) — parse the raw buffer data directly 
-        crs_parse_raw_aml(crs_obj->buffer.data, crs_obj->buffer.len, out);
-        return;
-    }
-
-    if (crs_obj->type == AML_INT) {
-        return;
-    }
-
-    if (crs_obj->type == AML_METHOD) {
-        // Execute _CRS method 
-        uint64_t irq;
-        spin_lock_irqsave(&acpi_lock, &irq);
-        aml_ctx_t ctx = {0};
-        strncpy(ctx.scope, crs_obj->path, AML_NAME_MAX - 1);
-        char *dot = strrchr(ctx.scope, '.');
-        if (dot) *dot = 0; else { ctx.scope[0] = '\\'; ctx.scope[1] = 0; }
-        aml_val_t result = exec_body(crs_obj->method.body, crs_obj->method.blen, &ctx);
-        spin_unlock_irqrestore(&acpi_lock, irq);
-        (void)result;
-        uint8_t *p = crs_obj->method.body;
-        uint8_t *end = crs_obj->method.body + crs_obj->method.blen;
-        while (p < end - 3) {
-            // Look for Buffer opcode (0x11) 
-            if (*p == 0x11) {
-                p++; // skip opcode 
-                // skip size operand 
-                uint8_t sz_op = *p;
-                if (sz_op == 0x0A) { p++; if (p < end) p++; } // OneByteData 
-                else if (sz_op == 0x0B) { p++; if (p+1 < end) p += 2; } // TwoByteData 
-                else if (sz_op == 0x0C) { p++; if (p+3 < end) p += 4; } // DWordData 
-                else if (sz_op == 0x0E) { p++; if (p+7 < end) p += 8; }
-                else if ((sz_op & 0xC0) == 0x40) { p += 1; } // BytePrefix inline length 
-                // Now at byte data 
-                if (p < end) {
-                    uint32_t buf_len = 0;
-                    if (*(p-1) == 0x40 || (*(p-1) & 0xC0) == 0x40) {
-                        buf_len = (*(p-1)) & 0x3F;
-                    }
-                    if (buf_len > 0 && p + buf_len <= end) {
-                        // This buffer contains the ResourceTemplate 
-                        crs_parse_raw_aml(p, buf_len, out);
-                        if (out->count > 0) return;
-                        p += buf_len;
-                    }
-                }
-                continue;
-            }
-            p++;
-        }
-    }
-}
 
 // Public: enumerate all ACPI devices from DSDT + SSDTs 
 void enumerate_acpi_devices(void) {
@@ -1060,46 +794,6 @@ const acpi_device_registry_t* get_acpi_devices(void) {
     return &acpi_devices;
 }
 
-int get_acpi_usb_resources(uint8_t bus, uint8_t dev, uint8_t func,
-                           acpi_resource_list_t *out) {
-    memset(out, 0, sizeof(acpi_resource_list_t));
-
-    const acpi_device_t *acpi_dev = find_acpi_pci_device(bus, dev, func);
-    if (!acpi_dev) {
-        // Try matching by common USB controller HID patterns in path 
-        for (int i = 0; i < acpi_dev_count; i++) {
-            acpi_device_t *d = &acpi_devices.devices[i];
-            if (!d->has_hid) continue;
-            // Match common USB controller HIDs 
-            if (strncmp(d->hid_str, "PNP0A03", AML_NAME_MAX) == 0 ||  // PCI host bridge 
-                strncmp(d->hid_str, "PNP0D10", AML_NAME_MAX) == 0 ||  // USB xHCI 
-                strncmp(d->hid_str, "PNP0D11", AML_NAME_MAX) == 0) {   // USB EHCI 
-                // Check if path contains common USB controller name segments 
-                if (strstr(d->path, "XHC") || strstr(d->path, "EHC") ||
-                    strstr(d->path, "UHC") || strstr(d->path, "OHC") ||
-                    strstr(d->path, "USB")) {
-                    acpi_dev = d;
-                    break;
-                }
-            }
-            // Also match by path convention even without HID 
-            if (strstr(d->path, "XHC") || strstr(d->path, "EHC") ||
-                strstr(d->path, "UHC") || strstr(d->path, "OHC")) {
-                if (strstr(d->path, "PCI0") || strstr(d->path, "PCI1") ||
-                    strstr(d->path, "SB__") || strstr(d->path, "_SB_")) {
-                    acpi_dev = d;
-                    break;
-                }
-            }
-        }
-        if (!acpi_dev) return 0;
-    }
-
-    if (!acpi_dev->has_crs) return 0;
-
-    evaluate_acpi_crs(acpi_dev->path, out);
-    return (out->count > 0) ? 1 : 0;
-}
 
 static void init_aml(void) {
     ns_n=0;

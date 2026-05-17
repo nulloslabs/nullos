@@ -17,9 +17,9 @@ all: kernel
 
 -include $(DEP)
 
-limine_header:
+limine_header: Makefile config.mk
 	@if [ -f include/limine/limine.h ]; then \
-		printf "  %-7s %s\n" "INFO" "include/limine/limine.h is already up to date"; \
+		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/include/limine/limine.h is already up to date"; \
 	else \
 		printf "  %-7s %s\n" "FETCH" "$(SUBDIR)/include/limine/limine.h"; \
 		mkdir -p include/limine; \
