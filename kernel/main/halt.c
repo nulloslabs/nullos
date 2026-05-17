@@ -26,35 +26,10 @@ void sti(void) {
     asm volatile("sti" : : : "memory");
 }
 
-// Full system halt - disable all interrupt sources before halting
 __attribute__((noreturn)) void halt(void) {
-    // 0. Signal all CPUs to stop
     system_halted = 1;
-
-    // 1. Disable local interrupts
     asm volatile("cli" : : : "memory");
-    
-    // 2. Disable APIC timer (mask LVT timer)
-    if (current_apic_mode == APIC_X2APIC) {
-        wrmsr(0x832, rdmsr(0x832) | (1u << 16));  // Mask LVT timer
-    } else if (current_apic_mode == APIC_XAPIC && lapic_base) {
-        lapic_base[0x320 / 4] |= (1u << 16);  // Mask LVT timer
-    }
-    
-    // 3. Send final EOI to clear any pending interrupts
-    if (current_apic_mode == APIC_X2APIC) {
-        wrmsr(0x80B, 0);
-    } else if (current_apic_mode == APIC_XAPIC && lapic_base) {
-        lapic_base[0xB0 / 4] = 0;
-    } else {
-        eoi_pic();
-    }
-    
-    disable_pic();
-    
-    for (;;) {
-        asm volatile("hlt" : : : "memory");
-    }
+    for (;;) asm volatile("hlt" : : : "memory");
 }
 
 // Idle halt

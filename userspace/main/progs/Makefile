@@ -26,9 +26,10 @@ $(foreach p,$(PROGS),$(eval $(call PROG_template,$(p))))
 -include $(DEP)
 
 all: $(addprefix ../../,$(PROGS))
-	@needs_build=0; \
+	@start=$$(date +%s) && \
+	needs_build=0 && \
 	for p in $(PROGS); do \
-		if [ ! -f ../../$$p ] || [ $$p.c -nt ../../$$p ] || [ $$p.o -nt ../../$$p ] || [ ../../crt0.o -nt ../../$$p ] || [ ../../libc.so -nt ../../$$p ]; then \
+		if [ $$(date +%s -r ../../$$p 2>/dev/null || echo 0) -ge $$start ]; then \
 			needs_build=1 && break; \
 		fi; \
 	done; \

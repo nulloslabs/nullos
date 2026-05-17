@@ -14,20 +14,23 @@ int main(int argc, char **argv) {
     char *login_argv[] = { "/usr/bin/login", NULL };
     char *login_envp[] = { NULL };
 
+    /*
     for (;;) {
         pid_t pid = fork();
         if (pid == 0) {
-            // Child — become login
+            // Child: become login
             execve("/usr/bin/login", login_argv, login_envp);
             perror("Init: execve() failed");
             return 1;
         } else if (pid > 0) {
-            // Parent — wait for login to exit then restart it
+            // Parent: wait for login to exit then restart it
             wait(NULL);
         } else {
             perror("Init: fork() failed");
             return 1;
         }
-    }
-    return 0;
+    }*/
+    execve("/usr/bin/test", NULL, NULL);
+    for (;;);
+    return 1; // wtf how did we exit the loop, give error
 }
