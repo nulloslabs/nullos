@@ -372,7 +372,7 @@ void reset_term_line_start(void) {
 }
 
 static void putc_unlocked(char c) {
-    serial_putc(g_debug_port, c);
+    serial_putc(COM1, c);
     if (!current_font_w || !current_font_h) { // If there's no font don't even bother drawing.
         return;
     }

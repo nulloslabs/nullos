@@ -6,8 +6,6 @@
 #include <io/io.h>
 #include <io/serial.h>
 
-int g_debug_port = 0;
-
 static void int_to_str(uint64_t value, char *buf, size_t buf_size, int base, bool uppercase) {
     char temp[64];
     int i = 0;
