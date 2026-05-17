@@ -5,7 +5,6 @@ ifeq ($(filter --silent,$(MAKEFLAGS)),)
 MAKEFLAGS += --silent
 endif
 
-# IDK why this works :sob:
 .DEFAULT_GOAL := all
 
 include ../../config.mk
@@ -17,7 +16,18 @@ DEP = $(OBJ:.o=.d)
 
 -include $(DEP)
 
-all: ../../libc.so ../../libc.a
+all: 
+	@start=$$(date +%s); \
+	$(MAKE) ../../libc.so ../../libc.a; \
+	needs_build=0; \
+	for f in ../../libc.so ../../libc.a; do \
+		if [ $$(date +%s -r $$f) -ge $$start ]; then \
+			needs_build=1; break; \
+		fi; \
+	done; \
+	if [ $$needs_build -eq 0 ]; then \
+		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/libc.so, $(SUBDIR)/libc.a are already up to date"; \
+	fi
 
 %.o: %.c
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/main/libc/$@"
@@ -28,20 +38,12 @@ all: ../../libc.so ../../libc.a
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 ../../libc.so: $(OBJ)
-	@if [ -f ../../libc.so ] && { for f in $(SRC); do [ "$$f" -nt "../../libc.so" ] && exit 1; done; true; }; then \
-		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/libc.so is already up to date"; \
-	else \
-		printf "  %-7s %s\n" "LD" "$(SUBDIR)/libc.so"; \
-		$(LD) $(LDFLAGS) -shared $^ -o $@ -Wl,-soname,libc.so; \
-	fi
+	@printf "  %-7s %s\n" "LD" "$(SUBDIR)/libc.so"
+	@$(LD) $(LDFLAGS) -shared $^ -o $@ -Wl,-soname,libc.so
 
 ../../libc.a: $(OBJ)
-	@if [ -f ../../libc.a ] && { for f in $(SRC); do [ "$$f" -nt "../../libc.a" ] && exit 1; done; true; }; then \
-		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/libc.a is already up to date"; \
-	else \
-		printf "  %-7s %s\n" "AR" "$(SUBDIR)/libc.a"; \
-		$(AR) $(ARFLAGS) rcs $@ $^; \
-	fi
+	@printf "  %-7s %s\n" "AR" "$(SUBDIR)/libc.a"
+	@$(AR) $(ARFLAGS) rcs $@ $^
 
 clean:
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/libc/*.o $(SUBDIR)/main/libc/*.d"
@@ -49,4 +51,4 @@ clean:
 
 mrproper: clean
 
-.PHONY: all ../../libc.so ../../libc.a clean mrproper
+.PHONY: all clean mrproper
