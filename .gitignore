@@ -10,8 +10,9 @@ rootfs/main/
 tools/limine/
 kernel/include/limine/
 
-userspace/init
-userspace/login
-userspace/libc.a
-userspace/libc.so
-userspace/crt0.o
+userspace/*/*
+!userspace/**/*.c
+!userspace/**/*.h
+!userspace/**/*.S
+!userspace/**/Makefile
+!userspace/**/config.mk
