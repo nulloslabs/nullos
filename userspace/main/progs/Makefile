@@ -35,8 +35,10 @@ progs: $(foreach p,$(PROGS),$(p).o)
 	done; \
 	for p in $(PROGS); do \
 		if [ ! -f ../../$$p ] || [ $$p.o -nt ../../$$p ]; then \
-			printf "  %-7s %s\n" "LD" "$(SUBDIR)/$$p"; \
-			$(LD) $(LDFLAGS) ../../crt0.o $$p.o -o ../../$$p -Wl,--no-dynamic-linker -l:libc.so; \
+			printf "  %-7s %s\n" "LD" "$(SUBDIR)/$$p.unstripped" && \
+			$(LD) $(LDFLAGS) ../../crt0.o $$p.o -o ../../$$p.unstripped -Wl,--no-dynamic-linker -l:libc.so && \
+			printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/$$p" && \
+			$(STRIP) $(STRIPFLAGS) $$p.unstripped -o $$p; \
 		fi; \
 	done; \
 	if [ $$needs_build -eq 0 ]; then \

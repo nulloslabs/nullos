@@ -5,21 +5,22 @@ ifeq ($(filter --silent,$(MAKEFLAGS)),)
 MAKEFLAGS += --silent
 endif
 
-# IDK why this works :sob:
 .DEFAULT_GOAL := all
 
 include ../../config.mk
 
 -include $(DEP)
 
-all: ../../crt0.o
+all: crt0
 
-../../crt0.o: crt0.S
+crt0: crt0.S
 	@if [ -f ../../crt0.o ] && [ ../../crt0.o -nt crt0.S ]; then \
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/crt0.o is already up to date"; \
 	else \
-		printf "  %-7s %s\n" "AS" "$(SUBDIR)/crt0.o"; \
-		$(CC) $(CFLAGS) -c $< -o $@; \
+		printf "  %-7s %s\n" "AS" "$(SUBDIR)/crt0.o.unstripped" && \
+		$(CC) $(CFLAGS) -c $< -o $@ && \
+		printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/crt0.o" && \
+		$(STRIP) $(STRIPFLAGS) --strip-debug ../../crt0.o.unstripped -o ../../crt0.o; \
 	fi
 
 clean:
@@ -28,4 +29,4 @@ clean:
 
 mrproper: clean
 
-.PHONY: all ../../crt0.o clean mrproper
+.PHONY: all crt0 clean mrproper

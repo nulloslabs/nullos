@@ -4,4 +4,6 @@ LD = $(CC)
 LDFLAGS = $(CFLAGS)
 AR = ar
 ARFLAGS = 
+STRIP = strip
+STRIPFLAGS = 
 SUBDIR = userspace
