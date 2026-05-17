@@ -6,18 +6,48 @@
 #include <stdint.h>
 #include <errno.h>
 
-static FILE _stdin  = { .fd = 0 };
-static FILE _stdout = { .fd = 1 };
-static FILE _stderr = { .fd = 2 };
+static FILE _stdin  = { .fd = 0, .buf_len = 0, .mode = 0 };
+static FILE _stdout = { .fd = 1, .buf_len = 0, .mode = 1 };
+static FILE _stderr = { .fd = 2, .buf_len = 0, .mode = 0 };
 
 FILE *stdin  = &_stdin;
 FILE *stdout = &_stdout;
 FILE *stderr = &_stderr;
 
+int fflush(FILE *stream) {
+    if (!stream) {
+        int ret = 0;
+        if (fflush(stdout) == EOF) ret = EOF;
+        if (fflush(stderr) == EOF) ret = EOF;
+        return ret;
+    }
+
+    if (stream->buf_len > 0) {
+        ssize_t written = write(stream->fd, stream->buf, stream->buf_len);
+        if (written != stream->buf_len) {
+            return EOF;
+        }
+        stream->buf_len = 0;
+    }
+    return 0;
+}
+
 int fputc(int c, FILE *stream) {
     if (!stream) return EOF;
+
     unsigned char ch = (unsigned char)c;
-    if (write(stream->fd, &ch, 1) != 1) return EOF;
+
+    if (stream->mode == 0) {
+        if (write(stream->fd, &ch, 1) != 1) return EOF;
+        return ch;
+    }
+
+    stream->buf[stream->buf_len++] = (char)ch;
+
+    if (stream->buf_len >= 1024 || ch == '\n') {
+        if (fflush(stream) == EOF) return EOF;
+    }
+
     return ch;
 }
 
@@ -27,8 +57,9 @@ int putchar(int c) {
 
 int fputs(const char *s, FILE *stream) {
     if (!s || !stream) return EOF;
-    size_t len = strlen(s);
-    if (write(stream->fd, s, (int)len) != (int)len) return EOF;
+    while (*s) {
+        if (fputc(*s++, stream) == EOF) return EOF;
+    }
     return 1;
 }
 
@@ -59,109 +90,152 @@ static void int_to_str(unsigned long long value, char *buf, int base, bool upper
     buf[j] = '\0';
 }
 
-typedef struct {
-    FILE *stream;
-    char buf[256];
-    int buf_len;
-    int written;
-} vfprintf_state_t;
-
-static void flush_buf(vfprintf_state_t *state) {
-    if (state->buf_len > 0) {
-        write(state->stream->fd, state->buf, state->buf_len);
-        state->buf_len = 0;
-    }
-}
-
-static void put_buf(vfprintf_state_t *state, char c) {
-    state->buf[state->buf_len++] = c;
-    if (state->buf_len >= 256) flush_buf(state);
-    state->written++;
-}
-
 int vfprintf(FILE *stream, const char *fmt, va_list args) {
-    vfprintf_state_t state;
-    state.stream = stream;
-    state.buf_len = 0;
-    state.written = 0;
+    if (!stream) return 0;
+    int total_written = 0;
 
     for (const char *p = fmt; *p != '\0'; p++) {
         if (*p != '%') {
-            put_buf(&state, *p);
+            if (fputc(*p, stream) == EOF) return total_written;
+            total_written++;
             continue;
         }
         p++;
-        if (*p == '\0') { put_buf(&state, '%'); break; }
+        if (*p == '\0') { 
+            if (fputc('%', stream) == EOF) return total_written;
+            total_written++; 
+            break; 
+        }
 
         bool left_align = false;
         int width = 0;
         char pad_char = ' ';
         bool is_long = false;
 
-        if (*p == '-') { left_align = true; p++; }
-        if (*p == '0') { if (!left_align) pad_char = '0'; p++; }
-        while (*p >= '0' && *p <= '9') { width = width * 10 + (*p - '0'); p++; }
-        if (*p == 'l') { is_long = true; p++; if (*p == 'l') p++; }
+        if (*p == '-') {
+            left_align = true;
+            p++;
+        }
+        if (*p == '0') {
+            if (!left_align) pad_char = '0';
+            p++;
+        }
+        while (*p >= '0' && *p <= '9') {
+            width = width * 10 + (*p - '0');
+            p++;
+        }
+        if (*p == 'l') {
+            is_long = true;
+            p++;
+            if (*p == 'l') p++;
+        }
 
         switch (*p) {
             case 's': {
                 char *s = va_arg(args, char *);
                 if (!s) s = "(null)";
-                int len = (int)strlen(s);
-                if (!left_align) while (width > len) { put_buf(&state, pad_char); width--; }
-                while (*s) { put_buf(&state, *s++); }
-                if (left_align) while (width > len) { put_buf(&state, ' '); width--; }
+                int len = strlen(s);
+                if (!left_align) {
+                    while (width > len) { 
+                        if (fputc(pad_char, stream) == EOF) return total_written;
+                        width--; 
+                        total_written++; 
+                    }
+                }
+                while (*s) { 
+                    if (fputc(*s++, stream) == EOF) return total_written;
+                    total_written++; 
+                }
+                if (left_align) {
+                    while (width > len) { 
+                        if (fputc(' ', stream) == EOF) return total_written;
+                        width--; 
+                        total_written++; 
+                    }
+                }
                 break;
             }
-            case 'd': case 'D':
-            case 'u': case 'U':
-            case 'o': case 'O':
+            case 'o':
+            case 'd':
+            case 'u':
             case 'x': case 'X': {
                 uint64_t val;
-                bool forced_long = (*p == 'D' || *p == 'U' || *p == 'O');
-                if (is_long || forced_long) val = va_arg(args, uint64_t);
-                else if (*p == 'd') val = (uint64_t)(int64_t)va_arg(args, int);
-                else val = (uint64_t)va_arg(args, unsigned int);
-
+                if (is_long) {
+                    val = va_arg(args, uint64_t);
+                } else {
+                    if (*p == 'd') val = (uint64_t)va_arg(args, int);
+                    else           val = (uint64_t)va_arg(args, unsigned int);
+                }
                 bool is_neg = (*p == 'd' || *p == 'D') && (int64_t)val < 0;
-                if (is_neg) val = (uint64_t)(-(int64_t)val);
-
+                if (is_neg) val = -(int64_t)val;
                 int base = (*p == 'x' || *p == 'X') ? 16 : (*p == 'o' || *p == 'O') ? 8 : 10;
-                char num_buf[64];
-                int_to_str(val, num_buf, base, (*p == 'X'));
-                int len = (int)strlen(num_buf);
+                char buf[64];
+                int_to_str(val, buf, base, (*p == 'X'));
+                int len = 0;
+                while (buf[len]) len++;
                 if (is_neg) len++;
 
-                if (!left_align) while (width > len) { put_buf(&state, pad_char); width--; }
-                if (is_neg) { put_buf(&state, '-'); }
-                for (char *ptr = num_buf; *ptr; ptr++) { put_buf(&state, *ptr); }
-                if (left_align) while (width > len) { put_buf(&state, ' '); width--; }
+                if (!left_align) {
+                    while (width > len) { 
+                        if (fputc(pad_char, stream) == EOF) return total_written;
+                        width--; 
+                        total_written++; 
+                    }
+                }
+                if (is_neg) { 
+                    if (fputc('-', stream) == EOF) return total_written;
+                    total_written++; 
+                }
+                char *ptr = buf;
+                while (*ptr) { 
+                    if (fputc(*ptr++, stream) == EOF) return total_written;
+                    total_written++; 
+                }
+                if (left_align) {
+                    while (width > len) { 
+                        if (fputc(' ', stream) == EOF) return total_written;
+                        width--; 
+                        total_written++; 
+                    }
+                }
                 break;
             }
             case 'p': {
                 uint64_t x = va_arg(args, uint64_t);
-                char num_buf[64];
-                int_to_str(x, num_buf, 16, false);
-                put_buf(&state, '0'); put_buf(&state, 'x');
-                int len = (int)strlen(num_buf);
-                for (int i = 0; i < 16 - len; i++) { put_buf(&state, '0'); }
-                for (char *ptr = num_buf; *ptr; ptr++) { put_buf(&state, *ptr); }
+                char buf[64];
+                int_to_str(x, buf, 16, false);
+                if (fputc('0', stream) == EOF) return total_written;
+                if (fputc('x', stream) == EOF) return total_written;
+                total_written += 2;
+                int len = 0;
+                while (buf[len]) len++;
+                for (int i = 0; i < (16 - len); i++) { 
+                    if (fputc('0', stream) == EOF) return total_written;
+                    total_written++; 
+                }
+                char *ptr = buf;
+                while (*ptr) { 
+                    if (fputc(*ptr++, stream) == EOF) return total_written;
+                    total_written++; 
+                }
                 break;
             }
             case 'c':
-                put_buf(&state, (char)va_arg(args, int));
+                if (fputc((char)va_arg(args, int), stream) == EOF) return total_written;
+                total_written++;
                 break;
             case '%':
-                put_buf(&state, '%');
+                if (fputc('%', stream) == EOF) return total_written;
+                total_written++;
                 break;
             default:
-                put_buf(&state, '%'); put_buf(&state, *p);
+                if (fputc('%', stream) == EOF) return total_written;
+                if (fputc(*p, stream) == EOF) return total_written;
+                total_written += 2;
                 break;
         }
     }
-
-    flush_buf(&state);
-    return state.written;
+    return total_written;
 }
 
 int fprintf(FILE *stream, const char *fmt, ...) {
@@ -185,5 +259,5 @@ int printf(const char *fmt, ...) {
 }
 
 void perror(const char *s) {
-    printf("%s: %s\n", s, strerror(errno));
+    fprintf(stderr, "%s: %s\n", s, strerror(errno));
 }

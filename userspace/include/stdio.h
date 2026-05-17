@@ -7,16 +7,19 @@
 
 typedef struct {
     int fd;
+    char buf[1024];
+    int buf_len;
+    int mode;
 } FILE;
 
 extern FILE *stdin;
 extern FILE *stdout;
 extern FILE *stderr;
 
-// NOTE: putc() and fputc() are the same thing.
+int fflush(FILE *stream);
 
 int fputc(int c, FILE *stream);
-#define putc(c, s) fputc(c, s)
+#define putc(c, s) fputc(c, s) // NOTE: putc() and fputc() are the same thing, just put macro instead of wasting space
 int putchar(int c);
 
 int fputs(const char *s, FILE *stream);

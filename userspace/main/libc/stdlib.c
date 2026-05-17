@@ -1,5 +1,6 @@
 #include <stddef.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
@@ -72,6 +73,18 @@ void free(void *ptr) {
     if (!ptr) return;
     block_t *b = (block_t *)ptr - 1;
     b->free = 1;
+}
+
+__attribute__((noreturn)) void _Exit(int status) {
+    // _Exit() is just a _exit() wrapper (wtf POSIX)
+    _exit(status);
+    __builtin_unreachable();
+}
+
+__attribute__((noreturn)) void exit(int status) {
+    fflush(NULL); // Flush file descriptors
+    _Exit(status);
+    __builtin_unreachable();
 }
 
 long strtol(const char *s, char **endptr, int base) {
