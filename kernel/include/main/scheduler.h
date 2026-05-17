@@ -9,22 +9,21 @@
 #define MAX_TASKS 64
 
 typedef struct {
-    uint64_t rsp;
-    void *stack_base;
-    void *kernel_stack;
     pid_t pid;
     pid_t parent_pid;
     int state;
     int priority;
     uint8_t ring;
-    uint8_t padding[3];
+    uint64_t rsp;
+    void *stack_base;
+    void *kernel_stack;
     vmm_context_t *ctx;
+    uint64_t brk_start;
+    uint64_t brk;
     fd_table_t fd_table;
     char cwd[256];
     int exit_status;
-    uint64_t brk;
-    uint64_t brk_start;
-} task_t;
+} __attribute__((aligned(16))) task_t;
 
 #define TASK_DEAD 0
 #define TASK_READY 1

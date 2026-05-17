@@ -37,6 +37,8 @@ void syscall_dispatch(syscall_frame_t *frame) {
         case SYS_execve: sys_execve(frame); break;
         case SYS_chdir: sys_chdir(frame); break;
         case SYS_ioctl: sys_ioctl(frame); break;
+        case SYS_dup: sys_dup(frame); break;
+        case SYS_dup2: sys_dup2(frame); break;
         case SYS_mkdir: sys_mkdir(frame); break;
         case SYS_getdents: sys_getdents(frame); break;
         case SYS_getcwd: sys_getcwd(frame); break;

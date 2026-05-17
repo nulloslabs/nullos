@@ -15,6 +15,8 @@ void sys_fork(syscall_frame_t *frame);
 void sys_execve(syscall_frame_t *frame);
 void sys_chdir(syscall_frame_t *frame);
 void sys_ioctl(syscall_frame_t *frame);
+void sys_dup(syscall_frame_t *frame)
+void sys_dup2(syscall_frame_t *frame)
 void sys_mkdir(syscall_frame_t *frame);
 void sys_getdents(syscall_frame_t *frame);
 void sys_getcwd(syscall_frame_t *frame);

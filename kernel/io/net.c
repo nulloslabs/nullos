@@ -7,9 +7,6 @@
 #include <mm/mm.h>
 #include <main/spinlock.h>
 
-// ============================================================
-// Byte order
-// ============================================================
 
 static inline uint16_t htons(uint16_t x) { return (uint16_t)((x >> 8) | (x << 8)); }
 static inline uint16_t ntohs(uint16_t x) { return htons(x); }
@@ -19,9 +16,6 @@ static inline uint32_t htonl(uint32_t x) {
 }
 static inline uint32_t ntohl(uint32_t x) { return htonl(x); }
 
-// ============================================================
-// Checksum
-// ============================================================
 
 uint16_t net_checksum(const void *data, size_t len) {
     const uint16_t *p = (const uint16_t *)data;
@@ -49,9 +43,6 @@ static uint16_t transport_checksum(uint32_t src_ip, uint32_t dst_ip,
     return net_checksum(pseudo, sizeof(pseudo));
 }
 
-// ============================================================
-// IP send helper (used by TCP and UDP)
-// ============================================================
 
 static spinlock_t net_lock = SPINLOCK_INIT;
 static uint16_t ip_id_counter = 1;
@@ -87,9 +78,6 @@ static bool ip_send(uint32_t dest_ip, uint8_t proto,
     return rtl8139_send(frame, total);
 }
 
-// ============================================================
-// ARP
-// ============================================================
 
 static uint32_t arp_cached_ip  = 0;
 static uint8_t  arp_cached_mac[6] = { 0 };
@@ -154,9 +142,6 @@ bool resolve_arp(uint32_t ip, uint8_t mac_out[6]) {
     return false;
 }
 
-// ============================================================
-// ICMP
-// ============================================================
 
 static volatile bool icmp_got_reply = false;
 static uint16_t      icmp_ping_id   = 0x4E4F;
@@ -212,9 +197,6 @@ bool ping_icmp(uint32_t dest_ip) {
     return false;
 }
 
-// ============================================================
-// UDP
-// ============================================================
 
 typedef void (*udp_rx_callback_t)(uint32_t src_ip, uint16_t src_port,
                                    uint16_t dst_port, const uint8_t *data, uint16_t len);
@@ -253,9 +235,6 @@ void udp_rx(const uint8_t *frame, uint16_t len) {
     if (cb) cb(ip->src, ntohs(udp->src_port), ntohs(udp->dst_port), payload, data_len);
 }
 
-// ============================================================
-// DNS
-// ============================================================
 
 #define DNS_PORT     53
 #define DNS_SRC_PORT 1053
@@ -374,9 +353,6 @@ uint32_t dns_resolve(const char *hostname) {
     return 0;
 }
 
-// ============================================================
-// TCP
-// ============================================================
 
 // Max TCP payload per segment (MSS)
 #define TCP_MSS       1460
@@ -681,9 +657,6 @@ bool tcp_is_connected(tcp_socket_t *sock) {
     return sock && sock->state == TCP_ESTABLISHED;
 }
 
-// ============================================================
-// RX dispatch
-// ============================================================
 
 void net_rx(const uint8_t *frame, uint16_t len) {
     handle_arp_rx(frame, len);

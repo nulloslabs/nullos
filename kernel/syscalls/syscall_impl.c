@@ -18,6 +18,8 @@
 
 extern volatile int sched_lock;
 
+/* We put every variable/struct in here instead of the header. */
+
 static char stdin_buf[256];
 static int stdin_buf_len = 0;
 static int stdin_buf_pos = 0;
@@ -32,7 +34,17 @@ typedef struct {
 static mount_t mounts[MAX_MOUNTS];
 static spinlock_t vfs_lock = SPINLOCK_INIT;
 
-#define TIOCGWINSZ 0x5413
+#define TIOCGWINSZ 0x0001
+#define TIOCSWINSZ 0x0002
+#define TCGETS 0x0003
+#define TCSETS 0x0004
+#define TCSETSW 0x0005
+#define TCSETSF 0x0006
+#define TIOCGPGRP 0x0007
+#define TIOCSPGRP 0x0008
+#define FIONREAD 0x0009
+#define TIOCEXCL 0x0010
+#define TIOCNXCL 0x0011
 
 typedef struct {
     uint16_t ws_row;
@@ -40,6 +52,16 @@ typedef struct {
     uint16_t ws_xpixel;
     uint16_t ws_ypixel;
 } winsize_t;
+
+// Minimal termios (enough to satisfy TCGETS/TCSETS without pulling in libc headers)
+typedef struct {
+    uint32_t c_iflag;
+    uint32_t c_oflag;
+    uint32_t c_cflag;
+    uint32_t c_lflag;
+    uint8_t  c_line;
+    uint8_t  c_cc[19];
+} termios_t;
 
 typedef struct {
     uint64_t d_ino;
@@ -424,16 +446,121 @@ void sys_ioctl(syscall_frame_t *frame) {
     unsigned long req = (unsigned long)frame->rsi;
     uint64_t argp = frame->rdx;
 
-    if (fd == 0 || fd == 1 || fd == 2) {
-        if (req == TIOCGWINSZ) {
-            winsize_t ws = { .ws_row = 25, .ws_col = 80, .ws_xpixel = 0, .ws_ypixel = 0 };
-            write_vmm(current_task_ptr->ctx, argp, &ws, sizeof(ws));
-            frame->rax = 0;
-            return;
+    int is_tty = (fd == 0 || fd == 1 || fd == 2);
+
+    // Also treat devfs tty devices as ttys
+    if (!is_tty) {
+        fd_entry_t *entry = get_current_fd(fd);
+        if (entry && entry->type == FD_DEV) {
+            char rel[256];
+            if (is_mounted_under(entry->path, "devfs", rel))
+                if (strncmp(rel, "tty", 3) == 0 || strcmp(rel, "console") == 0)
+                    is_tty = 1;
         }
     }
 
-    frame->rax = (uint64_t)-EINVAL;
+    switch (req) {
+    case TIOCGWINSZ: {
+        winsize_t ws = { .ws_row = 25, .ws_col = 80, .ws_xpixel = 0, .ws_ypixel = 0 };
+        write_vmm(current_task_ptr->ctx, argp, &ws, sizeof(ws));
+        frame->rax = 0;
+        return;
+    }
+    case TIOCSWINSZ:
+        // Accept but ignore window size sets
+        frame->rax = 0;
+        return;
+
+    case TCGETS: {
+        // Return a sane default termios so apps don't bail out
+        termios_t t = {0};
+        t.c_iflag = 0x0500;   // ICRNL | IXON
+        t.c_oflag = 0x0005;   // OPOST | ONLCR
+        t.c_cflag = 0x04BF;   // CS8 | CREAD | CLOCAL | B38400
+        t.c_lflag = 0x8A3B;   // ISIG | ICANON | ECHO | ECHOE | ECHOK | IEXTEN
+        t.c_cc[4] = 1;        // VMIN = 1
+        write_vmm(current_task_ptr->ctx, argp, &t, sizeof(t));
+        frame->rax = 0;
+        return;
+    }
+    case TCSETS:
+    case TCSETSW:
+    case TCSETSF:
+        // Accept termios writes silently — we don't implement full termios
+        frame->rax = 0;
+        return;
+
+    case TIOCGPGRP: {
+        // Return our own PID as the foreground process group
+        pid_t pgrp = current_task_ptr->pid;
+        write_vmm(current_task_ptr->ctx, argp, &pgrp, sizeof(pid_t));
+        frame->rax = 0;
+        return;
+    }
+    case TIOCSPGRP:
+        // Accept but ignore foreground pgrp sets (no job control yet)
+        frame->rax = 0;
+        return;
+
+    case FIONREAD: {
+        // Report bytes available in stdin buffer; 0 for everything else
+        int avail = (fd == 0) ? (stdin_buf_len - stdin_buf_pos) : 0;
+        write_vmm(current_task_ptr->ctx, argp, &avail, sizeof(int));
+        frame->rax = 0;
+        return;
+    }
+    case TIOCEXCL:
+    case TIOCNXCL:
+        // Exclusive mode — no-op
+        frame->rax = 0;
+        return;
+
+    default:
+        (void)is_tty;
+        frame->rax = (uint64_t)-EINVAL;
+        return;
+    }
+}
+
+void sys_dup(syscall_frame_t *frame) {
+    int oldfd = (int)frame->rdi;
+
+    fd_entry_t *src = get_current_fd(oldfd);
+    if (!src) { frame->rax = (uint64_t)-EBADF; return; }
+
+    // Find the lowest free fd
+    fd_table_t *table = &current_task_ptr->fd_table;
+    for (int i = 0; i < FD_MAX; i++) {
+        if (!table->entries[i].open) {
+            table->entries[i] = *src;   // copy full entry
+            table->entries[i].open = true;
+            frame->rax = (uint64_t)i;
+            return;
+        }
+    }
+    frame->rax = (uint64_t)-EMFILE;
+}
+
+void sys_dup2(syscall_frame_t *frame) {
+    int oldfd = (int)frame->rdi;
+    int newfd = (int)frame->rsi;
+
+    if (newfd < 0 || newfd >= FD_MAX) { frame->rax = (uint64_t)-EBADF; return; }
+
+    fd_entry_t *src = get_current_fd(oldfd);
+    if (!src) { frame->rax = (uint64_t)-EBADF; return; }
+
+    if (oldfd == newfd) { frame->rax = (uint64_t)newfd; return; }
+
+    fd_table_t *table = &current_task_ptr->fd_table;
+
+    // Close newfd if it's already open
+    if (table->entries[newfd].open)
+        free_fd(table, newfd);
+
+    table->entries[newfd] = *src;
+    table->entries[newfd].open = true;
+    frame->rax = (uint64_t)newfd;
 }
 
 void sys_mkdir(syscall_frame_t *frame) {

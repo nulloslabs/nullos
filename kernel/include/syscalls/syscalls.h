@@ -14,15 +14,17 @@
 #define SYS_execve 8
 #define SYS_chdir 9
 #define SYS_ioctl 10
-#define SYS_mkdir 11
-#define SYS_getdents 12
-#define SYS_getcwd 13
-#define SYS_brk 14
-#define SYS_waitpid 15
-#define SYS_getpid 16
-#define SYS_getppid 17
-#define SYS_gethostname 18
-#define SYS_sethostname 19
+#define SYS_dup 11
+#define SYS_dup2 12
+#define SYS_mkdir 13
+#define SYS_getdents 14
+#define SYS_getcwd 15
+#define SYS_brk 16
+#define SYS_waitpid 17
+#define SYS_getpid 18
+#define SYS_getppid 19
+#define SYS_gethostname 20
+#define SYS_sethostname 21
 
 // Register frame passed to syscall_dispatch
 typedef struct {
