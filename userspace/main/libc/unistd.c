@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include <errno.h>
 
-// Variables for functions
+// Variables, structs etc. for functions
 static void *current_program_break = NULL;
 
 int64_t syscall(int64_t num, ...) {
@@ -22,8 +22,8 @@ int64_t syscall(int64_t num, ...) {
     int64_t ret;
 
     register int64_t r10 asm("r10") = a4;
-    register int64_t r8 asm("r8")  = a5;
-    register int64_t r9 asm("r9")  = a6;
+    register int64_t r8 asm("r8") = a5;
+    register int64_t r9 asm("r9") = a6;
     asm volatile (
         "syscall"
         : "=a"(ret)
