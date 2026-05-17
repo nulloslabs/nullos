@@ -12,17 +12,21 @@ include ../../config.mk
 PROGS = $(patsubst %.c,%,$(wildcard *.c))
 TARGETS = $(foreach p,$(PROGS),../../$(p))
 
-all:
+all: progs
+
+progs: $(PROGS:=.o)
 	@needs_build=0; \
-	for t in $(TARGETS); do \
-		for o in $(PROGS:=.o); do \
-			if [ ! -f $$t ] || [ $$o -nt $$t ]; then needs_build=1; fi; \
-		done; \
+	for p in $(PROGS); do \
+		t="../../$$p"; \
+		o="$$p.o"; \
+		if [ ! -f $$t ] || [ $$o -nt $$t ]; then \
+			needs_build=1; \
+		fi; \
 	done; \
 	if [ $$needs_build -eq 0 ]; then \
 		printf "  %-7s %s\n" "INFO" "$$(echo $(PROGS) | tr ' ' '\n' | sed 's|^|$(SUBDIR)/|' | paste -sd ' ' -) $$([ $$(echo $(PROGS) | wc -w) -eq 1 ] && echo 'is' || echo 'are') already up to date"; \
 	fi
-	@$(MAKE) $(TARGETS)
+	@$(MAKE) MAKEFLAGS="$(MAKEFLAGS)" $(TARGETS)
 
 # Inline execution blueprint for each application target
 define PROG_rule
@@ -45,4 +49,4 @@ clean:
 mrproper: clean
 	@rm -f $(foreach p,$(PROGS),../../$(p) ../../$(p).unstripped)
 
-.PHONY: all clean mrproper
+.PHONY: all clean mrproper progs
