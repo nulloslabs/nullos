@@ -64,7 +64,7 @@ static void init_xapic(uint64_t base_phys) {
 
     // Clear TPR (accept all interrupts)
     lapic_write(LAPIC_TPR, 0);
-    printf("APIC: xAPIC initialized.\n");
+    printf("APIC: Initialized xAPIC.\n");
 }
 
 static void init_x2apic(void) {
@@ -75,7 +75,7 @@ static void init_x2apic(void) {
 
     // Set SVR: enable + vector 0xFF
     wrmsr(X2APIC_MSR_SVR, LAPIC_SVR_ENABLE | 0xFF);
-    printf("APIC: x2APIC initialized.\n");
+    printf("APIC: Initialized x2APIC.\n");
 }
 
 void init_apic(void) {
