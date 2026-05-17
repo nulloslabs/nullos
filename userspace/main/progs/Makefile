@@ -11,48 +11,27 @@ include ../../config.mk
 
 PROGS = $(patsubst %.c,%,$(wildcard *.c))
 
-DEP :=
-define PROG_template
-$(shell echo $(1) | tr a-z A-Z)_OBJ = $(1).o
-DEP += $$($(shell echo $(1) | tr a-z A-Z)_OBJ:.o=.d)
-../../$(1): $$($(shell echo $(1) | tr a-z A-Z)_OBJ)
-	@printf "  %-7s %s\n" "LD" "$(SUBDIR)/$(1)"; \
-	$(LD) $(LDFLAGS) ../../crt0.o $$($(shell echo $(1) | tr a-z A-Z)_OBJ) -o $$@ -Wl,--no-dynamic-linker -l:libc.so
-	$(eval BUILT := 1)
-endef
-$(foreach p,$(PROGS),$(eval $(call PROG_template,$(p))))
+all: $(foreach p,$(PROGS),../../$(p))
 
--include $(DEP)
+# Rule 1: Link the unstripped binary if the object file changes
+../../%.unstripped: %.o
+	@printf "  %-7s %s\n" "LD" "$(SUBDIR)/$*.unstripped"
+	$(LD) $(LDFLAGS) ../../crt0.o $< -o $@ -Wl,--no-dynamic-linker -l:libc.so
 
-all: progs
-
-progs: $(foreach p,$(PROGS),$(p).o)
-	@needs_build=0; \
-	for p in $(PROGS); do \
-		if [ ! -f ../../$$p ] || [ $$p.o -nt ../../$$p ]; then \
-			needs_build=1; break; \
-		fi; \
-	done; \
-	for p in $(PROGS); do \
-		if [ ! -f ../../$$p ] || [ $$p.o -nt ../../$$p ]; then \
-			printf "  %-7s %s\n" "LD" "$(SUBDIR)/$$p.unstripped" && \
-			$(LD) $(LDFLAGS) ../../crt0.o $$p.o -o ../../$$p.unstripped -Wl,--no-dynamic-linker -l:libc.so && \
-			printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/$$p" && \
-			$(STRIP) $(STRIPFLAGS) ../../$$p.unstripped -o $$p; \
-		fi; \
-	done; \
-	if [ $$needs_build -eq 0 ]; then \
-		printf "  %-7s %s\n" "INFO" "$$(echo $(PROGS) | tr ' ' '\n' | sed 's|^|$(SUBDIR)/|' | paste -sd ' ' -) $$([ $$(echo $(PROGS) | wc -w) -eq 1 ] && echo 'is' || echo 'are') already up to date"; \
-	fi
+# Rule 2: Strip the unstripped binary directly into the target directory
+../../%: ../../%.unstripped
+	@printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/$*"
+	$(STRIP) $(STRIPFLAGS) $< -o $@
 
 %.o: %.c
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/main/progs/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/progs/*.o $(SUBDIR)/main/progs/*.d"
-	@rm -f $(foreach p,$(PROGS),$($(shell echo $(p) | tr a-z A-Z)_OBJ)) $(DEP)
+	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/progs/*.o"
+	@rm -f *.o
 
 mrproper: clean
+	@rm -f $(foreach p,$(PROGS),../../$(p) ../../$(p).unstripped)
 
 .PHONY: all clean mrproper
