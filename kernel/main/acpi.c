@@ -744,8 +744,6 @@ static void aml_scan_devices(uint8_t *start, uint8_t *end, const char *scope) {
     }
 }
 
-
-// Public: enumerate all ACPI devices from DSDT + SSDTs 
 void enumerate_acpi_devices(void) {
     if (!fadt || !acpi_root) return;
     acpi_dev_count = 0;
@@ -768,8 +766,6 @@ void enumerate_acpi_devices(void) {
                              (uint8_t*)h + h->length, "\\");
         }
     }
-
-    printf("ACPI: Enumerated %d devices.\n", acpi_dev_count);
 }
  
 const acpi_device_t* find_acpi_pci_device(uint8_t bus, uint8_t dev, uint8_t func) {
