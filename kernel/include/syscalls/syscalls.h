@@ -25,6 +25,7 @@
 #define SYS_getppid 19
 #define SYS_gethostname 20
 #define SYS_sethostname 21
+#define SYS_lseek 22
 
 // Register frame passed to syscall_dispatch
 typedef struct {

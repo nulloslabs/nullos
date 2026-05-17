@@ -1,10 +1,11 @@
+#include <stdint.h>
+#include <stdbool.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <unistd.h>
-#include <stdarg.h>
 #include <string.h>
-#include <stdbool.h>
-#include <stdint.h>
 #include <errno.h>
+#include <sys/syscall.h>
 
 static FILE _stdin  = { .fd = 0, .buf_len = 0, .mode = 0 };
 static FILE _stdout = { .fd = 1, .buf_len = 0, .mode = 1 };
@@ -66,6 +67,42 @@ int fputs(const char *s, FILE *stream) {
 int puts(const char *s) {
     if (fputs(s, stdout) == EOF) return EOF;
     return fputc('\n', stdout);
+}
+
+size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    const char *p = (const char *)ptr;
+    size_t total = size * nmemb;
+    for (size_t i = 0; i < total; i++) {
+        if (fputc(p[i], stream) == EOF) return i / size;
+    }
+    return nmemb;
+}
+
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    char *p = (char *)ptr;
+    size_t total = size * nmemb;
+    for (size_t i = 0; i < total; i++) {
+        unsigned char c;
+        if (read(stream->fd, &c, 1) != 1) return i / size;
+        p[i] = (char)c;
+    }
+    return nmemb;
+}
+
+int fseek(FILE *stream, long offset, int whence) {
+    if (!stream) return -1;
+    return (int)syscall(SYS_lseek, stream->fd, offset, whence);
+}
+
+long ftell(FILE *stream) {
+    if (!stream) return EOF;
+    return (long)syscall(SYS_lseek, stream->fd, 0, 1);
+}
+
+int fclose(FILE *stream) {
+    if (!stream) return EOF;
+    fflush(stream);
+    return (int)syscall(SYS_close, stream->fd);
 }
 
 static void int_to_str(unsigned long long value, char *buf, int base, bool uppercase) {

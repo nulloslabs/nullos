@@ -18,5 +18,6 @@
 #define ELIBACC 16
 #define ERANGE 17
 #define ECHILD 18
+#define ESPIPE 19
 
 extern int errno;

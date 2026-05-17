@@ -774,3 +774,33 @@ void sys_sethostname(syscall_frame_t *frame) {
     size_t len = (size_t)frame->rsi;
     frame->rax = set_hostname(name, len);
 }
+
+void sys_lseek(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    int64_t offset = (int64_t)frame->rsi;
+    int whence = (int)frame->rdx;
+
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry || !entry->open) { frame->rax = -EBADF; return; }
+    if (entry->type == FD_STREAM) { frame->rax = -ESPIPE; return; }
+
+    switch (whence) {
+        case 0: // SEEK_SET
+            entry->offset = (uint64_t)offset;
+            break;
+        case 1: // SEEK_CUR
+            entry->offset = (uint64_t)((int64_t)entry->offset + offset);
+            break;
+        case 2: { // SEEK_END
+            rootfs_file_t file = read_rootfs(entry->path);
+            if (!file.data) { frame->rax = -ENOENT; return; }
+            entry->offset = (uint64_t)((int64_t)file.size + offset);
+            break;
+        }
+        default:
+            frame->rax = -EINVAL;
+            return;
+    }
+
+    frame->rax = (uint64_t)entry->offset;
+}
