@@ -16,7 +16,7 @@ rootfs:
 	@$(MAKE) -C ../userspace
 	@if [ ! -f rootfs.tar.gz ] || $(foreach dep,$(DEP),[ $(dep) -nt rootfs.tar.gz ] ||) false; then \
 		printf "  %-7s %s\n" "TAR" "$(SUBDIR)/rootfs.tar.gz" && \
-		mkdir -p main/dev main/usr/bin main/usr/sbin main/usr/lib main/usr/include && \
+		mkdir -p main/dev main/etc main/usr/bin main/usr/sbin main/usr/lib main/usr/include && \
 		ln -snf usr/bin main/bin && \
 		ln -snf usr/sbin main/sbin && \
 		ln -snf usr/lib main/lib && \

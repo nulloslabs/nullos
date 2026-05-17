@@ -18,3 +18,5 @@ pid_t getpid(void);
 pid_t getppid(void);
 int brk(void *addr);
 void *sbrk(intptr_t increment);
+int gethostname(char *name, size_t size);
+int sethostname(const char *name, size_t size);

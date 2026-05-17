@@ -91,10 +91,7 @@ static int process_relocations(vmm_context_t *ctx, uint64_t base_addr,
                 char sname[128]; \
                 read_vmm_str(ctx, (uint64_t)strtab + s.name, sname, sizeof(sname)); \
                 uint64_t val = (s.shndx != 0) ? (base_addr + s.value) : resolve_symbol(sname, ctx); \
-                if (!val) { \
-                    printf("ELF Loader: Undefined symbol '%s'.\n", sname); \
-                    return -ENOENT; \
-                } \
+                if (!val) return -ENOENT; \
                 if (type == R_X86_64_64) val += r.addend; \
                 write_vmm(ctx, target, &val, 8); \
             } \
@@ -164,18 +161,12 @@ static int load_shared_library(const char *soname, vmm_context_t *ctx) {
         file = read_rootfs(soname);
     }
 
-    if (!file.data) {
-        printf("ELF Loader: Shared library '%s' not found.\n", name);
-        return -ENOENT;
-    }
+    if (!file.data) return -ENOENT;
 
     uint8_t *data = (uint8_t *)file.data;
     elf64_ehdr_t *ehdr = (elf64_ehdr_t *)data;
 
-    if (ehdr->magic != ELF_MAGIC || ehdr->type != ET_DYN) {
-        printf("ELF Loader: '%s' is not a valid shared library.\n", name);
-        return -ENOEXEC;
-    }
+    if (ehdr->magic != ELF_MAGIC || ehdr->type != ET_DYN) return -ENOEXEC;
 
     spin_lock_irqsave(&elf_lock, &irq);
     uint64_t base_addr = next_so_base;
@@ -380,22 +371,15 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
     next_so_base = 0x4000000000ULL;
     spin_unlock_irqrestore(&elf_lock, irq);
 
-    if (devfs_device_exists(path))
-        return -EACCES;
+    if (devfs_device_exists(path)) return -EACCES;
 
     rootfs_file_t file = read_rootfs(path);
-    if (!file.data) {
-        printf("ELF Loader: '%s' not found.\n", path);
-        return -ENOENT;
-    }
+    if (!file.data) return -ENOENT;
 
     uint8_t *data = (uint8_t *)file.data;
     elf64_ehdr_t *ehdr = (elf64_ehdr_t *)data;
 
-    if (ehdr->magic != ELF_MAGIC || ehdr->class != ELF_CLASS64 || ehdr->machine != EM_X86_64) {
-        printf("ELF Loader: '%s' is not a valid ELF64 executable.\n", path);
-        return -ENOEXEC;
-    }
+    if (ehdr->magic != ELF_MAGIC || ehdr->class != ELF_CLASS64 || ehdr->machine != EM_X86_64) return -ENOEXEC;
 
     vmm_context_t *ctx = create_vmm_context();
     if (!ctx) return -ENOMEM;
@@ -433,8 +417,6 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
         tasks[pid].stack_base = stack;
         tasks[pid].brk = heap_start;
         tasks[pid].brk_start = heap_start;
-    } else {
-        printf("ELF Loader: Failed to create task for '%s'.\n", path);
     }
 
     return pid;
@@ -453,10 +435,7 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
         return -EACCES;
 
     rootfs_file_t file = read_rootfs(path);
-    if (!file.data) {
-        printf("ELF Loader: '%s' not found.\n", path);
-        return -ENOENT;
-    }
+    if (!file.data) return -ENOENT;
 
     uint8_t *data = (uint8_t *)file.data;
     elf64_ehdr_t *ehdr = (elf64_ehdr_t *)data;

@@ -96,3 +96,11 @@ void *sbrk(intptr_t increment) {
     current_program_break = (void *)(uintptr_t)brk(new_break);
     return prev;
 }
+
+int gethostname(char *name, size_t size) {
+    return (int)syscall(SYS_gethostname, name, size);
+}
+
+int sethostname(const char *name, size_t size) {
+    return (int)syscall(SYS_sethostname, name, size);
+}

@@ -185,7 +185,6 @@ void init_apic_timer(uint32_t frequency_hz) {
         lapic_write(LAPIC_TIMER_LVT, LAPIC_TIMER_PERIODIC | 32);
         lapic_write(LAPIC_TIMER_ICR, ticks_per_interval);
     }
-    // APIC_NONE: PIT timer is already configured, nothing to do
 }
 
 // --- IPI ---
