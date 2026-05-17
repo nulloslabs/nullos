@@ -10,18 +10,29 @@ endif
 include ../../config.mk
 
 PROGS = $(patsubst %.c,%,$(wildcard *.c))
+TARGETS = $(foreach p,$(PROGS),../../$(p))
 
-all: $(foreach p,$(PROGS),../../$(p))
+all:
+	@needs_build=0; \
+	for t in $(TARGETS); do \
+		for o in $(PROGS:=.o); do \
+			if [ ! -f $$t ] || [ $$o -nt $$t ]; then needs_build=1; fi; \
+		done; \
+	done; \
+	if [ $$needs_build -eq 0 ]; then \
+		printf "  %-7s %s\n" "INFO" "$$(echo $(PROGS) | tr ' ' '\n' | sed 's|^|$(SUBDIR)/|' | paste -sd ' ' -) $$([ $$(echo $(PROGS) | wc -w) -eq 1 ] && echo 'is' || echo 'are') already up to date"; \
+	fi
+	@$(MAKE) $(TARGETS)
 
-# Rule 1: Link the unstripped binary if the object file changes
-../../%.unstripped: %.o
-	@printf "  %-7s %s\n" "LD" "$(SUBDIR)/$*.unstripped"
-	$(LD) $(LDFLAGS) ../../crt0.o $< -o $@ -Wl,--no-dynamic-linker -l:libc.so
-
-# Rule 2: Strip the unstripped binary directly into the target directory
-../../%: ../../%.unstripped
-	@printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/$*"
-	$(STRIP) $(STRIPFLAGS) $< -o $@
+# Inline execution blueprint for each application target
+define PROG_rule
+../../$(1): $(1).o
+	@printf "  %-7s %s\n" "LD" "$(SUBDIR)/$(1).unstripped"
+	$(LD) $(LDFLAGS) ../../crt0.o $$< -o ../../$(1).unstripped -Wl,--no-dynamic-linker -l:libc.so
+	@printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/$(1)"
+	$(STRIP) $(STRIPFLAGS) ../../$(1).unstripped -o $$@
+endef
+$(foreach p,$(PROGS),$(eval $(call PROG_rule,$(p))))
 
 %.o: %.c
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/main/progs/$@"

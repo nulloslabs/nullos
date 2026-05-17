@@ -123,10 +123,6 @@ static void pci_set_intx_disable(pci_device_t *dev, int disable) {
     write_pci(dev->bus, dev->dev, dev->func, 0x04, cmd);
 }
 
-// ---- MSI ----------------------------------------------------------------
-// Returns the vector assigned to this device, or 0 on failure (device
-// doesn't support MSI, or we ran out of vectors). On success, INTx is
-// disabled and the device will deliver interrupts as a unique vector.
 uint8_t pci_enable_msi(pci_device_t *dev) {
     uint8_t cap = pci_find_cap(dev, 0x05);
     if (!cap) return 0;
@@ -183,13 +179,8 @@ uint8_t pci_request_irq(pci_device_t *dev, void (*handler)(void)) {
     pci_set_intx_disable(dev, 0);
     uint32_t r = read_pci(dev->bus, dev->dev, dev->func, 0x3C);
     uint8_t line = r & 0xFF;
-    if (line == 0xFF) {
-        printf("PCI: %02x:%02x.%x has no IRQ line\n",
-               dev->bus, dev->dev, dev->func);
-        return 0;
-    }
+    if (line == 0xFF) return 0;
     pci_register_intx_handler(line, handler);
-    printf("PCI: %02x:%02x.%x using INTx IRQ%d (vector %d)\n",
            dev->bus, dev->dev, dev->func, line, LEGACY_IRQ_BASE + line);
     return LEGACY_IRQ_BASE + line;
 }
