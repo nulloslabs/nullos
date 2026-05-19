@@ -392,13 +392,13 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
     int ret = load_dependencies_and_relocate(ctx, dynamic, base_addr);
     if (ret < 0) return ret;
 
-    void *stack = vmalloc_user_ex(ctx, 16384);
+    void *stack = vmalloc_user_ex(ctx, USER_STACK_SIZE);
     if (!stack) return -ENOMEM;
 
     char *empty_envp[] = { NULL };
     char **actual_envp = envp ? envp : empty_envp;
 
-    uint64_t v_rsp = setup_stack(ctx, (uint64_t)stack + 16384 - 8, argv, actual_envp);
+    uint64_t v_rsp = setup_stack(ctx, (uint64_t)stack + USER_STACK_SIZE - 8, argv, actual_envp);
     uint64_t entry = ehdr->entry + base_addr;
 
     // Find highest loaded address
@@ -454,13 +454,13 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     int ret = load_dependencies_and_relocate(ctx, dynamic, base_addr);
     if (ret < 0) return ret;
 
-    void *stack = vmalloc_user_ex(ctx, 16384);
+    void *stack = vmalloc_user_ex(ctx, USER_STACK_SIZE);
     if (!stack) return -ENOMEM;
 
     char *empty_envp[] = { NULL };
     char **actual_envp = (envp) ? envp : empty_envp;
 
-    uint64_t v_rsp = setup_stack(ctx, (uint64_t)stack + 16384 - 8, argv, actual_envp);
+    uint64_t v_rsp = setup_stack(ctx, (uint64_t)stack + USER_STACK_SIZE - 8, argv, actual_envp);
     uint64_t entry = ehdr->entry + base_addr;
 
     // Find highest loaded address

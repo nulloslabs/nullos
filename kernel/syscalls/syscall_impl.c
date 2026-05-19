@@ -15,6 +15,8 @@
 #include <main/elf.h>
 #include <main/halt.h>
 #include <main/hostname.h>
+#include <main/uname.h>
+#include <main/acpi.h>
 
 extern volatile int sched_lock;
 
@@ -427,14 +429,14 @@ void sys_chdir(syscall_frame_t *frame) {
     const char *path = (const char *)frame->rdi;
     if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
 
-    rootfs_file_t dir = read_rootfs(path);
-    if (!dir.data && !dir.mode) { frame->rax = (uint64_t)-ENOENT; return; }
-    if ((dir.mode & 0040000) == 0 && strcmp(path, "/") != 0) {
-        frame->rax = (uint64_t)-ENOTDIR; return;
-    }
-
     char abs_path[256];
     build_abs_path(path, abs_path, sizeof(abs_path));
+
+    rootfs_file_t dir = read_rootfs(abs_path);
+    if (!dir.data && !dir.mode) { frame->rax = (uint64_t)-ENOENT; return; }
+    if ((dir.mode & 0040000) == 0 && strcmp(abs_path, "/") != 0) {
+        frame->rax = (uint64_t)-ENOTDIR; return;
+    }
 
     strncpy(current_task_ptr->cwd, abs_path, 255);
     current_task_ptr->cwd[255] = '\0';
@@ -803,4 +805,39 @@ void sys_lseek(syscall_frame_t *frame) {
     }
 
     frame->rax = (uint64_t)entry->offset;
+}
+
+void sys_uname(syscall_frame_t *frame) {
+    uint64_t bufp = frame->rdi;
+
+    if (!bufp) { frame->rax = (uint64_t)-EFAULT; return; }
+
+    utsname_t info = uname_info;
+    get_hostname(info.nodename, sizeof(info.nodename));
+
+    write_vmm(current_task_ptr->ctx, bufp, &info, sizeof(info));
+    frame->rax = 0;
+}
+
+void sys_reboot(syscall_frame_t *frame) {
+    int how = (int)frame->rdi;
+
+    // TODO: Big security flaw! Any program can call the reboot syscall, implement UIDs and GIDs soon!
+
+    switch (how) {
+        case 0: // Shutdown
+            poweroff();
+            __builtin_unreachable();
+        case 1: // Reboot
+            reboot();
+            __builtin_unreachable();
+        case 2: // Halt
+            halt();
+            __builtin_unreachable();
+        default:
+            // We'll return EINVAL later, just break
+            break;
+    }
+
+    frame->rax = -EINVAL;
 }

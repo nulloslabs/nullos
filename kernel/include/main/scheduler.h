@@ -7,6 +7,8 @@
 #include <syscalls/syscalls.h>
 
 #define MAX_TASKS 64
+#define USER_STACK_SIZE (4 * 1024 * 1024)
+#define KERNEL_STACK_SIZE 32768
 
 typedef struct {
     pid_t pid;

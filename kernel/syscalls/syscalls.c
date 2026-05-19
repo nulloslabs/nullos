@@ -49,6 +49,8 @@ void syscall_dispatch(syscall_frame_t *frame) {
         case SYS_gethostname: sys_gethostname(frame); break;
         case SYS_sethostname: sys_sethostname(frame); break;
         case SYS_lseek: sys_lseek(frame); break;
+        case SYS_uname: sys_uname(frame); break;
+        case SYS_reboot: sys_reboot(frame); break;
         default:
             frame->rax = (uint64_t)-ENOSYS;
             break;

@@ -34,6 +34,70 @@ static void get_absolute_path(const char *in, char *out_abs, size_t out_size) {
     out_abs[out_size - 1] = '\0';
 }
 
+static void collapse_slashes(const char *in, char *out, size_t out_size) {
+    size_t j = 0;
+    bool last_was_slash = false;
+
+    for (size_t i = 0; in[i] && j + 1 < out_size; i++) {
+        if (in[i] == '/') {
+            if (last_was_slash) continue;
+            last_was_slash = true;
+        } else {
+            last_was_slash = false;
+        }
+
+        out[j++] = in[i];
+    }
+
+    if (j == 0) {
+        out[j++] = '/';
+    } else if (j > 1 && out[j - 1] == '/') {
+        j--;
+    }
+
+    out[j] = '\0';
+}
+
+static void normalize_abs_components(const char *in_abs, char *out_abs, size_t out_size) {
+    const char *parts[64];
+    char tmp[256];
+    int depth = 0;
+
+    strncpy(tmp, in_abs, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+
+    char *p = tmp;
+    while (*p) {
+        while (*p == '/') p++;
+        if (!*p) break;
+
+        char *start = p;
+        while (*p && *p != '/') p++;
+        if (*p) *p++ = '\0';
+
+        if (strcmp(start, ".") == 0) {
+            continue;
+        }
+        if (strcmp(start, "..") == 0) {
+            if (depth > 0) depth--;
+            continue;
+        }
+        if (depth < 64) parts[depth++] = start;
+    }
+
+    if (depth == 0) {
+        strncpy(out_abs, "/", out_size - 1);
+        out_abs[out_size - 1] = '\0';
+        return;
+    }
+
+    out_abs[0] = '\0';
+    for (int i = 0; i < depth; i++) {
+        strncat(out_abs, "/", out_size - strlen(out_abs) - 1);
+        strncat(out_abs, parts[i], out_size - strlen(out_abs) - 1);
+    }
+}
+
 static void normalize_path(const char *in_abs, char *out, size_t out_size) {
     if (strcmp(in_abs, "/") == 0) {
         strcpy(out, "./");
@@ -95,6 +159,79 @@ static bool tar_name_matches(const char *tar_name, const char *norm) {
     return false;
 }
 
+static bool find_tar_symlink(const char *abs_path, char *resolved_abs, size_t resolved_size) {
+    if (!tar_archive_start) return false;
+
+    char norm[256];
+    normalize_path(abs_path, norm, sizeof(norm));
+
+    uint8_t *ptr = tar_archive_start;
+    while (1) {
+        struct tar_header *h = (struct tar_header *)ptr;
+        if (h->name[0] == '\0') break;
+
+        uint64_t size = parse_octal(h->size);
+        char type = h->typeflag[0];
+
+        if ((type == '1' || type == '2') && tar_name_matches(h->name, norm)) {
+            char target[101];
+            strncpy(target, h->linkname, 100);
+            target[100] = '\0';
+            resolve_link_target(abs_path, target, resolved_abs, resolved_size);
+            return true;
+        }
+
+        ptr += 512 + (size + 511) / 512 * 512;
+    }
+
+    return false;
+}
+
+static void resolve_path_symlinks(const char *in_abs, char *out_abs, size_t out_size) {
+    char current[256];
+    strncpy(current, in_abs, sizeof(current) - 1);
+    current[sizeof(current) - 1] = '\0';
+
+    for (int depth = 0; depth < 8; depth++) {
+        bool changed = false;
+        size_t len = strlen(current);
+
+        for (size_t i = 1; i <= len; i++) {
+            if (current[i] != '/' && current[i] != '\0') continue;
+
+            char prefix[256];
+            if (i >= sizeof(prefix)) break;
+            strncpy(prefix, current, i);
+            prefix[i] = '\0';
+
+            char target[256];
+            if (find_tar_symlink(prefix, target, sizeof(target))) {
+                char next[256];
+                strncpy(next, target, sizeof(next) - 1);
+                next[sizeof(next) - 1] = '\0';
+
+                if (current[i] != '\0') {
+                    if (strcmp(next, "/") == 0) {
+                        strncat(next, current + i + 1, sizeof(next) - strlen(next) - 1);
+                    } else {
+                        strncat(next, current + i, sizeof(next) - strlen(next) - 1);
+                    }
+                }
+
+                strncpy(current, next, sizeof(current) - 1);
+                current[sizeof(current) - 1] = '\0';
+                changed = true;
+                break;
+            }
+        }
+
+        if (!changed) break;
+    }
+
+    strncpy(out_abs, current, out_size - 1);
+    out_abs[out_size - 1] = '\0';
+}
+
 static void add_modified_file(const char *path, void *data, size_t size, uint32_t mode) {
     for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
         if (!modified_files[i].is_active) {
@@ -115,8 +252,17 @@ rootfs_file_t read_rootfs(const char *path) {
     char abs_path[256];
     get_absolute_path(path, abs_path, sizeof(abs_path));
 
+    char clean_path[256];
+    collapse_slashes(abs_path, clean_path, sizeof(clean_path));
+
+    char normalized_path[256];
+    normalize_abs_components(clean_path, normalized_path, sizeof(normalized_path));
+
+    char resolved_path[256];
+    resolve_path_symlinks(normalized_path, resolved_path, sizeof(resolved_path));
+
     char norm[256];
-    normalize_path(abs_path, norm, sizeof(norm));
+    normalize_path(resolved_path, norm, sizeof(norm));
 
     rootfs_file_t result = { .data = NULL, .size = 0, .mode = 0 };
 
@@ -156,14 +302,14 @@ rootfs_file_t read_rootfs(const char *path) {
                 strncpy(target, h->linkname, 100);
                 target[100] = '\0';
                 char resolved_abs[256];
-                resolve_link_target(abs_path, target, resolved_abs, sizeof(resolved_abs));
+                resolve_link_target(resolved_path, target, resolved_abs, sizeof(resolved_abs));
                 depth--;
                 return read_rootfs(resolved_abs);
             }
             if (type == '0' || type == '\0' || type == '5') {
                 result.size = size;
                 result.data = ptr + 512;
-                result.mode = mode;
+                result.mode = (type == '5') ? (mode | 0040000) : mode;
                 depth--;
                 return result;
             }

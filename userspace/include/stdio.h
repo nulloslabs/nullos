@@ -19,7 +19,7 @@ extern FILE *stderr;
 int fflush(FILE *stream);
 
 int fputc(int c, FILE *stream);
-#define putc(c, s) fputc(c, s) // NOTE: putc() and fputc() are the same thing, just put macro instead of wasting space
+int putc(int c, FILE *stream);
 int putchar(int c);
 
 int fputs(const char *s, FILE *stream);
@@ -35,5 +35,10 @@ int vfprintf(FILE *stream, const char *fmt, va_list args);
 int fprintf(FILE *stream, const char *fmt, ...);
 int vprintf(const char *fmt, va_list args);
 int printf(const char *fmt, ...);
+
+int vsnprintf(char *str, size_t size, const char *fmt, va_list args);
+int snprintf(char *str, size_t size, const char *fmt, ...);
+int vsprintf(char *str, const char *fmt, va_list args);
+int sprintf(char *str, const char *fmt, ...);
 
 void perror(const char *s);

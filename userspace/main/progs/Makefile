@@ -31,10 +31,10 @@ progs: $(PROGS:=.o)
 # Inline execution blueprint for each application target
 define PROG_rule
 ../../$(1): $(1).o
-	@printf "  %-7s %s\n" "LD" "$(SUBDIR)/$(1).unstripped"
-	$(LD) $(LDFLAGS) ../../crt0.o $$< -o ../../$(1).unstripped -Wl,--no-dynamic-linker -l:libc.so
+	@printf "  %-7s %s\n" "LD" "$(SUBDIR)/$(1)"
+	$(LD) $(LDFLAGS) ../../crt0.o $$< -o $$@ -Wl,--no-dynamic-linker -l:libc.so
 	@printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/$(1)"
-	$(STRIP) $(STRIPFLAGS) ../../$(1).unstripped -o $$@
+	$(STRIP) $(STRIPFLAGS) $$@
 endef
 $(foreach p,$(PROGS),$(eval $(call PROG_rule,$(p))))
 
@@ -43,10 +43,8 @@ $(foreach p,$(PROGS),$(eval $(call PROG_rule,$(p))))
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/progs/*.o"
-	@rm -f *.o
+	@printf "  %-7s %s\n" "CLEAN" "$(foreach p,$(PROGS),$(SUBDIR)/$(p) $(SUBDIR)/$(p).unstripped) $(SUBDIR)/main/progs/*.o"
+	@rm -f *.o $(foreach p,$(PROGS),../../$(p) ../../$(p).unstripped)
 
 mrproper: clean
-	@rm -f $(foreach p,$(PROGS),../../$(p) ../../$(p).unstripped)
-
 .PHONY: all clean mrproper progs

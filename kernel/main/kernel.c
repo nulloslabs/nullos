@@ -1,9 +1,11 @@
+// Look at this #include mess...
 #include <freestanding/stddef.h>
 #include <io/terminal.h>
 #include <main/panic.h>
 #include <main/rootfs.h>
 #include <main/devfs.h>
 #include <mm/mm.h>
+// Are we there yet?
 #include <main/gdt.h>
 #include <main/idt.h>
 #include <mm/pmm.h>
@@ -12,6 +14,7 @@
 #include <main/scheduler.h>
 #include <main/limine_req.h>
 #include <main/acpi.h>
+// Please, let this stop...
 #include <io/fonts.h>
 #include <main/boot_args.h>
 #include <io/pci.h>
@@ -20,12 +23,15 @@
 #include <main/halt.h>
 #include <io/pic.h>
 #include <io/pit.h>
+// Almost...there...
 #include <io/apic.h>
 #include <main/mp.h>
 #include <main/elf.h>
 #include <main/string.h>
 #include <syscalls/syscalls.h>
 #include <main/madt.h>
+#include <main/uname.h>
+// Lets never do that again.
 
 void kmain(void) {
     cli();
@@ -51,6 +57,7 @@ void kmain(void) {
     init_scheduler();
     init_pci();
     cache_machine_info();
+    cache_uname();
     init_pci_drivers();
     init_syscalls();
 

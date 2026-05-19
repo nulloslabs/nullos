@@ -23,3 +23,5 @@
 #define SYS_gethostname 20
 #define SYS_sethostname 21
 #define SYS_lseek 22
+#define SYS_uname 23
+#define SYS_reboot 24

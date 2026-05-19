@@ -2,7 +2,11 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/utsname.h>
+#include <sys/wait.h>
 #include <unistd.h>
+
+/* A simple unix-like login program. */
 
 #define ROTR(x, n) ((x >> n) | (x << (32 - n)))
 #define SHFR(x, n) (x >> n)
@@ -32,7 +36,7 @@ static const uint32_t K[64] = {
     0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
 };
 
-static void sha256(const char *src, char out[65]) {
+static void sha256_hash(const char *src, char out[65]) {
     uint32_t h[8] = {
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
         0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
@@ -75,7 +79,7 @@ static void sha256(const char *src, char out[65]) {
             } else {
                 for (int i = 0; i < 8; i++)
                     chunk[63 - i] = (uint8_t)(bitlen >> (i * 8));
-                end = 1;
+                    end = 1;
             }
         }
 
@@ -137,13 +141,27 @@ static int read_file(const char *path, char *buf, int size) {
 }
 
 static const char *get_shadow_hash(const char *shadow, const char *user) {
+    static char hash[128];
     const char *p = shadow;
     int ulen = strlen(user);
 
     while (*p) {
         if (strncmp(p, user, ulen) == 0 && p[ulen] == ':') {
-            return p + ulen + 1;
+            const char *start = p + ulen + 1;
+            const char *end = start;
+            
+            while (*end && *end != ':' && *end != '\n') {
+                end++;
+            }
+            
+            int len = end - start;
+            if (len >= (int)sizeof(hash)) len = sizeof(hash) - 1;
+            
+            memcpy(hash, start, len);
+            hash[len] = '\0';
+            return hash;
         }
+        
         while (*p && *p != '\n') p++;
         if (*p == '\n') p++;
     }
@@ -160,17 +178,19 @@ static const char *get_passwd_shell(const char *passwd, const char *user) {
             int colons = 0;
             const char *q = p;
 
-            while (*q && colons < 6) {
+            while (*q && *q != '\n' && colons < 6) {
                 if (*q == ':') colons++;
                 q++;
             }
 
-            int i = 0;
-            while (*q && *q != '\n' && *q != '\0' && i < 255) {
-                shell[i++] = *q++;
+            if (colons == 6) {
+                int i = 0;
+                while (*q && *q != '\n' && *q != '\0' && i < 255) {
+                    shell[i++] = *q++;
+                }
+                shell[i] = '\0';
+                return shell;
             }
-            shell[i] = '\0';
-            return shell;
         }
 
         while (*p && *p != '\n') p++;
@@ -179,15 +199,62 @@ static const char *get_passwd_shell(const char *passwd, const char *user) {
     return NULL;
 }
 
-// Accept the third argument (envp) directly from the OS program loader
-int main(int argc, char **argv, char **envp) {
-    char passwd_buf[1024];
-    char shadow_buf[1024];
-    char hostname[64];
+static int is_passwd_blank(const char *passwd, const char *user) {
+    const char *p = passwd;
+    int ulen = strlen(user);
 
-    // Silence unused parameter warnings
-    (void)argc;
-    (void)argv;
+    while (*p) {
+        if (strncmp(p, user, ulen) == 0 && p[ulen] == ':') {
+            if (p[ulen + 1] == ':') {
+                return 1; 
+            }
+            return 0; 
+        }
+        while (*p && *p != '\n') p++;
+        if (*p == '\n') p++;
+    }
+    return 0;
+}
+
+static void print_issue(void) {
+    char buf[1024];
+    struct utsname uts;
+
+    if (uname(&uts) < 0) {
+        strcpy(uts.sysname, "NullOS");
+        strcpy(uts.nodename, "(none)");
+        strcpy(uts.release, "unknown");
+    }
+
+    if (read_file("/etc/issue", buf, sizeof(buf)) < 0) return;
+
+    for (const char *p = buf; *p; p++) {
+        if (*p == '\\' && *(p+1)) {
+            p++;
+            switch (*p) {
+                case 'n': printf("%s", uts.nodename); break;
+                case 'r': printf("%s", uts.release);  break;
+                case 'l': printf("tty0");             break;
+                case 's': printf("%s", uts.sysname);  break;
+                case '\\': printf("\\");              break;
+                default:  printf("\\%c", *p);         break;
+            }
+        } else {
+            putchar(*p);
+        }
+    }
+}
+
+static void print_motd(void) {
+    char buf[4096];
+    if (read_file("/etc/motd", buf, sizeof(buf)) < 0) return;
+    printf("%s", buf);
+}
+
+int main(int argc, char **argv, char **envp) {
+    char passwd_buf[4096]; 
+    char shadow_buf[4096];
+    char hostname[64];
 
     gethostname(hostname, sizeof(hostname));
 
@@ -201,14 +268,22 @@ int main(int argc, char **argv, char **envp) {
         return 1;
     }
 
-    printf("\033[2J\033[H");
+    int show_issue = 1;
 
     for (;;) {
         char username[64];
         char password[256];
         char hashed[65];
 
-        printf("\n%s login: ", hostname);
+        if (show_issue) {
+            printf("\033[2J\033[H");
+            printf("\n");
+            print_issue();
+            printf("\n");
+            show_issue = 0;
+        }
+
+        printf("%s login: ", hostname);
         fflush(stdout);
 
         int n = read(0, username, sizeof(username) - 1);
@@ -217,31 +292,92 @@ int main(int argc, char **argv, char **envp) {
         if (username[n - 1] == '\n') username[n - 1] = '\0';
         else username[n] = '\0';
 
-        const char *shell = get_passwd_shell(passwd_buf, username);
+        // 1. Traditional Unix behavior: Instantly authenticate if /etc/passwd field is empty
+        int authenticated = 0;
+        if (is_passwd_blank(passwd_buf, username)) {
+            authenticated = 1;
+        }
 
-        printf("Password: ");
-        fflush(stdout);
+        // 2. Query password and process modular shadow hash structures
+        if (!authenticated) {
+            printf("Password: ");
+            fflush(stdout);
 
-        n = read(0, password, sizeof(password) - 1);
-        if (n <= 0) break;
+            n = read(0, password, sizeof(password) - 1);
+            if (n <= 0) break;
 
-        if (password[n - 1] == '\n') password[n - 1] = '\0';
-        else password[n] = '\0';
+            if (password[n - 1] == '\n') password[n - 1] = '\0';
+            else password[n] = '\0';
 
-        sha256(password, hashed);
-        const char *stored = get_shadow_hash(shadow_buf, username);
+            // Fetch string payload from second field of /etc/shadow ($id$salt$hash)
+            const char *stored_entry = get_shadow_hash(shadow_buf, username);
+            
+            // Confirm the entry targets SHA-256 via '$5$' prefix signature
+            if (stored_entry && strncmp(stored_entry, "$5$", 3) == 0) {
+                const char *salt_start = stored_entry + 3;
+                const char *salt_end = strchr(salt_start, '$');
+                
+                if (salt_end) {
+                    char salt[64] = {0};
+                    size_t salt_len = salt_end - salt_start;
+                    
+                    if (salt_len < sizeof(salt)) {
+                        memcpy(salt, salt_start, salt_len);
+                        salt[salt_len] = '\0';
+                        
+                        // Point straight to the beginning of the hash data token
+                        const char *stored_hash = salt_end + 1;
 
-        if (!stored || strncmp(hashed, stored, 64) != 0) {
-            printf("Login incorrect.\n");
+                        // Recompose payload: salt + plaintext password string
+                        char salt_plus_password[512];
+                        snprintf(salt_plus_password, sizeof(salt_plus_password), "%s%s", salt, password);
+
+                        // Process composite block through crypto stage
+                        sha256_hash(salt_plus_password, hashed);
+
+                        // Validate match matrix
+                        if (strcmp(hashed, stored_hash) == 0) {
+                            authenticated = 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Verify authentication status
+        if (!authenticated) {
+            printf("\nLogin incorrect.\n\n");
             continue;
         }
 
-        char *sh_argv[] = { (char *)shell, NULL };
+        // 4. Resolve target user shell configuration mapping
+        const char *shell = get_passwd_shell(passwd_buf, username);
+        if (!shell || !*shell) {
+            fprintf(stderr, "\nLogin: no shell configured for %s\n\n", username);
+            continue;
+        }
 
-        // Pass the inherited envp pointer directly to execve
-        execve(shell, sh_argv, envp);
-        fprintf(stderr, "Login: execve() failed.\n");
-        return 1;
+        printf("\n");
+        print_motd();
+        printf("\n");
+
+        pid_t pid = fork();
+        if (pid == 0) {
+            char *sh_argv[] = { (char *)shell, NULL };
+            execve(shell, sh_argv, envp);
+            perror("\nLogin: execve() failed");
+            _exit(127);
+        }
+
+        if (pid < 0) {
+            perror("\nLogin: fork() failed");
+            continue;
+        }
+
+        int status;
+        waitpid(pid, &status, 0);
+        printf("\n");
+        show_issue = 1;
     }
 
     return 1;

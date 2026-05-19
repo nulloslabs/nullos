@@ -27,6 +27,8 @@ void sys_getppid(syscall_frame_t *frame);
 void sys_gethostname(syscall_frame_t *frame);
 void sys_sethostname(syscall_frame_t *frame);
 void sys_lseek(syscall_frame_t *frame);
+void sys_uname(syscall_frame_t *frame);
+void sys_reboot(syscall_frame_t *frame);
 
 // Some public helpers
 bool is_mounted_under(const char* path, const char* fstype, char* relative_out);

@@ -15,30 +15,21 @@ static bool ps2_key_held[128] = { false };
 // PS/2 Scancode Handler (called from keyboard ISR)
 // ============================================================================
 void handle_ps2_scancode(uint8_t sc) {
-    if (sc & 0x80) { // Release
+    if (sc & 0x80) {
         uint8_t key = sc & 0x7F;
-        if (ps2_key_held[key]) {
-            ps2_key_held[key] = false;
-        }
-        if (key == (ps2_repeat_key & 0x7F)) {
-            ps2_repeat_key = 0;
-            ps2_repeat_timer = 0;
-        }
-        // Inject break code into shared ring buffer
+        ps2_key_held[key] = false;
+        ps2_repeat_key = 0;
+        ps2_repeat_timer = 0;
         uint32_t next = (key_head + 1) & 127;
         if (next != key_tail) {
             key_buffer[key_head] = sc;
             key_head = next;
         }
-    } else { // Press (make)
-        // Filter hardware repeat: if already held, ignore
-        if (ps2_key_held[sc]) {
-            return;
-        }
+    } else {
+        if (ps2_key_held[sc]) return;  // filter hardware repeat
         ps2_key_held[sc] = true;
         ps2_repeat_key = sc;
         ps2_repeat_timer = 0;
-        // Inject make code into shared ring buffer
         uint32_t next = (key_head + 1) & 127;
         if (next != key_tail) {
             key_buffer[key_head] = sc;

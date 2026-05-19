@@ -25,16 +25,16 @@ libc: $(OBJ)
 		if [ ! -f ../../libc.a ] || [ $$obj -nt ../../libc.a ]; then needs_build_a=1; fi; \
 	done; \
 	if [ $$needs_build_so -eq 1 ]; then \
-		printf "  %-7s %s\n" "LD" "$(SUBDIR)/libc.so.unstripped" && \
-		$(LD) $(LDFLAGS) -shared $(OBJ) -o ../../libc.so.unstripped -Wl,-soname,libc.so && \
+		printf "  %-7s %s\n" "LD" "$(SUBDIR)/libc.so" && \
+		$(LD) $(LDFLAGS) -shared $(OBJ) -o ../../libc.so -Wl,-soname,libc.so && \
 		printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/libc.so" && \
-		$(STRIP) $(STRIPFLAGS) ../../libc.so.unstripped -o ../../libc.so; \
+		$(STRIP) $(STRIPFLAGS) ../../libc.so; \
 	fi; \
 	if [ $$needs_build_a -eq 1 ]; then \
-		printf "  %-7s %s\n" "AR" "$(SUBDIR)/libc.a.unstripped" && \
-		$(AR) $(ARFLAGS) rcs ../../libc.a.unstripped $(OBJ) && \
+		printf "  %-7s %s\n" "AR" "$(SUBDIR)/libc.a" && \
+		$(AR) $(ARFLAGS) rcs ../../libc.a $(OBJ) && \
 		printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/libc.a" && \
-		$(STRIP) $(STRIPFLAGS) --strip-debug ../../libc.a.unstripped -o ../../libc.a; \
+		$(STRIP) $(STRIPFLAGS) --strip-debug ../../libc.a; \
 	fi; \
 	if [ $$needs_build_so -eq 0 ] && [ $$needs_build_a -eq 0 ]; then \
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/libc.so $(SUBDIR)/libc.a are already up to date"; \
@@ -49,8 +49,8 @@ libc: $(OBJ)
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/libc/*.o $(SUBDIR)/main/libc/*.d"
-	@rm -rf $(OBJ) $(DEP) ../../libc.so ../../libc.a
+	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/libc.so $(SUBDIR)/libc.a $(SUBDIR)/libc.so.unstripped $(SUBDIR)/libc.a.unstripped $(SUBDIR)/main/libc/*.o $(SUBDIR)/main/libc/*.d"
+	@rm -rf ../../libc.so ../../libc.a ../../libc.so.unstripped ../../libc.a.unstripped $(OBJ) $(DEP)
 
 mrproper: clean
 

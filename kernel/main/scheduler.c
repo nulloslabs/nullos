@@ -32,19 +32,23 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
             if (ring == 0) {
                 cs = 0x08;
                 ss = 0x10;
-                stack = vmalloc(32768);
+                stack = vmalloc(KERNEL_STACK_SIZE);
                 tasks[i].ctx = ctx ? ctx : &kernel_context;
                 tasks[i].kernel_stack = stack;
             } else {
                 cs = 0x23;
                 ss = 0x1B;
-                stack = vmalloc_user_ex(ctx, 16384);
-                if (!stack) {
-                    spin_unlock_irqrestore(&task_lock, flags);
-                    return -1;
+                if (initial_rsp) {
+                    stack = NULL;
+                } else {
+                    stack = vmalloc_user_ex(ctx, USER_STACK_SIZE);
+                    if (!stack) {
+                        spin_unlock_irqrestore(&task_lock, flags);
+                        return -1;
+                    }
                 }
                 tasks[i].ctx = ctx;
-                tasks[i].kernel_stack = vmalloc(32768);
+                tasks[i].kernel_stack = vmalloc(KERNEL_STACK_SIZE);
             }
 
             tasks[i].stack_base = stack;
@@ -56,12 +60,12 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
 
             uint64_t v_rsp;
             if (ring == 0) {
-                v_rsp = initial_rsp ? initial_rsp : ((uint64_t)stack + 32768);
+                v_rsp = initial_rsp ? initial_rsp : ((uint64_t)stack + KERNEL_STACK_SIZE);
             } else {
-                v_rsp = initial_rsp;
+                v_rsp = initial_rsp ? initial_rsp : ((uint64_t)stack + USER_STACK_SIZE);
             }
 
-            uint64_t k_rsp = (uint64_t)tasks[i].kernel_stack + 32768;
+            uint64_t k_rsp = (uint64_t)tasks[i].kernel_stack + KERNEL_STACK_SIZE;
 
             #define PUSH(val) do { \
                 k_rsp -= 8; \
@@ -112,7 +116,7 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
             strcpy(tasks[i].cwd, current_task_ptr->cwd);
             tasks[i].parent_pid = current_task_ptr->pid;
 
-            void *kstack = vmalloc(32768);
+            void *kstack = vmalloc(KERNEL_STACK_SIZE);
             if (!kstack) {
                 spin_unlock_irqrestore(&task_lock, flags);
                 return -1;
@@ -121,7 +125,7 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
 
             memcpy(&tasks[i].fd_table, &current_task_ptr->fd_table, sizeof(fd_table_t));
 
-            uint64_t v_rsp = (uint64_t)kstack + 32768;
+            uint64_t v_rsp = (uint64_t)kstack + KERNEL_STACK_SIZE;
 
             #define PUSH(val) do { \
                 v_rsp -= 8; \
@@ -206,7 +210,7 @@ void schedule(void) {
 
         // Ensure TSS.RSP0 is updated so Ring 3 -> Ring 0 interrupts use the correct stack!
         if (tasks[next].kernel_stack) {
-            tss_set_kernel_stack_for_cpu(0, (void*)((uint64_t)tasks[next].kernel_stack + 32768));
+            tss_set_kernel_stack_for_cpu(0, (void*)((uint64_t)tasks[next].kernel_stack + KERNEL_STACK_SIZE));
         }
 
         if (tasks[next].ctx && tasks[next].ctx != tasks[old_task].ctx) {
@@ -243,6 +247,7 @@ void exit_task(int status) {
         panic("Init process exited.");
     }
 
+    sched_lock = 0;
     asm volatile("int $32");
 
     idle();

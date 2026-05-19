@@ -1,12 +1,14 @@
 .intel_syntax noprefix
 .section .text
 .global _start
+.extern environ
 
 _start:
     xor rbp, rbp
     mov rdi, [rsp]                    // argc
     lea rsi, [rsp + 8]                // argv
     lea rdx, [rsp + 8 + rdi*8] // envp
+    mov [rip + environ], rdx
     and rsp, -16
     call main
     mov rdi, rax

@@ -2,6 +2,8 @@
 
 #include <freestanding/stdint.h>
 
+/* Yes, I know this isn't consistent with the userspace sys/syscall.h but thats the LibC, not our problem :shrug: */
+
 // Syscall numbers
 #define SYS_exit 0
 #define SYS_open 1
@@ -26,6 +28,8 @@
 #define SYS_gethostname 20
 #define SYS_sethostname 21
 #define SYS_lseek 22
+#define SYS_uname 23
+#define SYS_reboot 24
 
 // Register frame passed to syscall_dispatch
 typedef struct {

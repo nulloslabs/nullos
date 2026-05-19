@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <sys/types.h>
 
+extern char **environ;
+
 int64_t syscall(int64_t num, ...);
 __attribute__((noreturn)) void _exit(int status);
 int close(int fd);
@@ -12,6 +14,8 @@ ssize_t write(int fd, const void *buf, size_t count);
 char *getcwd(char *buf, size_t size);
 int chdir(const char *path);
 int execve(const char *path, char *const argv[], char *const envp[]);
+int execv(const char *path, char *const argv[]);
+int execvp(const char *file, char *const argv[]);
 pid_t fork(void);
 pid_t waitpid(pid_t pid, int *wstatus, int options);
 pid_t getpid(void);
@@ -20,3 +24,4 @@ int brk(void *addr);
 void *sbrk(intptr_t increment);
 int gethostname(char *name, size_t size);
 int sethostname(const char *name, size_t size);
+int reboot(int how);
