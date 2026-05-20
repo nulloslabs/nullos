@@ -27,8 +27,12 @@ rootfs:
 		$(foreach prog,$(filter-out init,$(patsubst ../userspace/main/progs/%.c,%,$(wildcard ../userspace/main/progs/*.c))),cp ../userspace/$(prog) main/usr/bin &&) \
 		# Create config files && \
 		printf "\\\\s (\\\\r)\\n" > main/etc/issue && \
-		printf "root::0:0:root:/root:/bin/sh" > main/etc/passwd && \
-		printf "root:4813494d137e1631bba301d5acab6e7bb7aa74ce1185d456565ef51d737677b2" > main/etc/shadow && \
+		printf "root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:user:/home/user:/bin/sh\n" > main/etc/passwd && \
+		printf "root:x:0:\nuser:x:1000:\n" > main/etc/group && \
+		printf 'root:$$5$$nullos$$c6653994d36aafe046b7f4dd23e3ff371afc171c8ebcab43c37d65711e2339b7:19863:0:99999:7:::\n' > main/etc/shadow && \
+		printf 'user:$$5$$user$$7126fcc656a61c971522f6f3f949e483c654490630046a1a8963604e91f74ba0:19863:0:99999:7:::\n' >> main/etc/shadow && \
+		chmod 644 main/etc/passwd main/etc/group && \
+		chmod 600 main/etc/shadow && \
 		printf "Welcome to NullOS!\\n\\nAn OS that respects your privacy, is fast, lightweight and secure.\\n" > main/etc/motd && \
 		$(TAR) $(TARFLAGS) -f rootfs.tar.gz -C main .; \
 	else \

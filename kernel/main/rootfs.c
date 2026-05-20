@@ -232,7 +232,19 @@ static void resolve_path_symlinks(const char *in_abs, char *out_abs, size_t out_
     out_abs[out_size - 1] = '\0';
 }
 
-static void add_modified_file(const char *path, void *data, size_t size, uint32_t mode) {
+static void add_modified_file(const char *path, void *data, size_t size, uint32_t mode, uid_t uid, gid_t gid) {
+    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+        if (modified_files[i].is_active && strcmp(modified_files[i].path, path) == 0) {
+            if (modified_files[i].data) free(modified_files[i].data);
+            modified_files[i].data = data;
+            modified_files[i].size = size;
+            modified_files[i].mode = mode;
+            modified_files[i].uid = uid;
+            modified_files[i].gid = gid;
+            return;
+        }
+    }
+
     for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
         if (!modified_files[i].is_active) {
             modified_files[i].is_active = true;
@@ -241,6 +253,8 @@ static void add_modified_file(const char *path, void *data, size_t size, uint32_
             modified_files[i].data = data;
             modified_files[i].size = size;
             modified_files[i].mode = mode;
+            modified_files[i].uid = uid;
+            modified_files[i].gid = gid;
             return;
         }
     }
@@ -264,7 +278,7 @@ rootfs_file_t read_rootfs(const char *path) {
     char norm[256];
     normalize_path(resolved_path, norm, sizeof(norm));
 
-    rootfs_file_t result = { .data = NULL, .size = 0, .mode = 0 };
+    rootfs_file_t result = { .data = NULL, .size = 0, .mode = 0, .uid = 0, .gid = 0 };
 
     if (depth >= 8) return result;
     depth++;
@@ -275,6 +289,8 @@ rootfs_file_t read_rootfs(const char *path) {
             result.data = modified_files[i].data;
             result.size = modified_files[i].size;
             result.mode = modified_files[i].mode;
+            result.uid = modified_files[i].uid;
+            result.gid = modified_files[i].gid;
             depth--;
             return result;
         }
@@ -293,6 +309,8 @@ rootfs_file_t read_rootfs(const char *path) {
 
         uint64_t size = parse_octal(h->size);
         uint32_t mode = (uint32_t)parse_octal(h->mode);
+        uid_t uid = (uid_t)parse_octal(h->uid);
+        gid_t gid = (gid_t)parse_octal(h->gid);
         char type = h->typeflag[0];
 
         bool matches = tar_name_matches(h->name, norm);
@@ -310,6 +328,8 @@ rootfs_file_t read_rootfs(const char *path) {
                 result.size = size;
                 result.data = ptr + 512;
                 result.mode = (type == '5') ? (mode | 0040000) : mode;
+                result.uid = uid;
+                result.gid = gid;
                 depth--;
                 return result;
             }
@@ -321,8 +341,15 @@ rootfs_file_t read_rootfs(const char *path) {
     return result;
 }
 
-int write_rootfs(const char *path, const void *data, uint64_t size, uint32_t mode) {
-    add_modified_file(path, (void *)data, (size_t)size, mode);
+int write_rootfs(const char *path, const void *data, uint64_t size, uint32_t mode, uid_t uid, gid_t gid) {
+    void *copy = NULL;
+    if (size > 0) {
+        copy = malloc((size_t)size);
+        if (!copy) return -ENOMEM;
+        memcpy(copy, data, (size_t)size);
+    }
+
+    add_modified_file(path, copy, (size_t)size, mode, uid, gid);
     return 0;
 }
 
@@ -335,6 +362,7 @@ int delete_rootfs(const char *path) {
 
     for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
         if (modified_files[i].is_active && strcmp(modified_files[i].path, norm) == 0) {
+            if (modified_files[i].data) free(modified_files[i].data);
             modified_files[i].is_active = false;
             return 0;
         }
@@ -342,8 +370,8 @@ int delete_rootfs(const char *path) {
     return -1; // Not found
 }
 
-int mkdir_rootfs(const char *path, mode_t mode) {
-    add_modified_file(path, NULL, 0, mode | 0x4000); // S_IFDIR
+int mkdir_rootfs(const char *path, mode_t mode, uid_t uid, gid_t gid) {
+    add_modified_file(path, NULL, 0, mode | 0x4000, uid, gid); // S_IFDIR
     return 0;
 }
 

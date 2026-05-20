@@ -25,3 +25,9 @@
 #define SYS_lseek 22
 #define SYS_uname 23
 #define SYS_reboot 24
+#define SYS_getuid 25
+#define SYS_getgid 26
+#define SYS_geteuid 27
+#define SYS_getegid 28
+#define SYS_setuid 29
+#define SYS_setgid 30

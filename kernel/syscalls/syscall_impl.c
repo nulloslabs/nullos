@@ -78,6 +78,32 @@ typedef struct {
 #define DT_REG 8
 #define DT_LNK 10
 
+static bool is_superuser(void) {
+    return current_task_ptr && current_task_ptr->euid == 0;
+}
+
+static int require_superuser(void) {
+    return is_superuser() ? 0 : -EPERM;
+}
+
+static bool can_access_rootfs(const rootfs_file_t *file, int want_read, int want_write, int want_exec) {
+    if (!file) return false;
+    if (is_superuser()) return true;
+
+    int shift = 0;
+    if (current_task_ptr->euid == file->uid) {
+        shift = 6;
+    } else if (current_task_ptr->egid == file->gid) {
+        shift = 3;
+    }
+
+    int perm = (file->mode >> shift) & 7;
+    if (want_read && !(perm & 4)) return false;
+    if (want_write && !(perm & 2)) return false;
+    if (want_exec && !(perm & 1)) return false;
+    return true;
+}
+
 bool is_mounted_under(const char *path, const char *filesystemtype, char *relative_out) {
     uint64_t irq;
     spin_lock_irqsave(&vfs_lock, &irq);
@@ -202,14 +228,22 @@ void sys_open(syscall_frame_t *frame) {
 
     rootfs_file_t file = read_rootfs(path);
 
-    if (!file.data && !(file.mode & 0040000) && !(flags & O_CREAT)) {
+    if (!file.mode && !(flags & O_CREAT)) {
         frame->rax = (uint64_t)-ENOENT;
         return;
     }
 
     if ((flags & O_CREAT) && !file.data && !file.mode) {
-        int r = write_rootfs(path, "", 0, mode);
+        int r = write_rootfs(path, "", 0, mode, current_task_ptr->euid, current_task_ptr->egid);
         if (r < 0) { frame->rax = (uint64_t)r; return; }
+        file = read_rootfs(path);
+    }
+
+    int want_write = (flags & O_WRONLY) || (flags & O_RDWR);
+    int want_read = !want_write || (flags & O_RDWR);
+    if (!can_access_rootfs(&file, want_read, want_write, 0)) {
+        frame->rax = (uint64_t)-EACCES;
+        return;
     }
 
     int fd = alloc_fd(&current_task_ptr->fd_table, path, FD_FILE, flags);
@@ -319,6 +353,11 @@ void sys_write(syscall_frame_t *frame) {
     }
 
     rootfs_file_t file = read_rootfs(entry->path);
+    if (!can_access_rootfs(&file, 0, 1, 0)) {
+        frame->rax = (uint64_t)-EACCES;
+        return;
+    }
+
     uint64_t new_size = entry->offset + count;
     if (file.size > new_size) new_size = file.size;
 
@@ -328,7 +367,10 @@ void sys_write(syscall_frame_t *frame) {
     if (file.data && file.size) memcpy(new_data, file.data, file.size);
     memcpy((uint8_t *)new_data + entry->offset, buf, count);
 
-    int res = write_rootfs(entry->path, new_data, new_size, file.mode ? file.mode : 0644);
+    int res = write_rootfs(entry->path, new_data, new_size,
+                           file.mode ? file.mode : 0644,
+                           file.mode ? file.uid : current_task_ptr->euid,
+                           file.mode ? file.gid : current_task_ptr->egid);
     free(new_data);
 
     if (res < 0) { frame->rax = (uint64_t)res; return; }
@@ -344,6 +386,9 @@ void sys_mount(syscall_frame_t *frame) {
     const void *data = (const void *)frame->r8;
 
     (void)source; (void)mountflags; (void)data;
+
+    int priv = require_superuser();
+    if (priv < 0) { frame->rax = (uint64_t)priv; return; }
 
     if (!target || !filesystemtype || !*target || !*filesystemtype) {
         frame->rax = (uint64_t)-EINVAL; return;
@@ -373,6 +418,9 @@ void sys_mount(syscall_frame_t *frame) {
 void sys_umount(syscall_frame_t *frame) {
     const char *target = (const char *)frame->rdi;
     (void)frame->rsi;
+
+    int priv = require_superuser();
+    if (priv < 0) { frame->rax = (uint64_t)priv; return; }
 
     if (!target) { frame->rax = (uint64_t)-EINVAL; return; }
 
@@ -410,6 +458,12 @@ void sys_execve(syscall_frame_t *frame) {
     char **user_envp = (char **)frame->rdx;
 
     if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    rootfs_file_t file = read_rootfs(path);
+    if (file.mode && !can_access_rootfs(&file, 0, 0, 1)) {
+        frame->rax = (uint64_t)-EACCES;
+        return;
+    }
 
     char *argv_ptrs[64];
     char *envp_ptrs[64];
@@ -571,7 +625,7 @@ void sys_mkdir(syscall_frame_t *frame) {
 
     if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
 
-    frame->rax = (uint64_t)mkdir_rootfs(path, mode);
+    frame->rax = (uint64_t)mkdir_rootfs(path, mode, current_task_ptr->euid, current_task_ptr->egid);
 }
 
 void sys_getdents(syscall_frame_t *frame) {
@@ -774,6 +828,8 @@ void sys_gethostname(syscall_frame_t *frame) {
 void sys_sethostname(syscall_frame_t *frame) {
     const char *name = (const char *)frame->rdi;
     size_t len = (size_t)frame->rsi;
+    int priv = require_superuser();
+    if (priv < 0) { frame->rax = (uint64_t)priv; return; }
     frame->rax = set_hostname(name, len);
 }
 
@@ -822,7 +878,8 @@ void sys_uname(syscall_frame_t *frame) {
 void sys_reboot(syscall_frame_t *frame) {
     int how = (int)frame->rdi;
 
-    // TODO: Big security flaw! Any program can call the reboot syscall, implement UIDs and GIDs soon!
+    int priv = require_superuser();
+    if (priv < 0) { frame->rax = (uint64_t)priv; return; }
 
     switch (how) {
         case 0: // Shutdown
@@ -840,4 +897,58 @@ void sys_reboot(syscall_frame_t *frame) {
     }
 
     frame->rax = -EINVAL;
+}
+
+void sys_getuid(syscall_frame_t *frame) {
+    frame->rax = current_task_ptr->uid;
+}
+
+void sys_getgid(syscall_frame_t *frame) {
+    frame->rax = current_task_ptr->gid;
+}
+
+void sys_geteuid(syscall_frame_t *frame) {
+    frame->rax = current_task_ptr->euid;
+}
+
+void sys_getegid(syscall_frame_t *frame) {
+    frame->rax = current_task_ptr->egid;
+}
+
+void sys_setuid(syscall_frame_t *frame) {
+    uid_t uid = (uid_t)frame->rdi;
+
+    if (is_superuser()) {
+        current_task_ptr->uid = uid;
+        current_task_ptr->euid = uid;
+        frame->rax = 0;
+        return;
+    }
+
+    if (uid == current_task_ptr->uid || uid == current_task_ptr->euid) {
+        current_task_ptr->euid = uid;
+        frame->rax = 0;
+        return;
+    }
+
+    frame->rax = (uint64_t)-EPERM;
+}
+
+void sys_setgid(syscall_frame_t *frame) {
+    gid_t gid = (gid_t)frame->rdi;
+
+    if (is_superuser()) {
+        current_task_ptr->gid = gid;
+        current_task_ptr->egid = gid;
+        frame->rax = 0;
+        return;
+    }
+
+    if (gid == current_task_ptr->gid || gid == current_task_ptr->egid) {
+        current_task_ptr->egid = gid;
+        frame->rax = 0;
+        return;
+    }
+
+    frame->rax = (uint64_t)-EPERM;
 }

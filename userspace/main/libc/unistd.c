@@ -160,7 +160,7 @@ int execvp(const char *file, char *const argv[]) {
 }
 
 pid_t fork(void) {
-    return (pid_t)syscall(SYS_fork);
+    return (pid_t)syscall(SYS_fork, 0, 0, 0, 0, 0, 0);
 }
 
 pid_t waitpid(pid_t pid, int *wstatus, int options) {
@@ -168,11 +168,35 @@ pid_t waitpid(pid_t pid, int *wstatus, int options) {
 }
 
 pid_t getpid(void) {
-    return (pid_t)syscall(SYS_getpid);
+    return (pid_t)syscall(SYS_getpid, 0, 0, 0, 0, 0, 0);
 }
 
 pid_t getppid(void) {
-    return (pid_t)syscall(SYS_getppid);
+    return (pid_t)syscall(SYS_getppid, 0, 0, 0, 0, 0, 0);
+}
+
+uid_t getuid(void) {
+    return (uid_t)syscall(SYS_getuid, 0, 0, 0, 0, 0, 0);
+}
+
+gid_t getgid(void) {
+    return (gid_t)syscall(SYS_getgid, 0, 0, 0, 0, 0, 0);
+}
+
+uid_t geteuid(void) {
+    return (uid_t)syscall(SYS_geteuid, 0, 0, 0, 0, 0, 0);
+}
+
+gid_t getegid(void) {
+    return (gid_t)syscall(SYS_getegid, 0, 0, 0, 0, 0, 0);
+}
+
+int setuid(uid_t uid) {
+    return (int)syscall(SYS_setuid, uid);
+}
+
+int setgid(gid_t gid) {
+    return (int)syscall(SYS_setgid, gid);
 }
 
 int brk(void *addr) {

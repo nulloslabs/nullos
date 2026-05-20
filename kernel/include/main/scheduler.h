@@ -22,6 +22,10 @@ typedef struct {
     vmm_context_t *ctx;
     uint64_t brk_start;
     uint64_t brk;
+    uid_t uid;
+    uid_t euid;
+    gid_t gid;
+    gid_t egid;
     fd_table_t fd_table;
     char cwd[256];
     int exit_status;

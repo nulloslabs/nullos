@@ -29,6 +29,12 @@ void sys_sethostname(syscall_frame_t *frame);
 void sys_lseek(syscall_frame_t *frame);
 void sys_uname(syscall_frame_t *frame);
 void sys_reboot(syscall_frame_t *frame);
+void sys_getuid(syscall_frame_t *frame);
+void sys_getgid(syscall_frame_t *frame);
+void sys_geteuid(syscall_frame_t *frame);
+void sys_getegid(syscall_frame_t *frame);
+void sys_setuid(syscall_frame_t *frame);
+void sys_setgid(syscall_frame_t *frame);
 
 // Some public helpers
 bool is_mounted_under(const char* path, const char* fstype, char* relative_out);

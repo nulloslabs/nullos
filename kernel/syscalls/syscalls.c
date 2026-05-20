@@ -51,6 +51,12 @@ void syscall_dispatch(syscall_frame_t *frame) {
         case SYS_lseek: sys_lseek(frame); break;
         case SYS_uname: sys_uname(frame); break;
         case SYS_reboot: sys_reboot(frame); break;
+        case SYS_getuid: sys_getuid(frame); break;
+        case SYS_getgid: sys_getgid(frame); break;
+        case SYS_geteuid: sys_geteuid(frame); break;
+        case SYS_getegid: sys_getegid(frame); break;
+        case SYS_setuid: sys_setuid(frame); break;
+        case SYS_setgid: sys_setgid(frame); break;
         default:
             frame->rax = (uint64_t)-ENOSYS;
             break;

@@ -16,6 +16,8 @@ all: $(OBJ) ../config.mk
 
 -include $(DEP)
 
+vmm.o: mm.o
+
 %.o: %.c ../config.mk ../include/limine/limine.h
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/mm/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@

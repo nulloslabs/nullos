@@ -8,6 +8,12 @@
 
 /* A simple unix-like login program. */
 
+typedef struct {
+    uid_t uid;
+    gid_t gid;
+    char shell[256];
+} passwd_user_t;
+
 #define ROTR(x, n) ((x >> n) | (x << (32 - n)))
 #define SHFR(x, n) (x >> n)
 #define CH(x, y, z) ((x & y) ^ (~x & z))
@@ -140,7 +146,7 @@ static int read_file(const char *path, char *buf, int size) {
     return n;
 }
 
-static const char *get_shadow_hash(const char *shadow, const char *user) {
+static const char *get_shadow_password(const char *shadow, const char *user) {
     static char hash[128];
     const char *p = shadow;
     int ulen = strlen(user);
@@ -168,35 +174,73 @@ static const char *get_shadow_hash(const char *shadow, const char *user) {
     return NULL;
 }
 
-static const char *get_passwd_shell(const char *passwd, const char *user) {
-    static char shell[256];
+static int is_shadow_locked(const char *password_field) {
+    return !password_field || password_field[0] == '!' || password_field[0] == '*';
+}
+
+static unsigned int parse_uint_field(const char *start, const char *end, int *ok) {
+    unsigned int value = 0;
+    if (start == end) {
+        *ok = 0;
+        return 0;
+    }
+
+    while (start < end) {
+        if (*start < '0' || *start > '9') {
+            *ok = 0;
+            return 0;
+        }
+        value = (value * 10) + (unsigned int)(*start - '0');
+        start++;
+    }
+
+    *ok = 1;
+    return value;
+}
+
+static int get_passwd_user(const char *passwd, const char *user, passwd_user_t *out) {
     const char *p = passwd;
     int ulen = strlen(user);
 
     while (*p) {
         if (strncmp(p, user, ulen) == 0 && p[ulen] == ':') {
-            int colons = 0;
+            const char *fields[7] = {0};
             const char *q = p;
+            fields[0] = p;
 
-            while (*q && *q != '\n' && colons < 6) {
-                if (*q == ':') colons++;
-                q++;
+            for (int i = 1; i < 7; i++) {
+                q = strchr(q, ':');
+                if (!q) break;
+                fields[i] = ++q;
             }
 
-            if (colons == 6) {
-                int i = 0;
-                while (*q && *q != '\n' && *q != '\0' && i < 255) {
-                    shell[i++] = *q++;
+            if (fields[6]) {
+                const char *uid_end = strchr(fields[2], ':');
+                const char *gid_end = strchr(fields[3], ':');
+                int uid_ok = 0;
+                int gid_ok = 0;
+
+                uid_t uid = uid_end ? parse_uint_field(fields[2], uid_end, &uid_ok) : 0;
+                gid_t gid = gid_end ? parse_uint_field(fields[3], gid_end, &gid_ok) : 0;
+
+                if (uid_ok && gid_ok) {
+                    int i = 0;
+                    q = fields[6];
+                    while (*q && *q != '\n' && *q != '\0' && i < 255) {
+                        out->shell[i++] = *q++;
+                    }
+                    out->shell[i] = '\0';
+                    out->uid = uid;
+                    out->gid = gid;
+                    return 1;
                 }
-                shell[i] = '\0';
-                return shell;
             }
         }
 
         while (*p && *p != '\n') p++;
         if (*p == '\n') p++;
     }
-    return NULL;
+    return 0;
 }
 
 static int is_passwd_blank(const char *passwd, const char *user) {
@@ -292,13 +336,14 @@ int main(int argc, char **argv, char **envp) {
         if (username[n - 1] == '\n') username[n - 1] = '\0';
         else username[n] = '\0';
 
-        // 1. Traditional Unix behavior: Instantly authenticate if /etc/passwd field is empty
+        // 1. Traditional Unix behavior: instantly authenticate if /etc/passwd field is empty.
         int authenticated = 0;
         if (is_passwd_blank(passwd_buf, username)) {
             authenticated = 1;
         }
 
-        // 2. Query password and process modular shadow hash structures
+        // 2. Query password and verify the second field of the shadow entry. Aging fields
+        // are parsed by skipping at ':' in get_shadow_password(), but not enforced yet.
         if (!authenticated) {
             printf("Password: ");
             fflush(stdout);
@@ -309,11 +354,9 @@ int main(int argc, char **argv, char **envp) {
             if (password[n - 1] == '\n') password[n - 1] = '\0';
             else password[n] = '\0';
 
-            // Fetch string payload from second field of /etc/shadow ($id$salt$hash)
-            const char *stored_entry = get_shadow_hash(shadow_buf, username);
+            const char *stored_entry = get_shadow_password(shadow_buf, username);
             
-            // Confirm the entry targets SHA-256 via '$5$' prefix signature
-            if (stored_entry && strncmp(stored_entry, "$5$", 3) == 0) {
+            if (!is_shadow_locked(stored_entry) && strncmp(stored_entry, "$5$", 3) == 0) {
                 const char *salt_start = stored_entry + 3;
                 const char *salt_end = strchr(salt_start, '$');
                 
@@ -351,8 +394,8 @@ int main(int argc, char **argv, char **envp) {
         }
 
         // 4. Resolve target user shell configuration mapping
-        const char *shell = get_passwd_shell(passwd_buf, username);
-        if (!shell || !*shell) {
+        passwd_user_t user_info;
+        if (!get_passwd_user(passwd_buf, username, &user_info) || !user_info.shell[0]) {
             fprintf(stderr, "\nLogin: no shell configured for %s\n\n", username);
             continue;
         }
@@ -363,8 +406,13 @@ int main(int argc, char **argv, char **envp) {
 
         pid_t pid = fork();
         if (pid == 0) {
-            char *sh_argv[] = { (char *)shell, NULL };
-            execve(shell, sh_argv, envp);
+            if (setgid(user_info.gid) < 0 || setuid(user_info.uid) < 0) {
+                perror("\nLogin: set credentials failed");
+                _exit(126);
+            }
+
+            char *sh_argv[] = { user_info.shell, NULL };
+            execve(user_info.shell, sh_argv, envp);
             perror("\nLogin: execve() failed");
             _exit(127);
         }

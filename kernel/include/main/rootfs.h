@@ -22,6 +22,8 @@ typedef struct {
     void* data;      // Pointer to the actual file content
     uint64_t size;   // Actual size of the file in bytes
     mode_t mode;
+    uid_t uid;
+    gid_t gid;
 } rootfs_file_t;
 
 typedef struct {
@@ -29,6 +31,8 @@ typedef struct {
     void *data;
     uint64_t size;
     mode_t mode;
+    uid_t uid;
+    gid_t gid;
     bool is_active;
 } modified_file_t;
 
@@ -44,8 +48,8 @@ typedef struct {
 
 // Function declarations matching kernel/main/rootfs.c
 rootfs_file_t read_rootfs(const char *path);
-int write_rootfs(const char *path, const void *data, uint64_t size, uint32_t mode);
+int write_rootfs(const char *path, const void *data, uint64_t size, uint32_t mode, uid_t uid, gid_t gid);
 int delete_rootfs(const char *path);
-int mkdir_rootfs(const char *path, mode_t mode);
+int mkdir_rootfs(const char *path, mode_t mode, uid_t uid, gid_t gid);
 int get_rootfs_entry(int index, directory_entry_t* entry);
 void init_rootfs(void);

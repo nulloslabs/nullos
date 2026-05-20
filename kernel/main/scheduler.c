@@ -54,6 +54,10 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
             tasks[i].stack_base = stack;
             tasks[i].ring = ring;
             tasks[i].ctx = ctx ? ctx : &kernel_context;
+            tasks[i].uid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->uid;
+            tasks[i].euid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->euid;
+            tasks[i].gid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->gid;
+            tasks[i].egid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->egid;
 
             init_fd_table(&tasks[i].fd_table);
             strcpy(tasks[i].cwd, "/");
@@ -115,6 +119,10 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
             tasks[i].ctx = child_ctx;
             strcpy(tasks[i].cwd, current_task_ptr->cwd);
             tasks[i].parent_pid = current_task_ptr->pid;
+            tasks[i].uid = current_task_ptr->uid;
+            tasks[i].euid = current_task_ptr->euid;
+            tasks[i].gid = current_task_ptr->gid;
+            tasks[i].egid = current_task_ptr->egid;
 
             void *kstack = vmalloc(KERNEL_STACK_SIZE);
             if (!kstack) {
