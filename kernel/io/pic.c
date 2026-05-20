@@ -19,14 +19,14 @@ void remap_pic(void) {
     outb(0xA1, 0xE7);
 
     while (inb(0x64) & 0x01) inb(0x60);
-    printf("PIC: Remapped PIC.\n");
+    printf("pic: remapped pic\n");
 }
 
 void disable_pic(void) {
     // Mask all IRQs on both PICs
     outb(0x21, 0xFF);
     outb(0xA1, 0xFF);
-    printf("PIC: Disabled PIC.\n");
+    printf("pic: disabled pic\n");
 }
 
 void eoi_pic(void) {

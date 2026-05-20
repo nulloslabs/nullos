@@ -62,5 +62,5 @@ void set_tss_kernel_stack(void *stack) {
 
 void init_gdt(void) {
     init_gdt_for_cpu(0);
-    printf("GDT: Initialized GDT.\n");
+    printf("gdt: initialized gdt\n");
 }

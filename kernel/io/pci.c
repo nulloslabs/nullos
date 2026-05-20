@@ -99,7 +99,7 @@ void set_pci_d0(pci_device_t *dev) {
 
     uint32_t pmcsr = read_pci(dev->bus, dev->dev, dev->func, cap + 4);
     if ((pmcsr & 0x03) != 0) {
-        printf("PCI: Transitioning %02x:%02x.%x from D%d to D0\n",
+        printf("pci: transitioning %02x:%02x.%x from d%d to d0\n",
                dev->bus, dev->dev, dev->func, pmcsr & 0x03);
         pmcsr &= ~0x03;
         write_pci(dev->bus, dev->dev, dev->func, cap + 4, pmcsr);
@@ -128,7 +128,7 @@ uint8_t pci_enable_msi(pci_device_t *dev) {
     if (!cap) return 0;
 
     if (next_msi_vector >= MSI_VECTOR_END) {
-        printf("PCI: out of MSI vectors\n");
+        printf("pci: out of msi vectors\n");
         return 0;
     }
     uint8_t vector = next_msi_vector++;
@@ -162,7 +162,7 @@ uint8_t pci_enable_msi(pci_device_t *dev) {
     // Mask legacy INTx so it never fires for this device again.
     pci_set_intx_disable(dev, 1);
 
-    printf("PCI: %02x:%02x.%x using MSI vector %d\n",
+    printf("pci: %02x:%02x.%x using msi vector %d\n",
            dev->bus, dev->dev, dev->func, vector);
     return vector;
 }
@@ -205,7 +205,7 @@ void init_pci(void) {
             }
         }
     }
-    printf("PCI: Initialized PCI.\n");
+    printf("pci: initialized pci\n");
 }
 
 void init_pci_drivers(void) {
@@ -215,15 +215,15 @@ void init_pci_drivers(void) {
         uint16_t device;
         void (*init)(pci_device_t*);
     } known_pci_drivers[] = {
-        {"AC97",    AC97_VENDOR,    AC97_DEVICE,    init_ac97},
-        {"RTL8139", RTL8139_VENDOR, RTL8139_DEVICE, init_rtl8139},
-        {"E1000",   E1000_VENDOR,   E1000_DEVICE,   init_e1000}
+        {"ac97",    AC97_VENDOR,    AC97_DEVICE,    init_ac97},
+        {"rtl8139", RTL8139_VENDOR, RTL8139_DEVICE, init_rtl8139},
+        {"e1000",   E1000_VENDOR,   E1000_DEVICE,   init_e1000}
     };
 
     for (int i = 0; i < (int)(sizeof(known_pci_drivers)/sizeof(known_pci_drivers[0])); i++) {
         pci_device_t *dev = find_pci(known_pci_drivers[i].vendor, known_pci_drivers[i].device);
         if (dev) {
-            printf("PCI: Found driver for %s.\n", known_pci_drivers[i].name);
+            printf("pci: found driver for %s\n", known_pci_drivers[i].name);
             known_pci_drivers[i].init(dev);
         }
     }
@@ -233,7 +233,7 @@ void init_pci_drivers(void) {
         uint8_t progif;
         void (*init)(pci_device_t*);
     } known_usb_drivers[] = {
-        {"UHCI", USB_PROGIF_UHCI, init_uhci},
+        {"uhci", USB_PROGIF_UHCI, init_uhci},
     };
 
     for (int i = 0; i < (int)(sizeof(known_usb_drivers)/sizeof(known_usb_drivers[0])); i++) {
@@ -241,10 +241,9 @@ void init_pci_drivers(void) {
             if (pci_devices[j].class == USB_PCI_CLASS &&
                 pci_devices[j].subclass == USB_PCI_SUBCLASS &&
                 pci_devices[j].progif == known_usb_drivers[i].progif) {
-                printf("PCI: Found %s USB controller.\n", known_usb_drivers[i].name);
+                printf("pci: found %s usb controller\n", known_usb_drivers[i].name);
                 known_usb_drivers[i].init(&pci_devices[j]);
             }
         }
     }
 }
-

@@ -21,5 +21,5 @@ void parse_madt(void) {
         }
         ptr += rec->length;
     }
-    printf("MADT: Parsed MADT.\n");
+    printf("madt: parsed madt\n");
 }

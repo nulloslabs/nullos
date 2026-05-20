@@ -196,5 +196,5 @@ void cache_machine_info(void) {
     get_total_ram();
     get_free_ram();
     get_used_ram();
-    printf("Machine Info: Cached machine info.\n");
+    printf("machine info: cached machine info\n");
 }

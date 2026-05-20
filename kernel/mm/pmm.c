@@ -78,5 +78,5 @@ void init_pmm(void) {
             }
         }
     }
-    printf("PMM: Initialized PMM.\n");
+    printf("pmm: initialized pmm\n");
 }

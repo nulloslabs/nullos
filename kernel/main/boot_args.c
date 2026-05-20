@@ -40,8 +40,8 @@ const char* get_arg_value(const char* args, const char* key) {
 void parse_boot_args(void) {
     const char *args = get_boot_args();
     if (!args) {
-        printf("Boot Arguments: Parsed boot arguments.\n");
+        printf("boot arguments: parsed boot arguments\n");
         return;
     }
-    printf("Boot Arguments: Parsed boot arguments.\n");
+    printf("boot arguments: parsed boot arguments\n");
 }

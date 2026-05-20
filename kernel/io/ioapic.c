@@ -42,5 +42,5 @@ void init_ioapic(void *base_addr) {
         ioapic_write(reg_lo, IOAPIC_INT_MASKED);
     }
 
-    printf("IOAPIC: Initialized IOAPIC.\n");
+    printf("ioapic: initialized ioapic\n");
 }

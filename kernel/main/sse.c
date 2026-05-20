@@ -6,12 +6,12 @@
 void init_sse(void) {
     // Check if SSE is available
     if (!cpu_has_feature(CPU_FEATURE_SSE)) {
-        panic("CPU dosen't support SSE.");
+        panic("cpu dosen't support sse");
     }
 
     // Check if SSE2 is available
     if (!cpu_has_feature(CPU_FEATURE_SSE2)) {
-        panic("CPU dosen't support SSE2.");
+        panic("cpu dosen't support sse2");
     }
 
     // Clear EM bit and set MP bit in CR0
@@ -30,5 +30,5 @@ void init_sse(void) {
         "mov %%rax, %%cr4\n"
         ::: "rax"
     );
-    printf("SSE: Enabled SSE.\n");
+    printf("sse: enabled sse\n");
 }

@@ -76,7 +76,7 @@ void kmain(void) {
     char *init_argv[] = { (char*)init_path, NULL };
     char *init_envp[] = { NULL };
     pid_t init = execute_elf(init_path, init_argv, init_envp);
-    if (init < 0) panic("Init process didn't run due to a error.");
+    if (init < 0) panic("init process didn't run due to a error");
 
     idle();
 }

@@ -990,7 +990,7 @@ void init_acpi(void) {
     parse_s5();
     init_aml();
     enumerate_acpi_devices();
-    printf("ACPI: Initialized ACPI.\n");
+    printf("acpi: initialized acpi\n");
 }
 
 void poweroff(void) {

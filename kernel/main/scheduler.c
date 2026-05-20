@@ -252,7 +252,7 @@ void exit_task(int status) {
     }
 
     if (current_task_ptr->pid == 1) {
-        panic("Init process exited.");
+        panic("init process exited");
     }
 
     sched_lock = 0;
@@ -269,5 +269,5 @@ void init_scheduler(void) {
     current_task = 0;
     current_task_ptr = &tasks[0];
 
-    printf("Scheduler: Initialized scheduler.\n");
+    printf("scheduler: initialized scheduler\n");
 }

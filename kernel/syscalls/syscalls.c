@@ -79,5 +79,5 @@ void init_syscalls(void) {
 
     write_msr(MSR_KERNEL_GS_BASE, (uint64_t)current_task_ptr);
 
-    printf("Syscalls: Initialized syscalls.\n");
+    printf("syscalls: initialized syscalls\n");
 }

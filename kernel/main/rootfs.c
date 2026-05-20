@@ -430,7 +430,7 @@ void init_rootfs(void) {
 
         uint8_t *decompressed = malloc(orig_size);
         if (!decompressed) {
-            panic("Memory allocation failed.");
+            panic("memory allocation failed");
             return;
         }
 
@@ -443,7 +443,7 @@ void init_rootfs(void) {
         tar_archive_start = decompressed;
         tar_decompressed = decompressed;
     } else {
-        panic("No module found.");
+        panic("no module found");
     }
-    printf("Rootfs: Initialized rootfs.\n");
+    printf("rootfs: initialized rootfs\n");
 }

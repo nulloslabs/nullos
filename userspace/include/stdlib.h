@@ -10,6 +10,10 @@ void *realloc(void *ptr, size_t size);
 void *calloc(size_t nmemb, size_t size);
 void free(void *ptr);
 
+// Exit family
+__attribute__((noreturn)) void _Exit(int status);
+__attribute__((noreturn)) void exit(int status);
+
 // Strto* family
 long strtol(const char *s, char **endptr, int base);
 unsigned long strtoul(const char *s, char **endptr, int base);

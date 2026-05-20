@@ -101,6 +101,5 @@ void init_idt(void) {
 #undef SET_MSI
 
     asm volatile("lidt %0" : : "m"(idtr));
-    printf("IDT: Initialized IDT.\n");
+    printf("idt: initialized idt\n");
 }
-

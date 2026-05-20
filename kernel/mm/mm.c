@@ -76,7 +76,7 @@ void free(void* ptr) {
 
 void init_mm(void) {
     if (hhdm_req.response == NULL)
-        panic("Didn't get HHDM response.");
+        panic("didn't get hhdm response");
 
     hhdm_offset = hhdm_req.response->offset;
     struct limine_memmap_response *memmap = mm_req.response;
@@ -90,10 +90,10 @@ void init_mm(void) {
             free_list_start->next = NULL;
             entry->base += 16 * 1024 * 1024;
             entry->length -= 16 * 1024 * 1024;
-            printf("MM: Initialized MM.\n");
+            printf("mm: initialized mm\n");
             return;
         }
     }
 
-    panic("No usable memory found for MM.");
+    panic("no usable memory found for mm");
 }

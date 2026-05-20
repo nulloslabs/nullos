@@ -137,7 +137,7 @@ bool resolve_arp(uint32_t ip, uint8_t mac_out[6]) {
         io_wait();
         if (i % 100000 == 0) printf(".");
     }
-    printf("\nARP: failed to resolve %d.%d.%d.%d\n",
+    printf("\narp: failed to resolve %d.%d.%d.%d\n",
         ip&0xFF,(ip>>8)&0xFF,(ip>>16)&0xFF,(ip>>24)&0xFF);
     return false;
 }
@@ -164,7 +164,7 @@ void handle_icmp_rx(const uint8_t *frame, uint16_t len) {
 
 bool ping_icmp(uint32_t dest_ip) {
     uint8_t gw_mac[6];
-    if (!resolve_arp(NET_GATEWAY_IP, gw_mac)) { printf("ICMP: ARP failed\n"); return false; }
+    if (!resolve_arp(NET_GATEWAY_IP, gw_mac)) { printf("icmp: arp failed\n"); return false; }
 
     icmp_ping_seq++;
     icmp_got_reply = false;
@@ -181,19 +181,19 @@ bool ping_icmp(uint32_t dest_ip) {
 
     ip_send(dest_ip, IP_PROTO_ICMP, icmp_buf, sizeof(icmp_buf));
 
-    printf("PING %d.%d.%d.%d seq=%d\n",
+    printf("ping %d.%d.%d.%d seq=%d\n",
         dest_ip&0xFF,(dest_ip>>8)&0xFF,(dest_ip>>16)&0xFF,(dest_ip>>24)&0xFF,icmp_ping_seq);
 
     for (int i = 0; i < 2000; i++) {
         rtl8139_poll();
         if (icmp_got_reply) {
-            printf("PONG from %d.%d.%d.%d seq=%d\n",
+            printf("pong from %d.%d.%d.%d seq=%d\n",
                 dest_ip&0xFF,(dest_ip>>8)&0xFF,(dest_ip>>16)&0xFF,(dest_ip>>24)&0xFF,icmp_ping_seq);
             return true;
         }
         sleep(1);
     }
-    printf("PING timeout\n");
+    printf("ping timeout\n");
     return false;
 }
 
@@ -330,9 +330,9 @@ uint32_t dns_resolve(const char *hostname) {
     dns_resolved_ip = 0;
     udp_callback    = dns_udp_rx;
 
-    printf("DNS: resolving %s...\n", hostname);
+    printf("dns: resolving %s\n", hostname);
     if (!udp_send(NET_DNS_IP, DNS_SRC_PORT, DNS_PORT, buf, (uint16_t)off)) {
-        printf("DNS: send failed\n");
+        printf("dns: send failed\n");
         udp_callback = NULL;
         return 0;
     }
@@ -341,14 +341,14 @@ uint32_t dns_resolve(const char *hostname) {
         rtl8139_poll();
         if (dns_got_reply) {
             uint32_t ip = dns_resolved_ip;
-            printf("DNS: %s = %d.%d.%d.%d\n", hostname,
+            printf("dns: %s = %d.%d.%d.%d\n", hostname,
                 ip&0xFF,(ip>>8)&0xFF,(ip>>16)&0xFF,(ip>>24)&0xFF);
             udp_callback = NULL;
             return ip;
         }
         sleep(1);
     }
-    printf("DNS: timeout\n");
+    printf("dns: timeout\n");
     udp_callback = NULL;
     return 0;
 }
@@ -550,7 +550,7 @@ tcp_socket_t *tcp_connect(uint32_t remote_ip, uint16_t remote_port) {
         sleep(1);
     }
 
-    printf("TCP: connect timeout to %d.%d.%d.%d:%d\n",
+    printf("tcp: connect timeout to %d.%d.%d.%d:%d\n",
         remote_ip&0xFF,(remote_ip>>8)&0xFF,
         (remote_ip>>16)&0xFF,(remote_ip>>24)&0xFF, remote_port);
     tcp_free(sock);

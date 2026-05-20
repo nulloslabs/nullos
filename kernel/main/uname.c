@@ -18,5 +18,5 @@ void cache_uname(void) {
     strcpy(uname_info.processor, "unknown");
     strcpy(uname_info.hardware_platform, "unknown");
     strcpy(uname_info.operating_system, "NullOS");
-    printf("Uname: Cached Uname.\n"); // Not my best init message, I know.
+    printf("uname: cached uname\n"); // Not my best init message, I know.
 }

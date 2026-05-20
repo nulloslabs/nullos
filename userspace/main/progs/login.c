@@ -5,6 +5,7 @@
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <stdlib.h>
 
 /* A simple unix-like login program. */
 
@@ -295,20 +296,37 @@ static void print_motd(void) {
     printf("%s", buf);
 }
 
+static void print_usage(void) {
+    printf("Usage for login:\n");
+    printf("  login [OPTIONS]\n\n");
+    printf("Options:\n");
+    printf("  --help: show help dialouge.\n");
+}
+
 int main(int argc, char **argv, char **envp) {
     char passwd_buf[4096]; 
     char shadow_buf[4096];
     char hostname[64];
 
+    if (argc > 1) {
+        if (strcmp(argv[1], "--help") == 0) {
+            print_usage();
+            return 0;
+        }
+
+        fprintf(stderr, "login: unknown argument: %s\n", argv[1]);
+        return 1;
+    }
+
     gethostname(hostname, sizeof(hostname));
 
     if (read_file("/etc/passwd", passwd_buf, sizeof(passwd_buf)) < 0) {
-        fprintf(stderr, "Login: Cannot read /etc/passwd\n");
+        fprintf(stderr, "login: cannot read /etc/passwd\n");
         return 1;
     }
 
     if (read_file("/etc/shadow", shadow_buf, sizeof(shadow_buf)) < 0) {
-        fprintf(stderr, "Login: Cannot read /etc/shadow\n");
+        fprintf(stderr, "login: cannot read /etc/shadow\n");
         return 1;
     }
 
@@ -396,7 +414,7 @@ int main(int argc, char **argv, char **envp) {
         // 4. Resolve target user shell configuration mapping
         passwd_user_t user_info;
         if (!get_passwd_user(passwd_buf, username, &user_info) || !user_info.shell[0]) {
-            fprintf(stderr, "\nLogin: no shell configured for %s\n\n", username);
+            fprintf(stderr, "\nlogin: no shell configured for %s\n\n", username);
             continue;
         }
 
@@ -407,14 +425,14 @@ int main(int argc, char **argv, char **envp) {
         pid_t pid = fork();
         if (pid == 0) {
             if (setgid(user_info.gid) < 0 || setuid(user_info.uid) < 0) {
-                perror("\nLogin: set credentials failed");
-                _exit(126);
+                perror("\nlogin: set credentials failed");
+                exit(126);
             }
 
             char *sh_argv[] = { user_info.shell, NULL };
             execve(user_info.shell, sh_argv, envp);
             perror("\nLogin: execve() failed");
-            _exit(127);
+            exit(127);
         }
 
         if (pid < 0) {

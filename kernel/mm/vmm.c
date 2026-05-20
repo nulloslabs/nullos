@@ -333,7 +333,7 @@ void init_vmm(void) {
     
     // Use Limine's existing page tables as kernel_context
     kernel_context.pml4 = (uint64_t*)phys_to_virt(current_cr3);
-    printf("VMM: Initialized VMM.\n");
+    printf("vmm: initialized vmm\n");
 }
 
 void* vmalloc_ex(vmm_context_t* ctx, size_t size, uint64_t flags) {

@@ -11,7 +11,7 @@ static uint32_t hpet_period = 0;
 
 void sleep(uint64_t ms) {
     if (!hpet_base || hpet_period == 0) {
-        panic("HPET isn't available.");
+        panic("hpet isn't available");
     }
     volatile uint64_t* hpet_main_counter = (volatile uint64_t*)(hpet_base + 0xF0);
     uint64_t ticks_to_wait = (ms * 1000000000000ULL) / hpet_period;
@@ -23,7 +23,7 @@ void sleep(uint64_t ms) {
 
 void sleep_us(uint64_t us) {
     if (!hpet_base || hpet_period == 0) {
-        panic("HPET isn't available.");
+        panic("hpet isn't available");
     }
     volatile uint64_t* hpet_main_counter = (volatile uint64_t*)(hpet_base + 0xF0);
     uint64_t ticks_to_wait = (us * 1000000000ULL) / hpet_period;
@@ -45,7 +45,7 @@ void init_hpet(void) {
     hpet_period = (uint32_t)(*hpet_capabilities >> 32);
     if (hpet_period == 0 || hpet_period > 100000000) { hpet_base = 0; return; }
     *hpet_config |= 1;
-    printf("HPET: Initialized HPET.\n");
+    printf("hpet: initialized hpet\n");
 }
 
 uint64_t read_hpet_counter(void) {

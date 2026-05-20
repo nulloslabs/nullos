@@ -51,7 +51,7 @@ void init_mp(void) {
         cpus[0].lapic_id = 0;
         cpus[0].current_task = 0;
         cpus[0].active = 1;
-        printf("MP: No APIC, running single CPU.\n");
+        printf("mp: no apic, running single cpu\n");
         return;
     }
 
@@ -100,12 +100,12 @@ void init_mp(void) {
     }
 
     if (ap_ready_count < expected) {
-        printf("MP: Warning: only %d/%d APs came online.\n", ap_ready_count, expected);
+        printf("mp: warning: only %d/%d aps came online\n", ap_ready_count, expected);
     } else {
         if (ap_ready_count > 0) {
-            printf("MP: All %d APs online.\n", ap_ready_count);
+            printf("mp: all %d aps online\n", ap_ready_count);
         } else {
-            printf("MP: No APs available.\n");
+            printf("mp: no aps available\n");
         }
     }
 }
