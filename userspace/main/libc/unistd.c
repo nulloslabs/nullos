@@ -207,10 +207,6 @@ int setegid(gid_t egid) {
     return (int)syscall(SYS_setegid, egid);
 }
 
-int kill(pid_t pid, int sig) {
-    return (int)syscall(SYS_kill, pid, sig);
-}
-
 int brk(void *addr) {
     return (int)syscall(SYS_brk, addr);
 }

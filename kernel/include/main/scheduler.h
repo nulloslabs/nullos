@@ -35,6 +35,7 @@ typedef struct {
 #define TASK_READY 1
 #define TASK_RUNNING 2
 #define TASK_ZOMBIE 3
+#define TASK_STOPPED 4
 
 extern task_t tasks[MAX_TASKS];
 extern int current_task;

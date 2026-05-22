@@ -17,6 +17,7 @@
 #include <main/hostname.h>
 #include <main/uname.h>
 #include <main/acpi.h>
+#include <main/signal.h>
 
 extern volatile int sched_lock;
 
@@ -764,10 +765,10 @@ void sys_brk(syscall_frame_t *frame) {
 void sys_waitpid(syscall_frame_t *frame) {
     pid_t pid = (pid_t)frame->rdi;
     int *wstatus = (int *)frame->rsi;
+    int options = (int)frame->rdx;
 
     while (1) {
         int found_child = 0;
-        int zombie_found = 0;
 
         for (int i = 0; i < MAX_TASKS; i++) {
             // Only care about children of the current task
@@ -797,6 +798,12 @@ void sys_waitpid(syscall_frame_t *frame) {
         // If we found no children at all, we can't wait
         if (!found_child) {
             frame->rax = -ECHILD;
+            return;
+        }
+
+        // WNOHANG: return 0 if no child has exited
+        if (options & 1) {
+            frame->rax = 0;
             return;
         }
 
@@ -998,8 +1005,7 @@ void sys_kill(syscall_frame_t *frame) {
         return;
     }
 
-    // sig 0 is usually used to check if a process exists
-    if (sig < 0) {
+    if (sig < 0 || sig > 10) {
         frame->rax = (uint64_t)-EINVAL;
         return;
     }
@@ -1012,7 +1018,7 @@ void sys_kill(syscall_frame_t *frame) {
                 return;
             }
 
-            if (pid == 1) {
+            if (pid == 1 && sig != 0) {
                 frame->rax = (uint64_t)-EPERM;
                 return;
             }
@@ -1022,27 +1028,49 @@ void sys_kill(syscall_frame_t *frame) {
                 return;
             }
 
-            // Standard Unix behavior: kill(pid, 9) terminates immediately.
-            // Since we don't have signals, we just terminate for any non-zero signal.
-            tasks[i].state = TASK_ZOMBIE;
-            tasks[i].exit_status = 128 + sig;
-
-            // Reparent children to init
-            for (int j = 1; j < MAX_TASKS; j++) {
-                if (tasks[j].state != TASK_DEAD && tasks[j].parent_pid == pid) {
-                    if (tasks[j].state == TASK_ZOMBIE) {
-                        tasks[j].state = TASK_DEAD;
-                    } else {
-                        tasks[j].parent_pid = 1;
+            switch (sig) {
+                case SIGSTOP:
+                case SIGTSTP:
+                    if (tasks[i].state == TASK_RUNNING || tasks[i].state == TASK_READY) {
+                        tasks[i].state = TASK_STOPPED;
+                        if (pid == current_task_ptr->pid) {
+                            asm volatile("int $32");
+                        }
                     }
-                }
-            }
+                    break;
+                case SIGCONT:
+                    if (tasks[i].state == TASK_STOPPED) {
+                        tasks[i].state = TASK_READY;
+                    }
+                    break;
+                default:
+                    // SIGKILL, SIGSEGV, SIGINT, SIGTERM, SIGABRT, SIGILL, SIGHUP
+                    if (pid == current_task_ptr->pid) {
+                        exit_task(128 + sig);
+                        // exit_task does not return
+                    }
 
-            // Close file descriptors
-            for (int j = 0; j < FD_MAX; j++) {
-                if (tasks[i].fd_table.entries[j].open) {
-                    free_fd(&tasks[i].fd_table, j);
-                }
+                    tasks[i].state = TASK_ZOMBIE;
+                    tasks[i].exit_status = 128 + sig;
+
+                    // Reparent children to init
+                    for (int j = 1; j < MAX_TASKS; j++) {
+                        if (tasks[j].state != TASK_DEAD && tasks[j].parent_pid == pid) {
+                            if (tasks[j].state == TASK_ZOMBIE) {
+                                tasks[j].state = TASK_DEAD;
+                            } else {
+                                tasks[j].parent_pid = 1;
+                            }
+                        }
+                    }
+
+                    // Close file descriptors
+                    for (int j = 0; j < FD_MAX; j++) {
+                        if (tasks[i].fd_table.entries[j].open) {
+                            free_fd(&tasks[i].fd_table, j);
+                        }
+                    }
+                    break;
             }
 
             frame->rax = 0;

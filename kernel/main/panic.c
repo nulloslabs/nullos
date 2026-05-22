@@ -4,6 +4,7 @@
 #include <main/panic.h>
 #include <main/halt.h>
 #include <main/scheduler.h>
+#include <main/signal.h>
 #include <mm/vmm.h>
 
 void panic(const char *reason) {
@@ -13,8 +14,8 @@ void panic(const char *reason) {
     asm volatile("mov %%rsp, %0" : "=r"(rsp));
     printf("kernel panic: %s\n", reason);
     printf("\nregisters:\n");
-    printf(" rip: 0x%llX\n", rip);
-    printf(" rsp: 0x%llX\n", rsp);
+    printf(" rip: %p\n", rip);
+    printf(" rsp: %p\n", rsp);
     halt();
 }
 
@@ -36,26 +37,12 @@ void exception_panic(uint64_t vector, uint64_t error_code, uint64_t rip, uint64_
 
     // Check if the fault came from user mode (Ring 3)
     if ((cs & 3) != 0) {
-        printf("userspace fault (pid %d): %s\n", current_task_ptr->pid, reason);
-        printf(" vector: %llu  error: 0x%llX\n", vector, error_code);
-        printf(" rip: 0x%llX  rsp: 0x%llX\n", rip, rsp);
-
-        // Dump bytes at faulting RIP to see what the CPU actually executed
-        if (current_task_ptr && current_task_ptr->ctx) {
-            uint8_t code[16];
-            read_vmm(current_task_ptr->ctx, code, rip, 16);
-            printf("code: ");
-            for (int i = 0; i < 16; i++) printf("%02x ", code[i]);
-            printf("\n");
-        }
-        if (vector == 14) {
-            uint64_t cr2;
-            asm volatile("mov %%cr2, %0" : "=r"(cr2));
-            printf(" cr2: 0x%llX\n", cr2);
-        }
-
+        printf("userspace fault: %s\n", current_task_ptr->pid, reason);
+        printf("\nregisters:\n");
+        printf(" rip: %p\n", rip);
+        printf(" rsp: %p\n", rsp);
         sti();
-        exit_task(128 + 11);
+        exit_task(128 + SIGSEGV);
         __builtin_unreachable();
     }
 
@@ -63,7 +50,7 @@ void exception_panic(uint64_t vector, uint64_t error_code, uint64_t rip, uint64_
     cli();
     printf("kernel panic: %s\n", reason);
     printf("\nregisters:\n");
-    printf(" rip: 0x%llX\n", rip);
-    printf(" rsp: 0x%llX\n", rsp);
+    printf(" rip: %p\n", rip);
+    printf(" rsp: %p\n", rsp);
     halt();
 }
