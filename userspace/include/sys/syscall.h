@@ -31,3 +31,6 @@
 #define SYS_getegid 28
 #define SYS_setuid 29
 #define SYS_setgid 30
+#define SYS_seteuid 31
+#define SYS_setegid 32
+#define SYS_kill 33

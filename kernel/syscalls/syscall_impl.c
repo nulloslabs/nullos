@@ -952,3 +952,103 @@ void sys_setgid(syscall_frame_t *frame) {
 
     frame->rax = (uint64_t)-EPERM;
 }
+
+void sys_seteuid(syscall_frame_t *frame) {
+    uid_t euid = (uid_t)frame->rdi;
+
+    if (is_superuser()) {
+        current_task_ptr->euid = euid;
+        frame->rax = 0;
+        return;
+    }
+
+    if (euid == current_task_ptr->uid || euid == current_task_ptr->euid) {
+        current_task_ptr->euid = euid;
+        frame->rax = 0;
+        return;
+    }
+
+    frame->rax = (uint64_t)-EPERM;
+}
+
+void sys_setegid(syscall_frame_t *frame) {
+    gid_t egid = (gid_t)frame->rdi;
+
+    if (is_superuser()) {
+        current_task_ptr->egid = egid;
+        frame->rax = 0;
+        return;
+    }
+
+    if (egid == current_task_ptr->gid || egid == current_task_ptr->egid) {
+        current_task_ptr->egid = egid;
+        frame->rax = 0;
+        return;
+    }
+
+    frame->rax = (uint64_t)-EPERM;
+}
+
+void sys_kill(syscall_frame_t *frame) {
+    pid_t pid = (pid_t)frame->rdi;
+    int sig = (int)frame->rsi;
+
+    if (pid <= 0) {
+        frame->rax = (uint64_t)-EINVAL;
+        return;
+    }
+
+    // sig 0 is usually used to check if a process exists
+    if (sig < 0) {
+        frame->rax = (uint64_t)-EINVAL;
+        return;
+    }
+
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (tasks[i].state != TASK_DEAD && tasks[i].pid == pid) {
+            // Permission check: root or same UID
+            if (!is_superuser() && current_task_ptr->uid != tasks[i].uid) {
+                frame->rax = (uint64_t)-EPERM;
+                return;
+            }
+
+            if (pid == 1) {
+                frame->rax = (uint64_t)-EPERM;
+                return;
+            }
+
+            if (sig == 0) {
+                frame->rax = 0;
+                return;
+            }
+
+            // Standard Unix behavior: kill(pid, 9) terminates immediately.
+            // Since we don't have signals, we just terminate for any non-zero signal.
+            tasks[i].state = TASK_ZOMBIE;
+            tasks[i].exit_status = 128 + sig;
+
+            // Reparent children to init
+            for (int j = 1; j < MAX_TASKS; j++) {
+                if (tasks[j].state != TASK_DEAD && tasks[j].parent_pid == pid) {
+                    if (tasks[j].state == TASK_ZOMBIE) {
+                        tasks[j].state = TASK_DEAD;
+                    } else {
+                        tasks[j].parent_pid = 1;
+                    }
+                }
+            }
+
+            // Close file descriptors
+            for (int j = 0; j < FD_MAX; j++) {
+                if (tasks[i].fd_table.entries[j].open) {
+                    free_fd(&tasks[i].fd_table, j);
+                }
+            }
+
+            frame->rax = 0;
+            return;
+        }
+    }
+
+    frame->rax = (uint64_t)-ESRCH;
+}

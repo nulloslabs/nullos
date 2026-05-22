@@ -19,5 +19,6 @@
 #define ERANGE 17
 #define ECHILD 18
 #define ESPIPE 19
+#define ESRCH 20
 
 extern int errno;

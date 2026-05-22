@@ -218,7 +218,7 @@ char* strrchr(const char* s, int c) {
 
 char *strerror(int errnum) {
     switch (errnum) {
-        case 0: return "Success"; // Not a error, just return "Success"
+        case 0: return "Success"; // Not an error, just return "Success"
         case EINVAL: return "Invalid argument";
         case ENAMETOOLONG: return "File name too long";
         case ENOMEM: return "Out of memory";
@@ -237,6 +237,8 @@ char *strerror(int errnum) {
         case ELIBACC: return "Cannot access a needed shared library";
         case ERANGE: return "Result too large";
         case ECHILD: return "No child processes";
+        case ESPIPE: return "Illegal seek";
+        case ESRCH: return "No such process";
         default: return "Unknown error";
     }
 }

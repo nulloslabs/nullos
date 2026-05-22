@@ -34,18 +34,6 @@ static uint64_t zero_write(const void* buf, uint64_t count, uint64_t offset) {
     return count;
 }
 
-void init_devfs(void) {
-    for (int i = 0; i < MAX_DEVFS_DEVICES; i++) {
-        devfs_devices[i].active = false;
-        devfs_devices[i].name[0] = '\0';
-        devfs_devices[i].read = NULL;
-        devfs_devices[i].write = NULL;
-    }
-
-    register_devfs_device("null", null_read, null_write);
-    register_devfs_device("zero", zero_read, zero_write);
-}
-
 int register_devfs_device(const char* name, 
     uint64_t (*read_fn)(void*, uint64_t, uint64_t), 
     uint64_t (*write_fn)(const void*, uint64_t, uint64_t)) 
@@ -120,4 +108,17 @@ const char *devfs_get_device_name(int index) {
         count++;
     }
     return NULL;
+}
+
+void init_devfs(void) {
+    for (int i = 0; i < MAX_DEVFS_DEVICES; i++) {
+        devfs_devices[i].active = false;
+        devfs_devices[i].name[0] = '\0';
+        devfs_devices[i].read = NULL;
+        devfs_devices[i].write = NULL;
+    }
+
+    register_devfs_device("null", null_read, null_write);
+    register_devfs_device("zero", zero_read, zero_write);
+    printf("devfs: initialized devfs\n");
 }

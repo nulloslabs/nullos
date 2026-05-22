@@ -35,6 +35,9 @@ void sys_geteuid(syscall_frame_t *frame);
 void sys_getegid(syscall_frame_t *frame);
 void sys_setuid(syscall_frame_t *frame);
 void sys_setgid(syscall_frame_t *frame);
+void sys_seteuid(syscall_frame_t *frame);
+void sys_setegid(syscall_frame_t *frame);
+void sys_kill(syscall_frame_t *frame);
 
 // Some public helpers
 bool is_mounted_under(const char* path, const char* fstype, char* relative_out);

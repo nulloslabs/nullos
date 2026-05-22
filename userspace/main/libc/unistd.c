@@ -199,6 +199,18 @@ int setgid(gid_t gid) {
     return (int)syscall(SYS_setgid, gid);
 }
 
+int seteuid(uid_t euid) {
+    return (int)syscall(SYS_seteuid, euid);
+}
+
+int setegid(gid_t egid) {
+    return (int)syscall(SYS_setegid, egid);
+}
+
+int kill(pid_t pid, int sig) {
+    return (int)syscall(SYS_kill, pid, sig);
+}
+
 int brk(void *addr) {
     return (int)syscall(SYS_brk, addr);
 }
