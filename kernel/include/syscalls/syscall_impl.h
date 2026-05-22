@@ -6,9 +6,16 @@
 // Actual implementations
 void sys_exit(syscall_frame_t *frame);
 void sys_open(syscall_frame_t *frame);
+void sys_openat(syscall_frame_t *frame);
 void sys_close(syscall_frame_t *frame);
 void sys_read(syscall_frame_t *frame);
 void sys_write(syscall_frame_t *frame);
+void sys_stat(syscall_frame_t *frame);
+void sys_fstat(syscall_frame_t *frame);
+void sys_chmod(syscall_frame_t *frame);
+void sys_fchmod(syscall_frame_t *frame);
+void sys_fchmodat(syscall_frame_t *frame);
+void sys_nanosleep(syscall_frame_t *frame);
 void sys_mount(syscall_frame_t *frame);
 void sys_umount(syscall_frame_t *frame);
 void sys_fork(syscall_frame_t *frame);
@@ -38,6 +45,7 @@ void sys_setgid(syscall_frame_t *frame);
 void sys_seteuid(syscall_frame_t *frame);
 void sys_setegid(syscall_frame_t *frame);
 void sys_kill(syscall_frame_t *frame);
+void sys_nanosleep(syscall_frame_t *frame);
 
 // Some public helpers
 bool is_mounted_under(const char* path, const char* fstype, char* relative_out);

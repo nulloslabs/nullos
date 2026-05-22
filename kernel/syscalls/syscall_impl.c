@@ -1,3 +1,6 @@
+#include <freestanding/fcntl.h>
+#include <freestanding/sys/stat.h>
+#include <freestanding/time.h>
 #include <syscalls/syscalls.h>
 #include <main/fd.h>
 #include <main/rootfs.h>
@@ -9,7 +12,6 @@
 #include <mm/mm.h>
 #include <mm/vmm.h>
 #include <mm/pmm.h>
-#include <freestanding/fcntl.h>
 #include <main/devfs.h>
 #include <main/spinlock.h>
 #include <main/elf.h>
@@ -18,6 +20,7 @@
 #include <main/uname.h>
 #include <main/acpi.h>
 #include <main/signal.h>
+#include <io/hpet.h>
 
 extern volatile int sched_lock;
 
@@ -89,7 +92,7 @@ static int require_superuser(void) {
 
 static bool can_access_rootfs(const rootfs_file_t *file, int want_read, int want_write, int want_exec) {
     if (!file) return false;
-    if (is_superuser()) return true;
+    if (current_task_ptr && current_task_ptr->euid == 0) return true;
 
     int shift = 0;
     if (current_task_ptr->euid == file->uid) {
@@ -249,6 +252,85 @@ void sys_open(syscall_frame_t *frame) {
 
     int fd = alloc_fd(&current_task_ptr->fd_table, path, FD_FILE, flags);
     frame->rax = (uint64_t)fd;
+}
+
+void sys_openat(syscall_frame_t *frame) {
+    // For now, implement as a wrapper; AT_FDCWD is expected.
+    // We ignore the directory fd and just use open.
+    sys_open(frame);
+}
+
+void sys_stat(syscall_frame_t *frame) {
+    const char *path = (const char *)frame->rdi;
+    struct stat *st = (struct stat *)frame->rsi;
+
+    if (!path || !st) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    rootfs_file_t file = read_rootfs(path);
+    if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
+
+    struct stat kst = {0};
+    kst.st_mode = file.mode;
+    kst.st_uid = file.uid;
+    kst.st_gid = file.gid;
+    kst.st_size = file.size;
+
+    write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
+    frame->rax = 0;
+}
+
+void sys_fstat(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    struct stat *st = (struct stat *)frame->rsi;
+
+    if (!st) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+
+    if (entry->type == FD_FILE) {
+        rootfs_file_t file = read_rootfs(entry->path);
+        struct stat kst = {0};
+        kst.st_mode = file.mode;
+        kst.st_uid = file.uid;
+        kst.st_gid = file.gid;
+        kst.st_size = file.size;
+        write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
+        frame->rax = 0;
+        return;
+    }
+    frame->rax = (uint64_t)-EBADF;
+}
+
+void sys_chmod(syscall_frame_t *frame) {
+    const char *path = (const char *)frame->rdi;
+    mode_t mode = (mode_t)frame->rsi;
+    if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
+    
+    frame->rax = (uint64_t)chmod_rootfs(path, mode);
+}
+
+void sys_fchmod(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    mode_t mode = (mode_t)frame->rsi;
+    
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+
+    frame->rax = (uint64_t)chmod_rootfs(entry->path, mode);
+}
+
+void sys_fchmodat(syscall_frame_t *frame) {
+    int dirfd = (int)frame->rdi;
+    const char *path = (const char *)frame->rsi;
+    mode_t mode = (mode_t)frame->rdx;
+    int flags = (int)frame->r10;
+
+    (void)dirfd; (void)flags; // Not fully implemented yet
+
+    if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    frame->rax = (uint64_t)chmod_rootfs(path, mode);
 }
 
 void sys_close(syscall_frame_t *frame) {
@@ -1079,4 +1161,23 @@ void sys_kill(syscall_frame_t *frame) {
     }
 
     frame->rax = (uint64_t)-ESRCH;
+}
+
+void sys_nanosleep(syscall_frame_t *frame) {
+    struct timespec *req = (struct timespec *)frame->rdi;
+    struct timespec *rem = (struct timespec *)frame->rsi;
+    if (!req) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    struct timespec ts;
+    read_vmm(current_task_ptr->ctx, &ts, (uint64_t)req, sizeof(struct timespec));
+
+    uint64_t total_us = (ts.tv_sec * 1000000) + (ts.tv_nsec / 1000);
+    sleep_us(total_us);
+
+    if (rem) {
+        struct timespec zero_ts = {0, 0};
+        write_vmm(current_task_ptr->ctx, (uint64_t)rem, &zero_ts, sizeof(struct timespec));
+    }
+    
+    frame->rax = 0;
 }

@@ -28,9 +28,15 @@ void syscall_dispatch(syscall_frame_t *frame) {
     switch (frame->rax) {
         case SYS_exit: sys_exit(frame); break;
         case SYS_open: sys_open(frame); break;
+        case SYS_openat: sys_openat(frame); break;
         case SYS_close: sys_close(frame); break;
         case SYS_read: sys_read(frame); break;
         case SYS_write: sys_write(frame); break;
+        case SYS_stat: sys_stat(frame); break;
+        case SYS_fstat: sys_fstat(frame); break;
+        case SYS_chmod: sys_chmod(frame); break;
+        case SYS_fchmod: sys_fchmod(frame); break;
+        case SYS_fchmodat: sys_fchmodat(frame); break;
         case SYS_mount: sys_mount(frame); break;
         case SYS_umount: sys_umount(frame); break;
         case SYS_fork: sys_fork(frame); break;
@@ -60,6 +66,7 @@ void syscall_dispatch(syscall_frame_t *frame) {
         case SYS_seteuid: sys_seteuid(frame); break;
         case SYS_setegid: sys_setegid(frame); break;
         case SYS_kill: sys_kill(frame); break;
+        case SYS_nanosleep: sys_nanosleep(frame); break;
         default:
             frame->rax = (uint64_t)-ENOSYS;
             break;

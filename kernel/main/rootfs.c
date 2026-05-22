@@ -375,6 +375,23 @@ int mkdir_rootfs(const char *path, mode_t mode, uid_t uid, gid_t gid) {
     return 0;
 }
 
+int chmod_rootfs(const char *path, mode_t mode) {
+    char abs_path[256];
+    get_absolute_path(path, abs_path, sizeof(abs_path));
+    char norm[256];
+    normalize_path(abs_path, norm, sizeof(norm));
+
+    rootfs_file_t file = read_rootfs(path);
+    if (!file.mode) return -ENOENT;
+
+    // Preserve original file/dir status (S_IFDIR)
+    mode_t type_bits = (file.mode & 0xF000);
+    mode_t new_mode = (mode & 0777) | type_bits;
+
+    add_modified_file(norm, file.data, file.size, new_mode, file.uid, file.gid);
+    return 0;
+}
+
 int get_rootfs_entry(int index, directory_entry_t *entry) {
     if (!tar_archive_start || !entry) return -1;
 
