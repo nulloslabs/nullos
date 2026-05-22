@@ -1,4 +1,5 @@
 #include <main/devfs.h>
+#include <io/terminal.h>
 #include <main/string.h>
 #include <main/errno.h>
 
