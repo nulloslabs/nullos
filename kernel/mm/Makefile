@@ -12,17 +12,17 @@ OBJ = $(SRC:.c=.o)
 OBJ := $(OBJ:.S=.o)
 DEP := $(OBJ:.o=.d)
 
-all: $(OBJ) ../config.mk
+all: $(OBJ)
 
 -include $(DEP)
 
 vmm.o: mm.o
 
-%.o: %.c ../config.mk ../include/limine/limine.h
+%.o: %.c ../Makefile ../config.mk ../include/limine/limine.h
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/mm/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
-%.o: %.S ../config.mk ../include/limine/limine.h
+%.o: %.S ../Makefile ../config.mk ../include/limine/limine.h
 	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/mm/$@"
 	@$(AS) $(AFLAGS) -c $< -o $@
 
