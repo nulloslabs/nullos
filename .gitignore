@@ -11,6 +11,7 @@ tools/limine/
 kernel/include/limine/
 
 userspace/**/*
+!userspace/**/
 !userspace/**/*.c
 !userspace/**/*.h
 !userspace/**/*.S
