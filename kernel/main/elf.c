@@ -231,7 +231,7 @@ static int load_shared_library(const char *soname, vmm_context_t *ctx) {
 }
 
 static uint64_t setup_stack(vmm_context_t *ctx, uint64_t v_rsp,
-                             char **argv, char **envp) {
+                             char **argv, char **envp, elf64_auxv_t *auxv) {
     // Count argv and envp
     int argc = 0;
     if (argv) while (argv[argc]) argc++;
@@ -261,6 +261,15 @@ static uint64_t setup_stack(vmm_context_t *ctx, uint64_t v_rsp,
     }
 
     v_rsp &= ~0xFULL;
+
+    // Push auxv (terminated by AT_NULL)
+    if (auxv) {
+        int auxc = 0;
+        while (auxv[auxc].type != AT_NULL) auxc++;
+        auxc++; // include AT_NULL
+        v_rsp -= auxc * sizeof(elf64_auxv_t);
+        write_vmm(ctx, v_rsp, auxv, auxc * sizeof(elf64_auxv_t));
+    }
 
     uint64_t zero = 0;
 
@@ -386,11 +395,53 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
 
     uint64_t base_addr = (ehdr->type == ET_DYN) ? 0x100000000ULL : 0;
     elf64_dyn_t *dynamic = NULL;
+    const char *interp_path = NULL;
+
+    elf64_phdr_t *phdrs = (elf64_phdr_t *)(data + ehdr->phoff);
+    for (int i = 0; i < ehdr->phnum; i++) {
+        if (phdrs[i].type == PT_INTERP) {
+            interp_path = (const char *)(data + phdrs[i].offset);
+        }
+    }
 
     load_elf_segments(ctx, data, ehdr, base_addr, &dynamic);
 
     int ret = load_dependencies_and_relocate(ctx, dynamic, base_addr);
     if (ret < 0) return ret;
+
+    uint64_t phdr_addr = 0;
+    for (int i = 0; i < ehdr->phnum; i++) {
+        if (phdrs[i].type == PT_LOAD && phdrs[i].offset == 0) {
+            phdr_addr = base_addr + phdrs[i].vaddr + ehdr->phoff;
+            break;
+        }
+    }
+
+    uint64_t entry = ehdr->entry + base_addr;
+    uint64_t interp_base = 0;
+
+    if (interp_path) {
+        rootfs_file_t ifile = read_rootfs(interp_path);
+        if (ifile.data) {
+            uint8_t *idata = (uint8_t *)ifile.data;
+            elf64_ehdr_t *iehdr = (elf64_ehdr_t *)idata;
+            interp_base = 0x5000000000ULL;
+            elf64_dyn_t *idynamic = NULL;
+            load_elf_segments(ctx, idata, iehdr, interp_base, &idynamic);
+            load_dependencies_and_relocate(ctx, idynamic, interp_base);
+            entry = iehdr->entry + interp_base;
+        }
+    }
+
+    elf64_auxv_t auxv[10];
+    int a = 0;
+    auxv[a++] = (elf64_auxv_t){AT_PHDR, {.val = phdr_addr}};
+    auxv[a++] = (elf64_auxv_t){AT_PHNUM, {.val = ehdr->phnum}};
+    auxv[a++] = (elf64_auxv_t){AT_PHENT, {.val = ehdr->phentsize}};
+    auxv[a++] = (elf64_auxv_t){AT_ENTRY, {.val = ehdr->entry + base_addr}};
+    auxv[a++] = (elf64_auxv_t){AT_BASE, {.val = interp_base}};
+    auxv[a++] = (elf64_auxv_t){AT_PAGESZ, {.val = 4096}};
+    auxv[a++] = (elf64_auxv_t){AT_NULL, {.val = 0}};
 
     void *stack = vmalloc_user_ex(ctx, USER_STACK_SIZE);
     if (!stack) return -ENOMEM;
@@ -398,12 +449,10 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
     char *empty_envp[] = { NULL };
     char **actual_envp = envp ? envp : empty_envp;
 
-    uint64_t v_rsp = setup_stack(ctx, (uint64_t)stack + USER_STACK_SIZE - 8, argv, actual_envp);
-    uint64_t entry = ehdr->entry + base_addr;
+    uint64_t v_rsp = setup_stack(ctx, (uint64_t)stack + USER_STACK_SIZE - 8, argv, actual_envp, auxv);
 
     // Find highest loaded address
     uint64_t heap_start = 0;
-    elf64_phdr_t *phdrs = (elf64_phdr_t *)(data + ehdr->phoff);
     for (int i = 0; i < ehdr->phnum; i++) {
         if (phdrs[i].type == PT_LOAD) {
             uint64_t end = base_addr + phdrs[i].vaddr + phdrs[i].memsz;
@@ -448,11 +497,53 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
 
     uint64_t base_addr = (ehdr->type == ET_DYN) ? 0x100000000ULL : 0;
     elf64_dyn_t *dynamic = NULL;
+    const char *interp_path = NULL;
+
+    elf64_phdr_t *phdrs = (elf64_phdr_t *)(data + ehdr->phoff);
+    for (int i = 0; i < ehdr->phnum; i++) {
+        if (phdrs[i].type == PT_INTERP) {
+            interp_path = (const char *)(data + phdrs[i].offset);
+        }
+    }
 
     load_elf_segments(ctx, data, ehdr, base_addr, &dynamic);
 
     int ret = load_dependencies_and_relocate(ctx, dynamic, base_addr);
     if (ret < 0) return ret;
+
+    uint64_t phdr_addr = 0;
+    for (int i = 0; i < ehdr->phnum; i++) {
+        if (phdrs[i].type == PT_LOAD && phdrs[i].offset == 0) {
+            phdr_addr = base_addr + phdrs[i].vaddr + ehdr->phoff;
+            break;
+        }
+    }
+
+    uint64_t entry = ehdr->entry + base_addr;
+    uint64_t interp_base = 0;
+
+    if (interp_path) {
+        rootfs_file_t ifile = read_rootfs(interp_path);
+        if (ifile.data) {
+            uint8_t *idata = (uint8_t *)ifile.data;
+            elf64_ehdr_t *iehdr = (elf64_ehdr_t *)idata;
+            interp_base = 0x5000000000ULL;
+            elf64_dyn_t *idynamic = NULL;
+            load_elf_segments(ctx, idata, iehdr, interp_base, &idynamic);
+            load_dependencies_and_relocate(ctx, idynamic, interp_base);
+            entry = iehdr->entry + interp_base;
+        }
+    }
+
+    elf64_auxv_t auxv[10];
+    int a = 0;
+    auxv[a++] = (elf64_auxv_t){AT_PHDR, {.val = phdr_addr}};
+    auxv[a++] = (elf64_auxv_t){AT_PHNUM, {.val = ehdr->phnum}};
+    auxv[a++] = (elf64_auxv_t){AT_PHENT, {.val = ehdr->phentsize}};
+    auxv[a++] = (elf64_auxv_t){AT_ENTRY, {.val = ehdr->entry + base_addr}};
+    auxv[a++] = (elf64_auxv_t){AT_BASE, {.val = interp_base}};
+    auxv[a++] = (elf64_auxv_t){AT_PAGESZ, {.val = 4096}};
+    auxv[a++] = (elf64_auxv_t){AT_NULL, {.val = 0}};
 
     void *stack = vmalloc_user_ex(ctx, USER_STACK_SIZE);
     if (!stack) return -ENOMEM;
@@ -460,12 +551,10 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     char *empty_envp[] = { NULL };
     char **actual_envp = (envp) ? envp : empty_envp;
 
-    uint64_t v_rsp = setup_stack(ctx, (uint64_t)stack + USER_STACK_SIZE - 8, argv, actual_envp);
-    uint64_t entry = ehdr->entry + base_addr;
+    uint64_t v_rsp = setup_stack(ctx, (uint64_t)stack + USER_STACK_SIZE - 8, argv, actual_envp, auxv);
 
     // Find highest loaded address
     uint64_t heap_start = 0;
-    elf64_phdr_t *phdrs = (elf64_phdr_t *)(data + ehdr->phoff);
     for (int i = 0; i < ehdr->phnum; i++) {
         if (phdrs[i].type == PT_LOAD) {
             uint64_t end = base_addr + phdrs[i].vaddr + phdrs[i].memsz;

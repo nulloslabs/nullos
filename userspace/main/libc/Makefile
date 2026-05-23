@@ -9,6 +9,7 @@ endif
 
 include ../../config.mk
 
+# Look at this mess.
 SRC = $(wildcard *.c) $(wildcard *.S)
 OBJ = $(SRC:.c=.o)
 OBJ := $(OBJ:.S=.o)
@@ -51,7 +52,6 @@ libc: $(OBJ)
 clean:
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/libc.so $(SUBDIR)/libc.a $(SUBDIR)/main/libc/*.o $(SUBDIR)/main/libc/*.d"
 	@rm -rf ../../libc.so ../../libc.a $(OBJ) $(DEP)
-
 mrproper: clean
 
 .PHONY: all libc clean mrproper
