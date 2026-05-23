@@ -37,7 +37,7 @@ void exception_panic(uint64_t vector, uint64_t error_code, uint64_t rip, uint64_
 
     // Check if the fault came from user mode (Ring 3)
     if ((cs & 3) != 0) {
-        printf("userspace fault: %s\n", current_task_ptr->pid, reason);
+        printf("userspace fault (pid %d): %s\n", current_task_ptr->pid, reason);
         printf("\nregisters:\n");
         printf(" rip: %p\n", rip);
         printf(" rsp: %p\n", rsp);
