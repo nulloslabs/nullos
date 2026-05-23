@@ -31,7 +31,7 @@ progs: $(PROGS:=.o)
 
 # Inline execution blueprint for each application target
 define PROG_rule
-../../$(1): $(1).o ../../crt0.o ../../libc.a
+../../$(1): $(1).o ../../crt0.o ../../libc.so ../../libc.a
 	@printf "  %-7s %s\n" "LD" "$(SUBDIR)/$(1)"
 	$(LD) $(LDFLAGS) ../../crt0.o $$< -o $$@ -Wl,--no-dynamic-linker -l:libc.so
 	@printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/$(1)"
@@ -45,8 +45,8 @@ $(foreach p,$(PROGS),$(eval $(call PROG_rule,$(p))))
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	@printf "  %-7s %s\n" "CLEAN" "$(foreach p,$(PROGS),$(SUBDIR)/$(p) $(SUBDIR)/main/progs/*.o"
-	@rm -f *.o $(foreach p,$(PROGS),../../$(p))
+	@printf "  %-7s %s\n" "CLEAN" "$(foreach p,$(PROGS),$(SUBDIR)/$(p)) $(SUBDIR)/main/progs/*.o $(SUBDIR)/main/progs/*.d"
+	@rm -f $(foreach p,$(PROGS),../../$(p)) *.o *.d
 
 mrproper: clean
 .PHONY: all clean mrproper progs
