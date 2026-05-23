@@ -1,10 +1,10 @@
-#include <freestanding/stddef.h>
 #include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/signal.h>
 #include <io/terminal.h>
 #include <main/panic.h>
 #include <main/halt.h>
 #include <main/scheduler.h>
-#include <main/signal.h>
 #include <mm/vmm.h>
 
 void panic(const char *reason) {

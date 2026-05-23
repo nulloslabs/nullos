@@ -38,6 +38,7 @@
 #define SYS_setgid 106
 #define SYS_geteuid 107
 #define SYS_getegid 108
+#define SYS_arch_prctl 158
 #define SYS_sethostname 170
 #define SYS_gethostname 175
 #define SYS_mount 165

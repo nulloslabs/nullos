@@ -44,6 +44,7 @@ void sys_setuid(syscall_frame_t *frame);
 void sys_setgid(syscall_frame_t *frame);
 void sys_seteuid(syscall_frame_t *frame);
 void sys_setegid(syscall_frame_t *frame);
+void sys_arch_prctl(syscall_frame_t *frame);
 void sys_kill(syscall_frame_t *frame);
 void sys_nanosleep(syscall_frame_t *frame);
 

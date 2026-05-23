@@ -1,6 +1,12 @@
+#include <freestanding/stdint.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/stddef.h>
+#include <freestanding/signal.h>
 #include <freestanding/fcntl.h>
+#include <freestanding/sys/ioctl.h>
 #include <freestanding/sys/stat.h>
 #include <freestanding/time.h>
+#include <freestanding/wait.h>
 #include <syscalls/syscalls.h>
 #include <main/fd.h>
 #include <main/rootfs.h>
@@ -19,12 +25,9 @@
 #include <main/hostname.h>
 #include <main/uname.h>
 #include <main/acpi.h>
-#include <main/signal.h>
 #include <io/hpet.h>
 
 extern volatile int sched_lock;
-
-/* We put every variable/struct in here instead of the header. */
 
 static char stdin_buf[256];
 static int stdin_buf_len = 0;
@@ -40,18 +43,6 @@ typedef struct {
 static mount_t mounts[MAX_MOUNTS];
 static spinlock_t vfs_lock = SPINLOCK_INIT;
 
-#define TIOCGWINSZ 0x0001
-#define TIOCSWINSZ 0x0002
-#define TCGETS 0x0003
-#define TCSETS 0x0004
-#define TCSETSW 0x0005
-#define TCSETSF 0x0006
-#define TIOCGPGRP 0x0007
-#define TIOCSPGRP 0x0008
-#define FIONREAD 0x0009
-#define TIOCEXCL 0x0010
-#define TIOCNXCL 0x0011
-
 typedef struct {
     uint16_t ws_row;
     uint16_t ws_col;
@@ -59,7 +50,6 @@ typedef struct {
     uint16_t ws_ypixel;
 } winsize_t;
 
-// Minimal termios (enough to satisfy TCGETS/TCSETS without pulling in libc headers)
 typedef struct {
     uint32_t c_iflag;
     uint32_t c_oflag;
@@ -82,12 +72,21 @@ typedef struct {
 #define DT_REG 8
 #define DT_LNK 10
 
-static bool is_superuser(void) {
-    return current_task_ptr && current_task_ptr->euid == 0;
+#define ARCH_SET_GS 0x1001
+#define ARCH_SET_FS 0x1002
+#define ARCH_GET_FS 0x1003
+#define ARCH_GET_GS 0x1004
+
+static inline uint64_t read_msr(uint32_t msr) {
+    uint32_t lo, hi;
+    asm volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
+    return ((uint64_t)hi << 32) | lo;
 }
 
-static int require_superuser(void) {
-    return is_superuser() ? 0 : -EPERM;
+static inline void write_msr(uint32_t msr, uint64_t val) {
+    uint32_t lo = (uint32_t)(val & 0xFFFFFFFF);
+    uint32_t hi = (uint32_t)(val >> 32);
+    asm volatile("wrmsr" : : "c"(msr), "a"(lo), "d"(hi));
 }
 
 static bool can_access_rootfs(const rootfs_file_t *file, int want_read, int want_write, int want_exec) {
@@ -470,8 +469,8 @@ void sys_mount(syscall_frame_t *frame) {
 
     (void)source; (void)mountflags; (void)data;
 
-    int priv = require_superuser();
-    if (priv < 0) { frame->rax = (uint64_t)priv; return; }
+    bool priv = current_task_ptr && current_task_ptr->euid == 0;
+    if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
 
     if (!target || !filesystemtype || !*target || !*filesystemtype) {
         frame->rax = (uint64_t)-EINVAL; return;
@@ -502,8 +501,8 @@ void sys_umount(syscall_frame_t *frame) {
     const char *target = (const char *)frame->rdi;
     (void)frame->rsi;
 
-    int priv = require_superuser();
-    if (priv < 0) { frame->rax = (uint64_t)priv; return; }
+    bool priv = current_task_ptr && current_task_ptr->euid == 0;
+    if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
 
     if (!target) { frame->rax = (uint64_t)-EINVAL; return; }
 
@@ -884,7 +883,7 @@ void sys_waitpid(syscall_frame_t *frame) {
         }
 
         // WNOHANG: return 0 if no child has exited
-        if (options & 1) {
+        if (options & WNOHANG) {
             frame->rax = 0;
             return;
         }
@@ -917,8 +916,8 @@ void sys_gethostname(syscall_frame_t *frame) {
 void sys_sethostname(syscall_frame_t *frame) {
     const char *name = (const char *)frame->rdi;
     size_t len = (size_t)frame->rsi;
-    int priv = require_superuser();
-    if (priv < 0) { frame->rax = (uint64_t)priv; return; }
+    bool priv = current_task_ptr && current_task_ptr->euid == 0;
+    if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
     frame->rax = set_hostname(name, len);
 }
 
@@ -967,8 +966,8 @@ void sys_uname(syscall_frame_t *frame) {
 void sys_reboot(syscall_frame_t *frame) {
     int how = (int)frame->rdi;
 
-    int priv = require_superuser();
-    if (priv < 0) { frame->rax = (uint64_t)priv; return; }
+    bool priv = current_task_ptr && current_task_ptr->euid == 0;
+    if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
 
     switch (how) {
         case 0: // Shutdown
@@ -1007,7 +1006,7 @@ void sys_getegid(syscall_frame_t *frame) {
 void sys_setuid(syscall_frame_t *frame) {
     uid_t uid = (uid_t)frame->rdi;
 
-    if (is_superuser()) {
+    if (current_task_ptr && current_task_ptr->euid == 0) {
         current_task_ptr->uid = uid;
         current_task_ptr->euid = uid;
         frame->rax = 0;
@@ -1026,7 +1025,7 @@ void sys_setuid(syscall_frame_t *frame) {
 void sys_setgid(syscall_frame_t *frame) {
     gid_t gid = (gid_t)frame->rdi;
 
-    if (is_superuser()) {
+    if (current_task_ptr && current_task_ptr->euid == 0) {
         current_task_ptr->gid = gid;
         current_task_ptr->egid = gid;
         frame->rax = 0;
@@ -1045,7 +1044,7 @@ void sys_setgid(syscall_frame_t *frame) {
 void sys_seteuid(syscall_frame_t *frame) {
     uid_t euid = (uid_t)frame->rdi;
 
-    if (is_superuser()) {
+    if (current_task_ptr && current_task_ptr->euid == 0) {
         current_task_ptr->euid = euid;
         frame->rax = 0;
         return;
@@ -1063,7 +1062,7 @@ void sys_seteuid(syscall_frame_t *frame) {
 void sys_setegid(syscall_frame_t *frame) {
     gid_t egid = (gid_t)frame->rdi;
 
-    if (is_superuser()) {
+    if (current_task_ptr && current_task_ptr->euid == 0) {
         current_task_ptr->egid = egid;
         frame->rax = 0;
         return;
@@ -1076,6 +1075,35 @@ void sys_setegid(syscall_frame_t *frame) {
     }
 
     frame->rax = (uint64_t)-EPERM;
+}
+
+void sys_arch_prctl(syscall_frame_t *frame) {
+    int code = (int)frame->rdi;
+    uint64_t addr = frame->rsi;
+
+    switch (code) {
+        case ARCH_SET_FS:
+            current_task_ptr->fs_base = addr;
+            write_msr(0xC0000100, addr); // MSR_FS_BASE
+            frame->rax = 0;
+            break;
+        case ARCH_GET_FS:
+            write_vmm(current_task_ptr->ctx, addr, &current_task_ptr->fs_base, sizeof(uint64_t));
+            frame->rax = 0;
+            break;
+        case ARCH_SET_GS:
+            current_task_ptr->gs_base = addr;
+            write_msr(0xC0000101, addr); // MSR_GS_BASE
+            frame->rax = 0;
+            break;
+        case ARCH_GET_GS:
+            write_vmm(current_task_ptr->ctx, addr, &current_task_ptr->gs_base, sizeof(uint64_t));
+            frame->rax = 0;
+            break;
+        default:
+            frame->rax = (uint64_t)-EINVAL;
+            break;
+    }
 }
 
 void sys_kill(syscall_frame_t *frame) {
@@ -1095,7 +1123,7 @@ void sys_kill(syscall_frame_t *frame) {
     for (int i = 0; i < MAX_TASKS; i++) {
         if (tasks[i].state != TASK_DEAD && tasks[i].pid == pid) {
             // Permission check: root or same UID
-            if (!is_superuser() && current_task_ptr->uid != tasks[i].uid) {
+            if (!current_task_ptr && !current_task_ptr->euid == 0 && current_task_ptr->uid != tasks[i].uid) {
                 frame->rax = (uint64_t)-EPERM;
                 return;
             }

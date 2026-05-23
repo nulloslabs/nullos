@@ -29,6 +29,8 @@ typedef struct {
     fd_table_t fd_table;
     char cwd[256];
     int exit_status;
+    uint64_t fs_base;
+    uint64_t gs_base;
 } __attribute__((aligned(16))) task_t;
 
 #define TASK_DEAD 0

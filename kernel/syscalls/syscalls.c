@@ -10,16 +10,16 @@
 #define MSR_SFMASK 0xC0000084
 #define MSR_KERNEL_GS_BASE 0xC0000102
 
-static inline void write_msr(uint32_t msr, uint64_t val) {
-    uint32_t lo = (uint32_t)(val & 0xFFFFFFFF);
-    uint32_t hi = (uint32_t)(val >> 32);
-    asm volatile("wrmsr" : : "c"(msr), "a"(lo), "d"(hi));
-}
-
 static inline uint64_t read_msr(uint32_t msr) {
     uint32_t lo, hi;
     asm volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
     return ((uint64_t)hi << 32) | lo;
+}
+
+static inline void write_msr(uint32_t msr, uint64_t val) {
+    uint32_t lo = (uint32_t)(val & 0xFFFFFFFF);
+    uint32_t hi = (uint32_t)(val >> 32);
+    asm volatile("wrmsr" : : "c"(msr), "a"(lo), "d"(hi));
 }
 
 extern void syscall_entry(void);
@@ -65,6 +65,7 @@ void syscall_dispatch(syscall_frame_t *frame) {
         case SYS_setgid: sys_setgid(frame); break;
         case SYS_seteuid: sys_seteuid(frame); break;
         case SYS_setegid: sys_setegid(frame); break;
+        case SYS_arch_prctl: sys_arch_prctl(frame); break;
         case SYS_kill: sys_kill(frame); break;
         case SYS_nanosleep: sys_nanosleep(frame); break;
         default:
