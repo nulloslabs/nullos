@@ -28,31 +28,6 @@ static void puts(const char *s) {
     );
 }
 
-static void print_num(uint64_t n) {
-    char buf[21];
-    int i = 20;
-    buf[20] = '\n';
-    if (n == 0) buf[--i] = '0';
-    else {
-        while (n && i > 0) {
-            buf[--i] = '0' + n % 10;
-            n /= 10;
-        }
-    }
-    print(&buf[i]);
-}
-
-static void print_ptr(uint64_t p) {
-    char buf[18];
-    const char *hex = "0123456789abcdef";
-    for (int i = 0; i < 16; i++) {
-        buf[15-i] = hex[(p >> (i*4)) & 0xF];
-    }
-    buf[16] = '\n';
-    buf[17] = 0;
-    print(&buf[0]);
-}
-
 uint64_t _ld_start(uint64_t *stack) {
     uint64_t argc = stack[0];
     char **argv = (char **)&stack[1];

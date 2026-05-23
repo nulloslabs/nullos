@@ -255,7 +255,6 @@ void sys_read(syscall_frame_t *frame) {
     frame->rax = to_read;
 }
 
-// SYS_write 1
 void sys_write(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     const uint8_t *buf = (const uint8_t *)frame->rsi;
@@ -320,7 +319,6 @@ void sys_write(syscall_frame_t *frame) {
     frame->rax = count;
 }
 
-// SYS_open 2
 void sys_open(syscall_frame_t *frame) {
     const char *path = (const char *)frame->rdi;
     uint32_t flags = (uint32_t)frame->rsi;
@@ -360,14 +358,12 @@ void sys_open(syscall_frame_t *frame) {
     frame->rax = (uint64_t)fd;
 }
 
-// SYS_close 3
 void sys_close(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     int res = free_fd(&current_task_ptr->fd_table, fd);
     frame->rax = (res < 0) ? (uint64_t)res : 0;
 }
 
-// SYS_stat 4
 void sys_stat(syscall_frame_t *frame) {
     const char *path = (const char *)frame->rdi;
     struct stat *st = (struct stat *)frame->rsi;
@@ -387,7 +383,6 @@ void sys_stat(syscall_frame_t *frame) {
     frame->rax = 0;
 }
 
-// SYS_fstat 5
 void sys_fstat(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     struct stat *st = (struct stat *)frame->rsi;
@@ -411,7 +406,6 @@ void sys_fstat(syscall_frame_t *frame) {
     frame->rax = (uint64_t)-EBADF;
 }
 
-// SYS_lseek 8
 void sys_lseek(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     int64_t offset = (int64_t)frame->rsi;
@@ -442,7 +436,6 @@ void sys_lseek(syscall_frame_t *frame) {
     frame->rax = (uint64_t)entry->offset;
 }
 
-// SYS_brk 12
 void sys_brk(syscall_frame_t *frame) {
     uint64_t addr = frame->rdi;
 
@@ -471,7 +464,6 @@ void sys_brk(syscall_frame_t *frame) {
     frame->rax = current_task_ptr->brk;
 }
 
-// SYS_ioctl 16
 void sys_ioctl(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     unsigned long req = (unsigned long)frame->rsi;
@@ -553,7 +545,6 @@ void sys_ioctl(syscall_frame_t *frame) {
     }
 }
 
-// SYS_dup 32
 void sys_dup(syscall_frame_t *frame) {
     int oldfd = (int)frame->rdi;
 
@@ -573,7 +564,6 @@ void sys_dup(syscall_frame_t *frame) {
     frame->rax = (uint64_t)-EMFILE;
 }
 
-// SYS_dup2 33
 void sys_dup2(syscall_frame_t *frame) {
     int oldfd = (int)frame->rdi;
     int newfd = (int)frame->rsi;
@@ -596,7 +586,6 @@ void sys_dup2(syscall_frame_t *frame) {
     frame->rax = (uint64_t)newfd;
 }
 
-// SYS_nanosleep 35
 void sys_nanosleep(syscall_frame_t *frame) {
     struct timespec *req = (struct timespec *)frame->rdi;
     struct timespec *rem = (struct timespec *)frame->rsi;
@@ -616,12 +605,34 @@ void sys_nanosleep(syscall_frame_t *frame) {
     frame->rax = 0;
 }
 
-// SYS_getpid 39
 void sys_getpid(syscall_frame_t *frame) {
     frame->rax = (uint64_t)current_task_ptr->pid;
 }
 
-// SYS_fork 57
+void sys_reboot(syscall_frame_t *frame) {
+    int how = (int)frame->rdi;
+
+    bool priv = current_task_ptr && current_task_ptr->euid == 0;
+    if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
+
+    switch (how) {
+        case 0: // Shutdown
+            poweroff();
+            __builtin_unreachable();
+        case 1: // Reboot
+            reboot();
+            __builtin_unreachable();
+        case 2: // Halt
+            halt();
+            __builtin_unreachable();
+        default:
+            // We'll return EINVAL later, just break
+            break;
+    }
+
+    frame->rax = -EINVAL;
+}
+
 void sys_fork(syscall_frame_t *frame) {
     if (!current_task_ptr || !current_task_ptr->ctx) {
         frame->rax = (uint64_t)-EFAULT; return;
@@ -636,7 +647,6 @@ void sys_fork(syscall_frame_t *frame) {
     frame->rax = (uint64_t)child_pid;
 }
 
-// SYS_execve 59
 void sys_execve(syscall_frame_t *frame) {
     const char *path = (const char *)frame->rdi;
     char **user_argv = (char **)frame->rsi;
@@ -670,13 +680,11 @@ void sys_execve(syscall_frame_t *frame) {
     frame->rax = (uint64_t)res;
 }
 
-// SYS_exit 60
 void sys_exit(syscall_frame_t *frame) {
     int status = (int)frame->rdi;
     exit_task(status);
 }
 
-// SYS_waitpid 61
 void sys_waitpid(syscall_frame_t *frame) {
     pid_t pid = (pid_t)frame->rdi;
     int *wstatus = (int *)frame->rsi;
@@ -733,7 +741,6 @@ void sys_waitpid(syscall_frame_t *frame) {
     }
 }
 
-// SYS_kill 62
 void sys_kill(syscall_frame_t *frame) {
     pid_t pid = (pid_t)frame->rdi;
     int sig = (int)frame->rsi;
@@ -819,7 +826,6 @@ void sys_kill(syscall_frame_t *frame) {
     frame->rax = (uint64_t)-ESRCH;
 }
 
-// SYS_uname 63
 void sys_uname(syscall_frame_t *frame) {
     uint64_t bufp = frame->rdi;
 
@@ -834,7 +840,6 @@ void sys_uname(syscall_frame_t *frame) {
     frame->rax = 0;
 }
 
-// SYS_getdents 78
 void sys_getdents(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     uint64_t bufp = frame->rsi;
@@ -927,7 +932,6 @@ void sys_getdents(syscall_frame_t *frame) {
     frame->rax = written;
 }
 
-// SYS_getcwd 79
 void sys_getcwd(syscall_frame_t *frame) {
     uint64_t bufp = frame->rdi;
     uint64_t buflen = frame->rsi;
@@ -941,7 +945,6 @@ void sys_getcwd(syscall_frame_t *frame) {
     frame->rax = bufp;
 }
 
-// SYS_chdir 80
 void sys_chdir(syscall_frame_t *frame) {
     const char *path = (const char *)frame->rdi;
     if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
@@ -960,7 +963,6 @@ void sys_chdir(syscall_frame_t *frame) {
     frame->rax = 0;
 }
 
-// SYS_mkdir 83
 void sys_mkdir(syscall_frame_t *frame) {
     const char *path = (const char *)frame->rdi;
     mode_t mode = (mode_t)frame->rsi;
@@ -970,7 +972,6 @@ void sys_mkdir(syscall_frame_t *frame) {
     frame->rax = (uint64_t)mkdir_rootfs(path, mode, current_task_ptr->euid, current_task_ptr->egid);
 }
 
-// SYS_chmod 90
 void sys_chmod(syscall_frame_t *frame) {
     const char *path = (const char *)frame->rdi;
     mode_t mode = (mode_t)frame->rsi;
@@ -979,7 +980,6 @@ void sys_chmod(syscall_frame_t *frame) {
     frame->rax = (uint64_t)chmod_rootfs(path, mode);
 }
 
-// SYS_fchmod 91
 void sys_fchmod(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     mode_t mode = (mode_t)frame->rsi;
@@ -990,17 +990,14 @@ void sys_fchmod(syscall_frame_t *frame) {
     frame->rax = (uint64_t)chmod_rootfs(entry->path, mode);
 }
 
-// SYS_getuid 102
 void sys_getuid(syscall_frame_t *frame) {
     frame->rax = current_task_ptr->uid;
 }
 
-// SYS_getgid 104
 void sys_getgid(syscall_frame_t *frame) {
     frame->rax = current_task_ptr->gid;
 }
 
-// SYS_setuid 105
 void sys_setuid(syscall_frame_t *frame) {
     uid_t uid = (uid_t)frame->rdi;
 
@@ -1020,7 +1017,6 @@ void sys_setuid(syscall_frame_t *frame) {
     frame->rax = (uint64_t)-EPERM;
 }
 
-// SYS_setgid 106
 void sys_setgid(syscall_frame_t *frame) {
     gid_t gid = (gid_t)frame->rdi;
 
@@ -1040,22 +1036,18 @@ void sys_setgid(syscall_frame_t *frame) {
     frame->rax = (uint64_t)-EPERM;
 }
 
-// SYS_geteuid 107
 void sys_geteuid(syscall_frame_t *frame) {
     frame->rax = current_task_ptr->euid;
 }
 
-// SYS_getegid 108
 void sys_getegid(syscall_frame_t *frame) {
     frame->rax = current_task_ptr->egid;
 }
 
-// SYS_getppid 110
 void sys_getppid(syscall_frame_t *frame) {
     frame->rax = (uint64_t)-ENOSYS; // Added back stub to ensure compliance
 }
 
-// SYS_seteuid 115
 void sys_seteuid(syscall_frame_t *frame) {
     uid_t euid = (uid_t)frame->rdi;
 
@@ -1074,7 +1066,6 @@ void sys_seteuid(syscall_frame_t *frame) {
     frame->rax = (uint64_t)-EPERM;
 }
 
-// SYS_setegid 116
 void sys_setegid(syscall_frame_t *frame) {
     gid_t egid = (gid_t)frame->rdi;
 
@@ -1093,7 +1084,6 @@ void sys_setegid(syscall_frame_t *frame) {
     frame->rax = (uint64_t)-EPERM;
 }
 
-// SYS_arch_prctl 158
 void sys_arch_prctl(syscall_frame_t *frame) {
     int code = (int)frame->rdi;
     uint64_t addr = frame->rsi;
@@ -1125,7 +1115,6 @@ void sys_arch_prctl(syscall_frame_t *frame) {
     }
 }
 
-// SYS_mount 165
 void sys_mount(syscall_frame_t *frame) {
     const char *source = (const char *)frame->rdi;
     const char *target = (const char *)frame->rsi;
@@ -1163,7 +1152,6 @@ void sys_mount(syscall_frame_t *frame) {
     frame->rax = (uint64_t)-ENOMEM;
 }
 
-// SYS_umount 166
 void sys_umount(syscall_frame_t *frame) {
     const char *target = (const char *)frame->rdi;
     (void)frame->rsi;
@@ -1187,32 +1175,6 @@ void sys_umount(syscall_frame_t *frame) {
     frame->rax = (uint64_t)-ENOENT;
 }
 
-// SYS_reboot 169
-void sys_reboot(syscall_frame_t *frame) {
-    int how = (int)frame->rdi;
-
-    bool priv = current_task_ptr && current_task_ptr->euid == 0;
-    if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
-
-    switch (how) {
-        case 0: // Shutdown
-            poweroff();
-            __builtin_unreachable();
-        case 1: // Reboot
-            reboot();
-            __builtin_unreachable();
-        case 2: // Halt
-            halt();
-            __builtin_unreachable();
-        default:
-            // We'll return EINVAL later, just break
-            break;
-    }
-
-    frame->rax = -EINVAL;
-}
-
-// SYS_sethostname 170
 void sys_sethostname(syscall_frame_t *frame) {
     const char *name = (const char *)frame->rdi;
     size_t len = (size_t)frame->rsi;
@@ -1221,21 +1183,17 @@ void sys_sethostname(syscall_frame_t *frame) {
     frame->rax = set_hostname(name, len);
 }
 
-// SYS_gethostname 175
 void sys_gethostname(syscall_frame_t *frame) {
     char *name = (char *)frame->rdi;
     size_t len = (size_t)frame->rsi;
     frame->rax = get_hostname(name, len);
 }
 
-// SYS_openat 257
 void sys_openat(syscall_frame_t *frame) {
-    // For now, implement as a wrapper; AT_FDCWD is expected.
-    // We ignore the directory fd and just use open.
+    // TODO: Make this not an open() wrapper
     sys_open(frame);
 }
 
-// SYS_fchmodat 268
 void sys_fchmodat(syscall_frame_t *frame) {
     int dirfd = (int)frame->rdi;
     const char *path = (const char *)frame->rsi;

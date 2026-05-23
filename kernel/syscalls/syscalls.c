@@ -22,6 +22,7 @@ void syscall_dispatch(syscall_frame_t *frame) {
         case SYS_dup2: sys_dup2(frame); break;
         case SYS_nanosleep: sys_nanosleep(frame); break;
         case SYS_getpid: sys_getpid(frame); break;
+        case SYS_reboot: sys_reboot(frame); break;
         case SYS_fork: sys_fork(frame); break;
         case SYS_execve: sys_execve(frame); break;
         case SYS_exit: sys_exit(frame); break;
@@ -46,7 +47,6 @@ void syscall_dispatch(syscall_frame_t *frame) {
         case SYS_arch_prctl: sys_arch_prctl(frame); break;
         case SYS_mount: sys_mount(frame); break;
         case SYS_umount: sys_umount(frame); break;
-        case SYS_reboot: sys_reboot(frame); break;
         case SYS_sethostname: sys_sethostname(frame); break;
         case SYS_gethostname: sys_gethostname(frame); break;
         case SYS_openat: sys_openat(frame); break;
