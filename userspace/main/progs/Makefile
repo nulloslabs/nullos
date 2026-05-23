@@ -19,23 +19,25 @@ progs: $(PROGS:=.o)
 	for p in $(PROGS); do \
 		t="../../$$p"; \
 		o="$$p.o"; \
-		if [ ! -f $$t ] || [ $$o -nt $$t ]; then \
+		if [ ! -f $$t ] || [ $$o -nt $$t ] || [ ../../libc.a -nt $$t ]; then \
 			needs_build=1; \
 		fi; \
 	done; \
 	if [ $$needs_build -eq 0 ]; then \
 		printf "  %-7s %s\n" "INFO" "$$(echo $(PROGS) | tr ' ' '\n' | sed 's|^|$(SUBDIR)/|' | paste -sd ' ' -) $$([ $$(echo $(PROGS) | wc -w) -eq 1 ] && echo 'is' || echo 'are') already up to date"; \
+	else \
+		$(MAKE) MAKEFLAGS="$(MAKEFLAGS)" $(TARGETS); \
 	fi
-	@$(MAKE) MAKEFLAGS="$(MAKEFLAGS)" $(TARGETS)
 
 # Inline execution blueprint for each application target
 define PROG_rule
-../../$(1): $(1).o
+../../$(1): $(1).o ../../libc.a
 	@printf "  %-7s %s\n" "LD" "$(SUBDIR)/$(1)"
 	$(LD) $(LDFLAGS) ../../crt0.o $$< -o $$@ -Wl,--no-dynamic-linker -l:libc.so
 	@printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/$(1)"
 	$(STRIP) $(STRIPFLAGS) $$@
 endef
+
 $(foreach p,$(PROGS),$(eval $(call PROG_rule,$(p))))
 
 %.o: %.c
