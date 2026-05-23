@@ -45,8 +45,8 @@ $(foreach p,$(PROGS),$(eval $(call PROG_rule,$(p))))
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	@printf "  %-7s %s\n" "CLEAN" "$(foreach p,$(PROGS),$(SUBDIR)/$(p) $(SUBDIR)/$(p).unstripped) $(SUBDIR)/main/progs/*.o"
-	@rm -f *.o $(foreach p,$(PROGS),../../$(p) ../../$(p).unstripped)
+	@printf "  %-7s %s\n" "CLEAN" "$(foreach p,$(PROGS),$(SUBDIR)/$(p) $(SUBDIR)/main/progs/*.o"
+	@rm -f *.o $(foreach p,$(PROGS),../../$(p))
 
 mrproper: clean
 .PHONY: all clean mrproper progs

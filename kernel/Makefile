@@ -49,8 +49,8 @@ kernel: config.mk linker.ld Makefile $(SUBDIRS)
 	fi
 
 clean:
-	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/$(KERNELFILE) $(SUBDIR)/$(KERNELFILE).unstripped"
-	@rm -f $(KERNELFILE) $(KERNELFILE).unstripped
+	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/$(KERNELFILE)"
+	@rm -f $(KERNELFILE)
 	@make -C main clean
 	@make -C io clean
 	@make -C mm clean

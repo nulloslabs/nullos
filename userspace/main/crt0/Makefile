@@ -25,8 +25,8 @@ crt0: crt0.S Makefile ../../config.mk
 	fi
 
 clean:
-	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/crt0.o $(SUBDIR)/crt0.o.unstripped"
-	@rm -rf ../../crt0.o ../../crt0.o.unstripped
+	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/crt0.o $(SUBDIR)/userspace/main/*.d"
+	@rm -rf ../../crt0.o *.d
 
 mrproper: clean
 

@@ -49,8 +49,8 @@ libc: $(OBJ)
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/libc.so $(SUBDIR)/libc.a $(SUBDIR)/libc.so.unstripped $(SUBDIR)/libc.a.unstripped $(SUBDIR)/main/libc/*.o $(SUBDIR)/main/libc/*.d"
-	@rm -rf ../../libc.so ../../libc.a ../../libc.so.unstripped ../../libc.a.unstripped $(OBJ) $(DEP)
+	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/libc.so $(SUBDIR)/libc.a $(SUBDIR)/main/libc/*.o $(SUBDIR)/main/libc/*.d"
+	@rm -rf ../../libc.so ../../libc.a $(OBJ) $(DEP)
 
 mrproper: clean
 
