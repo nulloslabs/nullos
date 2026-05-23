@@ -14,6 +14,7 @@
 #define SYS_dup2 33
 #define SYS_nanosleep 35
 #define SYS_getpid 39
+#define SYS_reboot 55
 #define SYS_fork 57
 #define SYS_execve 59
 #define SYS_exit 60
@@ -38,7 +39,6 @@
 #define SYS_arch_prctl 158
 #define SYS_mount 165
 #define SYS_umount 166
-#define SYS_reboot 169
 #define SYS_sethostname 170
 #define SYS_gethostname 175
 #define SYS_openat 257
