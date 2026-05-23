@@ -1,0 +1,11 @@
+void init_scheduler(void) {
+    for (int i = 0; i < MAX_TASKS; i++) tasks[i].state = TASK_DEAD;
+    // Create the idle task at tasks[0] (PID 0)
+    create_task(idle_task, 0, &kernel_context, 0);
+
+    int cpu_idx = get_cpu_index();
+    cpus[cpu_idx].current_task = 0;
+    cpus[cpu_idx].current_task_ptr = &tasks[0];
+
+    printf("scheduler: initialized scheduler\n");
+}

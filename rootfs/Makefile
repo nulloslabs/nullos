@@ -8,7 +8,8 @@ endif
 include config.mk
 
 .DEFAULT_GOAL := all
-DEP := $(wildcard ../userspace/main/progs/*.c) $(shell find main/ -type f 2>/dev/null) config.mk ../userspace/libc.so ../userspace/libc.a ../userspace/crt0.o
+USERSPACE_PROGS := $(patsubst ../userspace/main/progs/%.c,../userspace/%,$(wildcard ../userspace/main/progs/*.c))
+DEP := $(wildcard ../userspace/main/progs/*.c) $(USERSPACE_PROGS) $(shell find main/ -type f 2>/dev/null) config.mk ../userspace/libc.so ../userspace/libc.a ../userspace/crt0.o
 
 all: rootfs
 

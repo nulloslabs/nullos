@@ -19,7 +19,7 @@ progs: $(PROGS:=.o)
 	for p in $(PROGS); do \
 		t="../../$$p"; \
 		o="$$p.o"; \
-		if [ ! -f $$t ] || [ $$o -nt $$t ] || [ ../../libc.a -nt $$t ]; then \
+			if [ ! -f $$t ] || [ $$o -nt $$t ] || [ ../../crt0.o -nt $$t ] || [ ../../libc.a -nt $$t ]; then \
 			needs_build=1; \
 		fi; \
 	done; \
@@ -31,7 +31,7 @@ progs: $(PROGS:=.o)
 
 # Inline execution blueprint for each application target
 define PROG_rule
-../../$(1): $(1).o ../../libc.a
+../../$(1): $(1).o ../../crt0.o ../../libc.a
 	@printf "  %-7s %s\n" "LD" "$(SUBDIR)/$(1)"
 	$(LD) $(LDFLAGS) ../../crt0.o $$< -o $$@ -Wl,--no-dynamic-linker -l:libc.so
 	@printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/$(1)"

@@ -10,6 +10,7 @@
 #include <main/spinlock.h>
 #include <io/terminal.h>
 #include <main/fd.h>
+#include <main/msr.h>
 #include <io/usb.h>
 
 task_t tasks[MAX_TASKS];
@@ -58,6 +59,8 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
             tasks[i].euid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->euid;
             tasks[i].gid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->gid;
             tasks[i].egid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->egid;
+            tasks[i].fs_base = 0;
+            tasks[i].gs_base = 0;
 
             init_fd_table(&tasks[i].fd_table);
             strcpy(tasks[i].cwd, "/");
@@ -123,6 +126,8 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
             tasks[i].euid = current_task_ptr->euid;
             tasks[i].gid = current_task_ptr->gid;
             tasks[i].egid = current_task_ptr->egid;
+            tasks[i].fs_base = current_task_ptr->fs_base;
+            tasks[i].gs_base = current_task_ptr->gs_base;
 
             void *kstack = vmalloc(KERNEL_STACK_SIZE);
             if (!kstack) {
@@ -224,6 +229,8 @@ void schedule(void) {
         if (tasks[next].ctx && tasks[next].ctx != tasks[old_task].ctx) {
             switch_vmm_context(tasks[next].ctx);
         }
+
+        write_msr(MSR_FS_BASE, tasks[next].fs_base);
     }
 }
 

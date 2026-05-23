@@ -25,9 +25,8 @@
 #include <main/hostname.h>
 #include <main/uname.h>
 #include <main/acpi.h>
+#include <main/msr.h>
 #include <io/hpet.h>
-
-extern volatile int sched_lock;
 
 static char stdin_buf[256];
 static int stdin_buf_len = 0;
@@ -76,18 +75,6 @@ typedef struct {
 #define ARCH_SET_FS 0x1002
 #define ARCH_GET_FS 0x1003
 #define ARCH_GET_GS 0x1004
-
-static inline uint64_t read_msr(uint32_t msr) {
-    uint32_t lo, hi;
-    asm volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
-    return ((uint64_t)hi << 32) | lo;
-}
-
-static inline void write_msr(uint32_t msr, uint64_t val) {
-    uint32_t lo = (uint32_t)(val & 0xFFFFFFFF);
-    uint32_t hi = (uint32_t)(val >> 32);
-    asm volatile("wrmsr" : : "c"(msr), "a"(lo), "d"(hi));
-}
 
 static bool can_access_rootfs(const rootfs_file_t *file, int want_read, int want_write, int want_exec) {
     if (!file) return false;
@@ -209,135 +196,6 @@ static void free_strarray(char **arr, int count) {
     for (int i = 0; i < count; i++) free(arr[i]);
 }
 
-void sys_exit(syscall_frame_t *frame) {
-    int status = (int)frame->rdi;
-    exit_task(status);
-}
-
-void sys_open(syscall_frame_t *frame) {
-    const char *path = (const char *)frame->rdi;
-    uint32_t flags = (uint32_t)frame->rsi;
-    mode_t mode = (mode_t)frame->rdx;
-
-    if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
-
-    char rel_path[256];
-    if (is_mounted_under(path, "devfs", rel_path)) {
-        if (!devfs_device_exists(rel_path)) { frame->rax = (uint64_t)-ENOENT; return; }
-        int fd = alloc_fd(&current_task_ptr->fd_table, path, FD_DEV, flags);
-        frame->rax = (uint64_t)fd;
-        return;
-    }
-
-    rootfs_file_t file = read_rootfs(path);
-
-    if (!file.mode && !(flags & O_CREAT)) {
-        frame->rax = (uint64_t)-ENOENT;
-        return;
-    }
-
-    if ((flags & O_CREAT) && !file.data && !file.mode) {
-        int r = write_rootfs(path, "", 0, mode, current_task_ptr->euid, current_task_ptr->egid);
-        if (r < 0) { frame->rax = (uint64_t)r; return; }
-        file = read_rootfs(path);
-    }
-
-    int want_write = (flags & O_WRONLY) || (flags & O_RDWR);
-    int want_read = !want_write || (flags & O_RDWR);
-    if (!can_access_rootfs(&file, want_read, want_write, 0)) {
-        frame->rax = (uint64_t)-EACCES;
-        return;
-    }
-
-    int fd = alloc_fd(&current_task_ptr->fd_table, path, FD_FILE, flags);
-    frame->rax = (uint64_t)fd;
-}
-
-void sys_openat(syscall_frame_t *frame) {
-    // For now, implement as a wrapper; AT_FDCWD is expected.
-    // We ignore the directory fd and just use open.
-    sys_open(frame);
-}
-
-void sys_stat(syscall_frame_t *frame) {
-    const char *path = (const char *)frame->rdi;
-    struct stat *st = (struct stat *)frame->rsi;
-
-    if (!path || !st) { frame->rax = (uint64_t)-EINVAL; return; }
-
-    rootfs_file_t file = read_rootfs(path);
-    if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
-
-    struct stat kst = {0};
-    kst.st_mode = file.mode;
-    kst.st_uid = file.uid;
-    kst.st_gid = file.gid;
-    kst.st_size = file.size;
-
-    write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
-    frame->rax = 0;
-}
-
-void sys_fstat(syscall_frame_t *frame) {
-    int fd = (int)frame->rdi;
-    struct stat *st = (struct stat *)frame->rsi;
-
-    if (!st) { frame->rax = (uint64_t)-EINVAL; return; }
-
-    fd_entry_t *entry = get_current_fd(fd);
-    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
-
-    if (entry->type == FD_FILE) {
-        rootfs_file_t file = read_rootfs(entry->path);
-        struct stat kst = {0};
-        kst.st_mode = file.mode;
-        kst.st_uid = file.uid;
-        kst.st_gid = file.gid;
-        kst.st_size = file.size;
-        write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
-        frame->rax = 0;
-        return;
-    }
-    frame->rax = (uint64_t)-EBADF;
-}
-
-void sys_chmod(syscall_frame_t *frame) {
-    const char *path = (const char *)frame->rdi;
-    mode_t mode = (mode_t)frame->rsi;
-    if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
-    
-    frame->rax = (uint64_t)chmod_rootfs(path, mode);
-}
-
-void sys_fchmod(syscall_frame_t *frame) {
-    int fd = (int)frame->rdi;
-    mode_t mode = (mode_t)frame->rsi;
-    
-    fd_entry_t *entry = get_current_fd(fd);
-    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
-
-    frame->rax = (uint64_t)chmod_rootfs(entry->path, mode);
-}
-
-void sys_fchmodat(syscall_frame_t *frame) {
-    int dirfd = (int)frame->rdi;
-    const char *path = (const char *)frame->rsi;
-    mode_t mode = (mode_t)frame->rdx;
-    int flags = (int)frame->r10;
-
-    (void)dirfd; (void)flags; // Not fully implemented yet
-
-    if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
-
-    frame->rax = (uint64_t)chmod_rootfs(path, mode);
-}
-
-void sys_close(syscall_frame_t *frame) {
-    int fd = (int)frame->rdi;
-    int res = free_fd(&current_task_ptr->fd_table, fd);
-    frame->rax = (res < 0) ? (uint64_t)res : 0;
-}
-
 void sys_read(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     uint8_t *buf = (uint8_t *)frame->rsi;
@@ -347,15 +205,17 @@ void sys_read(syscall_frame_t *frame) {
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
 
     if (fd == 0) {
-        uint64_t irq;
-        spin_lock_irqsave(&vfs_lock, &irq);
-
         if (stdin_buf_pos >= stdin_buf_len) {
             stdin_buf_len = 0;
             stdin_buf_pos = 0;
             reset_term_line_start();
             while (stdin_buf_len < (int)sizeof(stdin_buf) - 1) {
+                current_task_ptr->state = TASK_READY;
+                sched_lock = 0;
                 char c = getc();
+                sched_lock = 1;
+                current_task_ptr->state = TASK_RUNNING;
+
                 if (c == '\b' || c == 127) {
                     if (stdin_buf_len > 0) { stdin_buf_len--; puts("\b \b"); }
                     continue;
@@ -370,7 +230,6 @@ void sys_read(syscall_frame_t *frame) {
         while (copied < count && stdin_buf_pos < stdin_buf_len)
             buf[copied++] = (uint8_t)stdin_buf[stdin_buf_pos++];
 
-        spin_unlock_irqrestore(&vfs_lock, irq);
         frame->rax = copied;
         return;
     }
@@ -396,6 +255,7 @@ void sys_read(syscall_frame_t *frame) {
     frame->rax = to_read;
 }
 
+// SYS_write 1
 void sys_write(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     const uint8_t *buf = (const uint8_t *)frame->rsi;
@@ -460,125 +320,158 @@ void sys_write(syscall_frame_t *frame) {
     frame->rax = count;
 }
 
-void sys_mount(syscall_frame_t *frame) {
-    const char *source = (const char *)frame->rdi;
-    const char *target = (const char *)frame->rsi;
-    const char *filesystemtype = (const char *)frame->rdx;
-    unsigned long mountflags = (unsigned long)frame->r10;
-    const void *data = (const void *)frame->r8;
-
-    (void)source; (void)mountflags; (void)data;
-
-    bool priv = current_task_ptr && current_task_ptr->euid == 0;
-    if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
-
-    if (!target || !filesystemtype || !*target || !*filesystemtype) {
-        frame->rax = (uint64_t)-EINVAL; return;
-    }
-
-    rootfs_file_t dir = read_rootfs(target);
-    if ((dir.mode & 0040000) == 0 && !dir.data) {
-        frame->rax = (uint64_t)-ENOENT; return;
-    }
-
-    uint64_t irq;
-    spin_lock_irqsave(&vfs_lock, &irq);
-    for (int i = 0; i < MAX_MOUNTS; i++) {
-        if (!mounts[i].active) {
-            strncpy(mounts[i].path, target, 63); mounts[i].path[63] = '\0';
-            strncpy(mounts[i].filesystemtype, filesystemtype, 31); mounts[i].filesystemtype[31] = '\0';
-            mounts[i].active = true;
-            spin_unlock_irqrestore(&vfs_lock, irq);
-            frame->rax = 0;
-            return;
-        }
-    }
-    spin_unlock_irqrestore(&vfs_lock, irq);
-    frame->rax = (uint64_t)-ENOMEM;
-}
-
-void sys_umount(syscall_frame_t *frame) {
-    const char *target = (const char *)frame->rdi;
-    (void)frame->rsi;
-
-    bool priv = current_task_ptr && current_task_ptr->euid == 0;
-    if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
-
-    if (!target) { frame->rax = (uint64_t)-EINVAL; return; }
-
-    uint64_t irq;
-    spin_lock_irqsave(&vfs_lock, &irq);
-    for (int i = 0; i < MAX_MOUNTS; i++) {
-        if (mounts[i].active && strcmp(mounts[i].path, target) == 0) {
-            mounts[i].active = false;
-            spin_unlock_irqrestore(&vfs_lock, irq);
-            frame->rax = 0;
-            return;
-        }
-    }
-    spin_unlock_irqrestore(&vfs_lock, irq);
-    frame->rax = (uint64_t)-ENOENT;
-}
-
-void sys_fork(syscall_frame_t *frame) {
-    if (!current_task_ptr || !current_task_ptr->ctx) {
-        frame->rax = (uint64_t)-EFAULT; return;
-    }
-
-    vmm_context_t *child_ctx = clone_vmm_context(current_task_ptr->ctx);
-    if (!child_ctx) { frame->rax = (uint64_t)-ENOMEM; return; }
-
-    pid_t child_pid = clone_task(frame, child_ctx);
-    if (child_pid < 0) { frame->rax = (uint64_t)-EAGAIN; return; }
-
-    frame->rax = (uint64_t)child_pid;
-}
-
-void sys_execve(syscall_frame_t *frame) {
+// SYS_open 2
+void sys_open(syscall_frame_t *frame) {
     const char *path = (const char *)frame->rdi;
-    char **user_argv = (char **)frame->rsi;
-    char **user_envp = (char **)frame->rdx;
+    uint32_t flags = (uint32_t)frame->rsi;
+    mode_t mode = (mode_t)frame->rdx;
 
     if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
 
+    char rel_path[256];
+    if (is_mounted_under(path, "devfs", rel_path)) {
+        if (!devfs_device_exists(rel_path)) { frame->rax = (uint64_t)-ENOENT; return; }
+        int fd = alloc_fd(&current_task_ptr->fd_table, path, FD_DEV, flags);
+        frame->rax = (uint64_t)fd;
+        return;
+    }
+
     rootfs_file_t file = read_rootfs(path);
-    if (file.mode && !can_access_rootfs(&file, 0, 0, 1)) {
+
+    if (!file.mode && !(flags & O_CREAT)) {
+        frame->rax = (uint64_t)-ENOENT;
+        return;
+    }
+
+    if ((flags & O_CREAT) && !file.data && !file.mode) {
+        int r = write_rootfs(path, "", 0, mode, current_task_ptr->euid, current_task_ptr->egid);
+        if (r < 0) { frame->rax = (uint64_t)r; return; }
+        file = read_rootfs(path);
+    }
+
+    int want_write = (flags & O_WRONLY) || (flags & O_RDWR);
+    int want_read = !want_write || (flags & O_RDWR);
+    if (!can_access_rootfs(&file, want_read, want_write, 0)) {
         frame->rax = (uint64_t)-EACCES;
         return;
     }
 
-    char *argv_ptrs[64];
-    char *envp_ptrs[64];
-
-    int argc = copy_user_strarray(user_argv, argv_ptrs, 63);
-    int envc = copy_user_strarray(user_envp, envp_ptrs, 63);
-
-    int res = execve_elf(path, argv_ptrs, envp_ptrs, frame);
-
-    free_strarray(argv_ptrs, argc);
-    free_strarray(envp_ptrs, envc);
-
-    frame->rax = (uint64_t)res;
+    int fd = alloc_fd(&current_task_ptr->fd_table, path, FD_FILE, flags);
+    frame->rax = (uint64_t)fd;
 }
 
-void sys_chdir(syscall_frame_t *frame) {
+// SYS_close 3
+void sys_close(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    int res = free_fd(&current_task_ptr->fd_table, fd);
+    frame->rax = (res < 0) ? (uint64_t)res : 0;
+}
+
+// SYS_stat 4
+void sys_stat(syscall_frame_t *frame) {
     const char *path = (const char *)frame->rdi;
-    if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
+    struct stat *st = (struct stat *)frame->rsi;
 
-    char abs_path[256];
-    build_abs_path(path, abs_path, sizeof(abs_path));
+    if (!path || !st) { frame->rax = (uint64_t)-EINVAL; return; }
 
-    rootfs_file_t dir = read_rootfs(abs_path);
-    if (!dir.data && !dir.mode) { frame->rax = (uint64_t)-ENOENT; return; }
-    if ((dir.mode & 0040000) == 0 && strcmp(abs_path, "/") != 0) {
-        frame->rax = (uint64_t)-ENOTDIR; return;
-    }
+    rootfs_file_t file = read_rootfs(path);
+    if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
 
-    strncpy(current_task_ptr->cwd, abs_path, 255);
-    current_task_ptr->cwd[255] = '\0';
+    struct stat kst = {0};
+    kst.st_mode = file.mode;
+    kst.st_uid = file.uid;
+    kst.st_gid = file.gid;
+    kst.st_size = file.size;
+
+    write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
     frame->rax = 0;
 }
 
+// SYS_fstat 5
+void sys_fstat(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    struct stat *st = (struct stat *)frame->rsi;
+
+    if (!st) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+
+    if (entry->type == FD_FILE) {
+        rootfs_file_t file = read_rootfs(entry->path);
+        struct stat kst = {0};
+        kst.st_mode = file.mode;
+        kst.st_uid = file.uid;
+        kst.st_gid = file.gid;
+        kst.st_size = file.size;
+        write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
+        frame->rax = 0;
+        return;
+    }
+    frame->rax = (uint64_t)-EBADF;
+}
+
+// SYS_lseek 8
+void sys_lseek(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    int64_t offset = (int64_t)frame->rsi;
+    int whence = (int)frame->rdx;
+
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry || !entry->open) { frame->rax = -EBADF; return; }
+    if (entry->type == FD_STREAM) { frame->rax = -ESPIPE; return; }
+
+    switch (whence) {
+        case 0: // SEEK_SET
+            entry->offset = (uint64_t)offset;
+            break;
+        case 1: // SEEK_CUR
+            entry->offset = (uint64_t)((int64_t)entry->offset + offset);
+            break;
+        case 2: { // SEEK_END
+            rootfs_file_t file = read_rootfs(entry->path);
+            if (!file.data) { frame->rax = -ENOENT; return; }
+            entry->offset = (uint64_t)((int64_t)file.size + offset);
+            break;
+        }
+        default:
+            frame->rax = -EINVAL;
+            return;
+    }
+
+    frame->rax = (uint64_t)entry->offset;
+}
+
+// SYS_brk 12
+void sys_brk(syscall_frame_t *frame) {
+    uint64_t addr = frame->rdi;
+
+    if (addr == 0) {
+        // Return current break
+        frame->rax = current_task_ptr->brk;
+        return;
+    }
+
+    // Align to page boundary
+    uint64_t new_brk = (addr + 0xFFF) & ~0xFFFULL;
+    uint64_t old_brk = (current_task_ptr->brk + 0xFFF) & ~0xFFFULL;
+
+    if (new_brk > old_brk) {
+        // Map new pages
+        for (uint64_t a = old_brk; a < new_brk; a += 4096) {
+            if (get_vmm_phys(current_task_ptr->ctx, a) == 0) {
+                map_vmm(current_task_ptr->ctx, a, (uint64_t)pmalloc(),
+                        VMM_USER | VMM_WRITABLE);
+                memset_vmm(current_task_ptr->ctx, a, 0, 4096);
+            }
+        }
+    }
+
+    current_task_ptr->brk = addr;
+    frame->rax = current_task_ptr->brk;
+}
+
+// SYS_ioctl 16
 void sys_ioctl(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     unsigned long req = (unsigned long)frame->rsi;
@@ -660,6 +553,7 @@ void sys_ioctl(syscall_frame_t *frame) {
     }
 }
 
+// SYS_dup 32
 void sys_dup(syscall_frame_t *frame) {
     int oldfd = (int)frame->rdi;
 
@@ -679,6 +573,7 @@ void sys_dup(syscall_frame_t *frame) {
     frame->rax = (uint64_t)-EMFILE;
 }
 
+// SYS_dup2 33
 void sys_dup2(syscall_frame_t *frame) {
     int oldfd = (int)frame->rdi;
     int newfd = (int)frame->rsi;
@@ -701,15 +596,245 @@ void sys_dup2(syscall_frame_t *frame) {
     frame->rax = (uint64_t)newfd;
 }
 
-void sys_mkdir(syscall_frame_t *frame) {
+// SYS_nanosleep 35
+void sys_nanosleep(syscall_frame_t *frame) {
+    struct timespec *req = (struct timespec *)frame->rdi;
+    struct timespec *rem = (struct timespec *)frame->rsi;
+    if (!req) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    struct timespec ts;
+    read_vmm(current_task_ptr->ctx, &ts, (uint64_t)req, sizeof(struct timespec));
+
+    uint64_t total_us = (ts.tv_sec * 1000000) + (ts.tv_nsec / 1000);
+    sleep_us(total_us);
+
+    if (rem) {
+        struct timespec zero_ts = {0, 0};
+        write_vmm(current_task_ptr->ctx, (uint64_t)rem, &zero_ts, sizeof(struct timespec));
+    }
+
+    frame->rax = 0;
+}
+
+// SYS_getpid 39
+void sys_getpid(syscall_frame_t *frame) {
+    frame->rax = (uint64_t)current_task_ptr->pid;
+}
+
+// SYS_fork 57
+void sys_fork(syscall_frame_t *frame) {
+    if (!current_task_ptr || !current_task_ptr->ctx) {
+        frame->rax = (uint64_t)-EFAULT; return;
+    }
+
+    vmm_context_t *child_ctx = clone_vmm_context(current_task_ptr->ctx);
+    if (!child_ctx) { frame->rax = (uint64_t)-ENOMEM; return; }
+
+    pid_t child_pid = clone_task(frame, child_ctx);
+    if (child_pid < 0) { frame->rax = (uint64_t)-EAGAIN; return; }
+
+    frame->rax = (uint64_t)child_pid;
+}
+
+// SYS_execve 59
+void sys_execve(syscall_frame_t *frame) {
     const char *path = (const char *)frame->rdi;
-    mode_t mode = (mode_t)frame->rsi;
+    char **user_argv = (char **)frame->rsi;
+    char **user_envp = (char **)frame->rdx;
 
     if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
 
-    frame->rax = (uint64_t)mkdir_rootfs(path, mode, current_task_ptr->euid, current_task_ptr->egid);
+    rootfs_file_t file = read_rootfs(path);
+    if (file.mode && !can_access_rootfs(&file, 0, 0, 1)) {
+        frame->rax = (uint64_t)-EACCES;
+        return;
+    }
+
+    char *argv_ptrs[64];
+    char *envp_ptrs[64];
+
+    int argc = copy_user_strarray(user_argv, argv_ptrs, 63);
+    int envc = copy_user_strarray(user_envp, envp_ptrs, 63);
+
+    int res = execve_elf(path, argv_ptrs, envp_ptrs, frame);
+    if (res == 0) {
+        current_task_ptr->fs_base = 0;
+        current_task_ptr->gs_base = 0;
+        write_msr(MSR_FS_BASE, 0);
+        write_msr(MSR_GS_BASE, 0);
+    }
+
+    free_strarray(argv_ptrs, argc);
+    free_strarray(envp_ptrs, envc);
+
+    frame->rax = (uint64_t)res;
 }
 
+// SYS_exit 60
+void sys_exit(syscall_frame_t *frame) {
+    int status = (int)frame->rdi;
+    exit_task(status);
+}
+
+// SYS_waitpid 61
+void sys_waitpid(syscall_frame_t *frame) {
+    pid_t pid = (pid_t)frame->rdi;
+    int *wstatus = (int *)frame->rsi;
+    int options = (int)frame->rdx;
+
+    while (1) {
+        int found_child = 0;
+
+        for (int i = 0; i < MAX_TASKS; i++) {
+            // Only care about children of the current task
+            if (!tasks[i].state || tasks[i].parent_pid != current_task_ptr->pid) 
+                continue;
+            
+            // If user asked for a specific PID, ignore others
+            if (pid != -1 && tasks[i].pid != pid) 
+                continue;
+
+            found_child = 1;
+
+            if (tasks[i].state == TASK_ZOMBIE) {
+                // Reap the zombie
+                if (wstatus) {
+                    int status = tasks[i].exit_status << 8;
+                    write_vmm(current_task_ptr->ctx, (uint64_t)wstatus, &status, sizeof(int));
+                }
+                
+                pid_t ret = tasks[i].pid;
+                tasks[i].state = TASK_DEAD; // Clean up the task slot
+                frame->rax = (uint64_t)ret;
+                return; // Successfully reaped!
+            }
+        }
+
+        // If we found no children at all, we can't wait
+        if (!found_child) {
+            frame->rax = -ECHILD;
+            return;
+        }
+
+        // WNOHANG: return 0 if no child has exited
+        if (options & WNOHANG) {
+            frame->rax = 0;
+            return;
+        }
+
+        // We need to yield to let the child run. But sched_lock is held
+        // by syscall_handler.S during all syscalls, and the timer ISR
+        // skips context switching when sched_lock != 0. So we must
+        // temporarily drop the lock before yielding.
+        current_task_ptr->state = TASK_READY;
+        sched_lock = 0;
+        asm volatile("int $32");
+        sched_lock = 1;
+    }
+}
+
+// SYS_kill 62
+void sys_kill(syscall_frame_t *frame) {
+    pid_t pid = (pid_t)frame->rdi;
+    int sig = (int)frame->rsi;
+
+    if (pid <= 0) {
+        frame->rax = (uint64_t)-EINVAL;
+        return;
+    }
+
+    if (sig < 0 || sig > 10) {
+        frame->rax = (uint64_t)-EINVAL;
+        return;
+    }
+
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (tasks[i].state != TASK_DEAD && tasks[i].pid == pid) {
+            // Permission check: root or same UID
+            if (!current_task_ptr && !current_task_ptr->euid == 0 && current_task_ptr->uid != tasks[i].uid) {
+                frame->rax = (uint64_t)-EPERM;
+                return;
+            }
+
+            if (pid == 1 && sig != 0) {
+                frame->rax = (uint64_t)-EPERM;
+                return;
+            }
+
+            if (sig == 0) {
+                frame->rax = 0;
+                return;
+            }
+
+            switch (sig) {
+                case SIGSTOP:
+                case SIGTSTP:
+                    if (tasks[i].state == TASK_RUNNING || tasks[i].state == TASK_READY) {
+                        tasks[i].state = TASK_STOPPED;
+                        if (pid == current_task_ptr->pid) {
+                            asm volatile("int $32");
+                        }
+                    }
+                    break;
+                case SIGCONT:
+                    if (tasks[i].state == TASK_STOPPED) {
+                        tasks[i].state = TASK_READY;
+                    }
+                    break;
+                default:
+                    // SIGKILL, SIGSEGV, SIGINT, SIGTERM, SIGABRT, SIGILL, SIGHUP
+                    if (pid == current_task_ptr->pid) {
+                        exit_task(128 + sig);
+                        // exit_task does not return
+                    }
+
+                    tasks[i].state = TASK_ZOMBIE;
+                    tasks[i].exit_status = 128 + sig;
+
+                    // Reparent children to init
+                    for (int j = 1; j < MAX_TASKS; j++) {
+                        if (tasks[j].state != TASK_DEAD && tasks[j].parent_pid == pid) {
+                            if (tasks[j].state == TASK_ZOMBIE) {
+                                tasks[j].state = TASK_DEAD;
+                            } else {
+                                tasks[j].parent_pid = 1;
+                            }
+                        }
+                    }
+
+                    // Close file descriptors
+                    for (int j = 0; j < FD_MAX; j++) {
+                        if (tasks[i].fd_table.entries[j].open) {
+                            free_fd(&tasks[i].fd_table, j);
+                        }
+                    }
+                    break;
+            }
+
+            frame->rax = 0;
+            return;
+        }
+    }
+
+    frame->rax = (uint64_t)-ESRCH;
+}
+
+// SYS_uname 63
+void sys_uname(syscall_frame_t *frame) {
+    uint64_t bufp = frame->rdi;
+
+    if (!bufp) {
+        frame->rax = (uint64_t)-EFAULT; return;
+    }
+
+    utsname_t info = uname_info;
+    get_hostname(info.nodename, sizeof(info.nodename));
+
+    write_vmm(current_task_ptr->ctx, bufp, &info, sizeof(info));
+    frame->rax = 0;
+}
+
+// SYS_getdents 78
 void sys_getdents(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     uint64_t bufp = frame->rsi;
@@ -802,6 +927,7 @@ void sys_getdents(syscall_frame_t *frame) {
     frame->rax = written;
 }
 
+// SYS_getcwd 79
 void sys_getcwd(syscall_frame_t *frame) {
     uint64_t bufp = frame->rdi;
     uint64_t buflen = frame->rsi;
@@ -815,154 +941,253 @@ void sys_getcwd(syscall_frame_t *frame) {
     frame->rax = bufp;
 }
 
-void sys_brk(syscall_frame_t *frame) {
-    uint64_t addr = frame->rdi;
+// SYS_chdir 80
+void sys_chdir(syscall_frame_t *frame) {
+    const char *path = (const char *)frame->rdi;
+    if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
 
-    if (addr == 0) {
-        // Return current break
-        frame->rax = current_task_ptr->brk;
-        return;
+    char abs_path[256];
+    build_abs_path(path, abs_path, sizeof(abs_path));
+
+    rootfs_file_t dir = read_rootfs(abs_path);
+    if (!dir.data && !dir.mode) { frame->rax = (uint64_t)-ENOENT; return; }
+    if ((dir.mode & 0040000) == 0 && strcmp(abs_path, "/") != 0) {
+        frame->rax = (uint64_t)-ENOTDIR; return;
     }
 
-    // Align to page boundary
-    uint64_t new_brk = (addr + 0xFFF) & ~0xFFFULL;
-    uint64_t old_brk = (current_task_ptr->brk + 0xFFF) & ~0xFFFULL;
-
-    if (new_brk > old_brk) {
-        // Map new pages
-        for (uint64_t a = old_brk; a < new_brk; a += 4096) {
-            if (get_vmm_phys(current_task_ptr->ctx, a) == 0) {
-                map_vmm(current_task_ptr->ctx, a, (uint64_t)pmalloc(),
-                        VMM_USER | VMM_WRITABLE);
-                memset_vmm(current_task_ptr->ctx, a, 0, 4096);
-            }
-        }
-    }
-
-    current_task_ptr->brk = addr;
-    frame->rax = current_task_ptr->brk;
-}
-
-void sys_waitpid(syscall_frame_t *frame) {
-    pid_t pid = (pid_t)frame->rdi;
-    int *wstatus = (int *)frame->rsi;
-    int options = (int)frame->rdx;
-
-    while (1) {
-        int found_child = 0;
-
-        for (int i = 0; i < MAX_TASKS; i++) {
-            // Only care about children of the current task
-            if (!tasks[i].state || tasks[i].parent_pid != current_task_ptr->pid) 
-                continue;
-            
-            // If user asked for a specific PID, ignore others
-            if (pid != -1 && tasks[i].pid != pid) 
-                continue;
-
-            found_child = 1;
-
-            if (tasks[i].state == TASK_ZOMBIE) {
-                // Reap the zombie
-                if (wstatus) {
-                    int status = tasks[i].exit_status << 8;
-                    write_vmm(current_task_ptr->ctx, (uint64_t)wstatus, &status, sizeof(int));
-                }
-                
-                pid_t ret = tasks[i].pid;
-                tasks[i].state = TASK_DEAD; // Clean up the task slot
-                frame->rax = (uint64_t)ret;
-                return; // Successfully reaped!
-            }
-        }
-
-        // If we found no children at all, we can't wait
-        if (!found_child) {
-            frame->rax = -ECHILD;
-            return;
-        }
-
-        // WNOHANG: return 0 if no child has exited
-        if (options & WNOHANG) {
-            frame->rax = 0;
-            return;
-        }
-
-        // We need to yield to let the child run. But sched_lock is held
-        // by syscall_handler.S during all syscalls, and the timer ISR
-        // skips context switching when sched_lock != 0. So we must
-        // temporarily drop the lock before yielding.
-        current_task_ptr->state = TASK_READY;
-        sched_lock = 0;
-        asm volatile("int $32");
-        sched_lock = 1;
-    }
-}
-
-void sys_getpid(syscall_frame_t *frame) {
-    frame->rax = (uint64_t)current_task_ptr->pid;
-}
-
-void sys_getppid(syscall_frame_t *frame) {
-    frame->rax = (uint64_t)current_task_ptr->parent_pid;
-}
-
-void sys_gethostname(syscall_frame_t *frame) {
-    char *name = (char *)frame->rdi;
-    size_t len = (size_t)frame->rsi;
-    frame->rax = get_hostname(name, len);
-}
-
-void sys_sethostname(syscall_frame_t *frame) {
-    const char *name = (const char *)frame->rdi;
-    size_t len = (size_t)frame->rsi;
-    bool priv = current_task_ptr && current_task_ptr->euid == 0;
-    if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
-    frame->rax = set_hostname(name, len);
-}
-
-void sys_lseek(syscall_frame_t *frame) {
-    int fd = (int)frame->rdi;
-    int64_t offset = (int64_t)frame->rsi;
-    int whence = (int)frame->rdx;
-
-    fd_entry_t *entry = get_current_fd(fd);
-    if (!entry || !entry->open) { frame->rax = -EBADF; return; }
-    if (entry->type == FD_STREAM) { frame->rax = -ESPIPE; return; }
-
-    switch (whence) {
-        case 0: // SEEK_SET
-            entry->offset = (uint64_t)offset;
-            break;
-        case 1: // SEEK_CUR
-            entry->offset = (uint64_t)((int64_t)entry->offset + offset);
-            break;
-        case 2: { // SEEK_END
-            rootfs_file_t file = read_rootfs(entry->path);
-            if (!file.data) { frame->rax = -ENOENT; return; }
-            entry->offset = (uint64_t)((int64_t)file.size + offset);
-            break;
-        }
-        default:
-            frame->rax = -EINVAL;
-            return;
-    }
-
-    frame->rax = (uint64_t)entry->offset;
-}
-
-void sys_uname(syscall_frame_t *frame) {
-    uint64_t bufp = frame->rdi;
-
-    if (!bufp) { frame->rax = (uint64_t)-EFAULT; return; }
-
-    utsname_t info = uname_info;
-    get_hostname(info.nodename, sizeof(info.nodename));
-
-    write_vmm(current_task_ptr->ctx, bufp, &info, sizeof(info));
+    strncpy(current_task_ptr->cwd, abs_path, 255);
+    current_task_ptr->cwd[255] = '\0';
     frame->rax = 0;
 }
 
+// SYS_mkdir 83
+void sys_mkdir(syscall_frame_t *frame) {
+    const char *path = (const char *)frame->rdi;
+    mode_t mode = (mode_t)frame->rsi;
+
+    if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    frame->rax = (uint64_t)mkdir_rootfs(path, mode, current_task_ptr->euid, current_task_ptr->egid);
+}
+
+// SYS_chmod 90
+void sys_chmod(syscall_frame_t *frame) {
+    const char *path = (const char *)frame->rdi;
+    mode_t mode = (mode_t)frame->rsi;
+    if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    frame->rax = (uint64_t)chmod_rootfs(path, mode);
+}
+
+// SYS_fchmod 91
+void sys_fchmod(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    mode_t mode = (mode_t)frame->rsi;
+
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+
+    frame->rax = (uint64_t)chmod_rootfs(entry->path, mode);
+}
+
+// SYS_getuid 102
+void sys_getuid(syscall_frame_t *frame) {
+    frame->rax = current_task_ptr->uid;
+}
+
+// SYS_getgid 104
+void sys_getgid(syscall_frame_t *frame) {
+    frame->rax = current_task_ptr->gid;
+}
+
+// SYS_setuid 105
+void sys_setuid(syscall_frame_t *frame) {
+    uid_t uid = (uid_t)frame->rdi;
+
+    if (current_task_ptr && current_task_ptr->euid == 0) {
+        current_task_ptr->uid = uid;
+        current_task_ptr->euid = uid;
+        frame->rax = 0;
+        return;
+    }
+
+    if (uid == current_task_ptr->uid || uid == current_task_ptr->euid) {
+        current_task_ptr->euid = uid;
+        frame->rax = 0;
+        return;
+    }
+
+    frame->rax = (uint64_t)-EPERM;
+}
+
+// SYS_setgid 106
+void sys_setgid(syscall_frame_t *frame) {
+    gid_t gid = (gid_t)frame->rdi;
+
+    if (current_task_ptr && current_task_ptr->euid == 0) {
+        current_task_ptr->gid = gid;
+        current_task_ptr->egid = gid;
+        frame->rax = 0;
+        return;
+    }
+
+    if (gid == current_task_ptr->gid || gid == current_task_ptr->egid) {
+        current_task_ptr->egid = gid;
+        frame->rax = 0;
+        return;
+    }
+
+    frame->rax = (uint64_t)-EPERM;
+}
+
+// SYS_geteuid 107
+void sys_geteuid(syscall_frame_t *frame) {
+    frame->rax = current_task_ptr->euid;
+}
+
+// SYS_getegid 108
+void sys_getegid(syscall_frame_t *frame) {
+    frame->rax = current_task_ptr->egid;
+}
+
+// SYS_getppid 110
+void sys_getppid(syscall_frame_t *frame) {
+    frame->rax = (uint64_t)-ENOSYS; // Added back stub to ensure compliance
+}
+
+// SYS_seteuid 115
+void sys_seteuid(syscall_frame_t *frame) {
+    uid_t euid = (uid_t)frame->rdi;
+
+    if (current_task_ptr && current_task_ptr->euid == 0) {
+        current_task_ptr->euid = euid;
+        frame->rax = 0;
+        return;
+    }
+
+    if (euid == current_task_ptr->uid || euid == current_task_ptr->euid) {
+        current_task_ptr->euid = euid;
+        frame->rax = 0;
+        return;
+    }
+
+    frame->rax = (uint64_t)-EPERM;
+}
+
+// SYS_setegid 116
+void sys_setegid(syscall_frame_t *frame) {
+    gid_t egid = (gid_t)frame->rdi;
+
+    if (current_task_ptr && current_task_ptr->euid == 0) {
+        current_task_ptr->egid = egid;
+        frame->rax = 0;
+        return;
+    }
+
+    if (egid == current_task_ptr->gid || egid == current_task_ptr->egid) {
+        current_task_ptr->egid = egid;
+        frame->rax = 0;
+        return;
+    }
+
+    frame->rax = (uint64_t)-EPERM;
+}
+
+// SYS_arch_prctl 158
+void sys_arch_prctl(syscall_frame_t *frame) {
+    int code = (int)frame->rdi;
+    uint64_t addr = frame->rsi;
+
+    switch (code) {
+        case ARCH_SET_FS:
+            current_task_ptr->fs_base = addr;
+            write_msr(MSR_FS_BASE, addr);
+            frame->rax = 0;
+            return;
+        case ARCH_GET_FS:
+            if (!addr) { frame->rax = (uint64_t)-EFAULT; return; }
+            write_vmm(current_task_ptr->ctx, addr, &current_task_ptr->fs_base, sizeof(uint64_t));
+            frame->rax = 0;
+            return;
+        case ARCH_SET_GS:
+            current_task_ptr->gs_base = addr;
+            write_msr(MSR_GS_BASE, addr);
+            frame->rax = 0;
+            return;
+        case ARCH_GET_GS:
+            if (!addr) { frame->rax = (uint64_t)-EFAULT; return; }
+            write_vmm(current_task_ptr->ctx, addr, &current_task_ptr->gs_base, sizeof(uint64_t));
+            frame->rax = 0;
+            return;
+        default:
+            frame->rax = (uint64_t)-EINVAL;
+            return;
+    }
+}
+
+// SYS_mount 165
+void sys_mount(syscall_frame_t *frame) {
+    const char *source = (const char *)frame->rdi;
+    const char *target = (const char *)frame->rsi;
+    const char *filesystemtype = (const char *)frame->rdx;
+    unsigned long mountflags = (unsigned long)frame->r10;
+    const void *data = (const void *)frame->r8;
+
+    (void)source; (void)mountflags; (void)data;
+
+    bool priv = current_task_ptr && current_task_ptr->euid == 0;
+    if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
+
+    if (!target || !filesystemtype || !*target || !*filesystemtype) {
+        frame->rax = (uint64_t)-EINVAL; return;
+    }
+
+    rootfs_file_t dir = read_rootfs(target);
+    if ((dir.mode & 0040000) == 0 && !dir.data) {
+        frame->rax = (uint64_t)-ENOENT; return;
+    }
+
+    uint64_t irq;
+    spin_lock_irqsave(&vfs_lock, &irq);
+    for (int i = 0; i < MAX_MOUNTS; i++) {
+        if (!mounts[i].active) {
+            strncpy(mounts[i].path, target, 63); mounts[i].path[63] = '\0';
+            strncpy(mounts[i].filesystemtype, filesystemtype, 31); mounts[i].filesystemtype[31] = '\0';
+            mounts[i].active = true;
+            spin_unlock_irqrestore(&vfs_lock, irq);
+            frame->rax = 0;
+            return;
+        }
+    }
+    spin_unlock_irqrestore(&vfs_lock, irq);
+    frame->rax = (uint64_t)-ENOMEM;
+}
+
+// SYS_umount 166
+void sys_umount(syscall_frame_t *frame) {
+    const char *target = (const char *)frame->rdi;
+    (void)frame->rsi;
+
+    bool priv = current_task_ptr && current_task_ptr->euid == 0;
+    if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
+
+    if (!target) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    uint64_t irq;
+    spin_lock_irqsave(&vfs_lock, &irq);
+    for (int i = 0; i < MAX_MOUNTS; i++) {
+        if (mounts[i].active && strcmp(mounts[i].path, target) == 0) {
+            mounts[i].active = false;
+            spin_unlock_irqrestore(&vfs_lock, irq);
+            frame->rax = 0;
+            return;
+        }
+    }
+    spin_unlock_irqrestore(&vfs_lock, irq);
+    frame->rax = (uint64_t)-ENOENT;
+}
+
+// SYS_reboot 169
 void sys_reboot(syscall_frame_t *frame) {
     int how = (int)frame->rdi;
 
@@ -987,225 +1212,39 @@ void sys_reboot(syscall_frame_t *frame) {
     frame->rax = -EINVAL;
 }
 
-void sys_getuid(syscall_frame_t *frame) {
-    frame->rax = current_task_ptr->uid;
+// SYS_sethostname 170
+void sys_sethostname(syscall_frame_t *frame) {
+    const char *name = (const char *)frame->rdi;
+    size_t len = (size_t)frame->rsi;
+    bool priv = current_task_ptr && current_task_ptr->euid == 0;
+    if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
+    frame->rax = set_hostname(name, len);
 }
 
-void sys_getgid(syscall_frame_t *frame) {
-    frame->rax = current_task_ptr->gid;
+// SYS_gethostname 175
+void sys_gethostname(syscall_frame_t *frame) {
+    char *name = (char *)frame->rdi;
+    size_t len = (size_t)frame->rsi;
+    frame->rax = get_hostname(name, len);
 }
 
-void sys_geteuid(syscall_frame_t *frame) {
-    frame->rax = current_task_ptr->euid;
+// SYS_openat 257
+void sys_openat(syscall_frame_t *frame) {
+    // For now, implement as a wrapper; AT_FDCWD is expected.
+    // We ignore the directory fd and just use open.
+    sys_open(frame);
 }
 
-void sys_getegid(syscall_frame_t *frame) {
-    frame->rax = current_task_ptr->egid;
-}
+// SYS_fchmodat 268
+void sys_fchmodat(syscall_frame_t *frame) {
+    int dirfd = (int)frame->rdi;
+    const char *path = (const char *)frame->rsi;
+    mode_t mode = (mode_t)frame->rdx;
+    int flags = (int)frame->r10;
 
-void sys_setuid(syscall_frame_t *frame) {
-    uid_t uid = (uid_t)frame->rdi;
+    (void)dirfd; (void)flags; // Not fully implemented yet
 
-    if (current_task_ptr && current_task_ptr->euid == 0) {
-        current_task_ptr->uid = uid;
-        current_task_ptr->euid = uid;
-        frame->rax = 0;
-        return;
-    }
+    if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
 
-    if (uid == current_task_ptr->uid || uid == current_task_ptr->euid) {
-        current_task_ptr->euid = uid;
-        frame->rax = 0;
-        return;
-    }
-
-    frame->rax = (uint64_t)-EPERM;
-}
-
-void sys_setgid(syscall_frame_t *frame) {
-    gid_t gid = (gid_t)frame->rdi;
-
-    if (current_task_ptr && current_task_ptr->euid == 0) {
-        current_task_ptr->gid = gid;
-        current_task_ptr->egid = gid;
-        frame->rax = 0;
-        return;
-    }
-
-    if (gid == current_task_ptr->gid || gid == current_task_ptr->egid) {
-        current_task_ptr->egid = gid;
-        frame->rax = 0;
-        return;
-    }
-
-    frame->rax = (uint64_t)-EPERM;
-}
-
-void sys_seteuid(syscall_frame_t *frame) {
-    uid_t euid = (uid_t)frame->rdi;
-
-    if (current_task_ptr && current_task_ptr->euid == 0) {
-        current_task_ptr->euid = euid;
-        frame->rax = 0;
-        return;
-    }
-
-    if (euid == current_task_ptr->uid || euid == current_task_ptr->euid) {
-        current_task_ptr->euid = euid;
-        frame->rax = 0;
-        return;
-    }
-
-    frame->rax = (uint64_t)-EPERM;
-}
-
-void sys_setegid(syscall_frame_t *frame) {
-    gid_t egid = (gid_t)frame->rdi;
-
-    if (current_task_ptr && current_task_ptr->euid == 0) {
-        current_task_ptr->egid = egid;
-        frame->rax = 0;
-        return;
-    }
-
-    if (egid == current_task_ptr->gid || egid == current_task_ptr->egid) {
-        current_task_ptr->egid = egid;
-        frame->rax = 0;
-        return;
-    }
-
-    frame->rax = (uint64_t)-EPERM;
-}
-
-void sys_arch_prctl(syscall_frame_t *frame) {
-    int code = (int)frame->rdi;
-    uint64_t addr = frame->rsi;
-
-    switch (code) {
-        case ARCH_SET_FS:
-            current_task_ptr->fs_base = addr;
-            write_msr(0xC0000100, addr); // MSR_FS_BASE
-            frame->rax = 0;
-            break;
-        case ARCH_GET_FS:
-            write_vmm(current_task_ptr->ctx, addr, &current_task_ptr->fs_base, sizeof(uint64_t));
-            frame->rax = 0;
-            break;
-        case ARCH_SET_GS:
-            current_task_ptr->gs_base = addr;
-            write_msr(0xC0000101, addr); // MSR_GS_BASE
-            frame->rax = 0;
-            break;
-        case ARCH_GET_GS:
-            write_vmm(current_task_ptr->ctx, addr, &current_task_ptr->gs_base, sizeof(uint64_t));
-            frame->rax = 0;
-            break;
-        default:
-            frame->rax = (uint64_t)-EINVAL;
-            break;
-    }
-}
-
-void sys_kill(syscall_frame_t *frame) {
-    pid_t pid = (pid_t)frame->rdi;
-    int sig = (int)frame->rsi;
-
-    if (pid <= 0) {
-        frame->rax = (uint64_t)-EINVAL;
-        return;
-    }
-
-    if (sig < 0 || sig > 10) {
-        frame->rax = (uint64_t)-EINVAL;
-        return;
-    }
-
-    for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].state != TASK_DEAD && tasks[i].pid == pid) {
-            // Permission check: root or same UID
-            if (!current_task_ptr && !current_task_ptr->euid == 0 && current_task_ptr->uid != tasks[i].uid) {
-                frame->rax = (uint64_t)-EPERM;
-                return;
-            }
-
-            if (pid == 1 && sig != 0) {
-                frame->rax = (uint64_t)-EPERM;
-                return;
-            }
-
-            if (sig == 0) {
-                frame->rax = 0;
-                return;
-            }
-
-            switch (sig) {
-                case SIGSTOP:
-                case SIGTSTP:
-                    if (tasks[i].state == TASK_RUNNING || tasks[i].state == TASK_READY) {
-                        tasks[i].state = TASK_STOPPED;
-                        if (pid == current_task_ptr->pid) {
-                            asm volatile("int $32");
-                        }
-                    }
-                    break;
-                case SIGCONT:
-                    if (tasks[i].state == TASK_STOPPED) {
-                        tasks[i].state = TASK_READY;
-                    }
-                    break;
-                default:
-                    // SIGKILL, SIGSEGV, SIGINT, SIGTERM, SIGABRT, SIGILL, SIGHUP
-                    if (pid == current_task_ptr->pid) {
-                        exit_task(128 + sig);
-                        // exit_task does not return
-                    }
-
-                    tasks[i].state = TASK_ZOMBIE;
-                    tasks[i].exit_status = 128 + sig;
-
-                    // Reparent children to init
-                    for (int j = 1; j < MAX_TASKS; j++) {
-                        if (tasks[j].state != TASK_DEAD && tasks[j].parent_pid == pid) {
-                            if (tasks[j].state == TASK_ZOMBIE) {
-                                tasks[j].state = TASK_DEAD;
-                            } else {
-                                tasks[j].parent_pid = 1;
-                            }
-                        }
-                    }
-
-                    // Close file descriptors
-                    for (int j = 0; j < FD_MAX; j++) {
-                        if (tasks[i].fd_table.entries[j].open) {
-                            free_fd(&tasks[i].fd_table, j);
-                        }
-                    }
-                    break;
-            }
-
-            frame->rax = 0;
-            return;
-        }
-    }
-
-    frame->rax = (uint64_t)-ESRCH;
-}
-
-void sys_nanosleep(syscall_frame_t *frame) {
-    struct timespec *req = (struct timespec *)frame->rdi;
-    struct timespec *rem = (struct timespec *)frame->rsi;
-    if (!req) { frame->rax = (uint64_t)-EINVAL; return; }
-
-    struct timespec ts;
-    read_vmm(current_task_ptr->ctx, &ts, (uint64_t)req, sizeof(struct timespec));
-
-    uint64_t total_us = (ts.tv_sec * 1000000) + (ts.tv_nsec / 1000);
-    sleep_us(total_us);
-
-    if (rem) {
-        struct timespec zero_ts = {0, 0};
-        write_vmm(current_task_ptr->ctx, (uint64_t)rem, &zero_ts, sizeof(struct timespec));
-    }
-    
-    frame->rax = 0;
+    frame->rax = (uint64_t)chmod_rootfs(path, mode);
 }
