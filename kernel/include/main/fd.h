@@ -5,6 +5,7 @@
 #include <freestanding/stddef.h>
 
 #define FD_MAX 32
+#define AT_FDCWD -100
 
 // File descriptor types
 typedef enum {

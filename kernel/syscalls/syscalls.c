@@ -18,6 +18,7 @@ void syscall_dispatch(syscall_frame_t *frame) {
         case SYS_lseek: sys_lseek(frame); break;
         case SYS_brk: sys_brk(frame); break;
         case SYS_ioctl: sys_ioctl(frame); break;
+        case SYS_fcntl: sys_fcntl(frame); break;
         case SYS_dup: sys_dup(frame); break;
         case SYS_dup2: sys_dup2(frame); break;
         case SYS_nanosleep: sys_nanosleep(frame); break;

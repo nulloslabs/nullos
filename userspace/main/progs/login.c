@@ -86,7 +86,7 @@ static void sha256_hash(const char *src, char out[65]) {
             } else {
                 for (int i = 0; i < 8; i++)
                     chunk[63 - i] = (uint8_t)(bitlen >> (i * 8));
-                    end = 1;
+                end = 1;
             }
         }
 

@@ -260,9 +260,7 @@ static void add_modified_file(const char *path, void *data, size_t size, uint32_
     }
 }
 
-rootfs_file_t read_rootfs(const char *path) {
-    static int depth = 0;
-
+static void get_norm_path(const char *path, char *out_norm, size_t out_size) {
     char abs_path[256];
     get_absolute_path(path, abs_path, sizeof(abs_path));
 
@@ -275,8 +273,14 @@ rootfs_file_t read_rootfs(const char *path) {
     char resolved_path[256];
     resolve_path_symlinks(normalized_path, resolved_path, sizeof(resolved_path));
 
+    normalize_path(resolved_path, out_norm, out_size);
+}
+
+rootfs_file_t read_rootfs(const char *path) {
+    static int depth = 0;
+
     char norm[256];
-    normalize_path(resolved_path, norm, sizeof(norm));
+    get_norm_path(path, norm, sizeof(norm));
 
     rootfs_file_t result = { .data = NULL, .size = 0, .mode = 0, .uid = 0, .gid = 0 };
 
@@ -319,8 +323,13 @@ rootfs_file_t read_rootfs(const char *path) {
                 char target[101];
                 strncpy(target, h->linkname, 100);
                 target[100] = '\0';
+                
+                // Get absolute path of current file to resolve target relative to it
+                char current_abs[256];
+                get_absolute_path(path, current_abs, sizeof(current_abs));
+                
                 char resolved_abs[256];
-                resolve_link_target(resolved_path, target, resolved_abs, sizeof(resolved_abs));
+                resolve_link_target(current_abs, target, resolved_abs, sizeof(resolved_abs));
                 depth--;
                 return read_rootfs(resolved_abs);
             }
@@ -342,6 +351,9 @@ rootfs_file_t read_rootfs(const char *path) {
 }
 
 int write_rootfs(const char *path, const void *data, uint64_t size, uint32_t mode, uid_t uid, gid_t gid) {
+    char norm[256];
+    get_norm_path(path, norm, sizeof(norm));
+
     void *copy = NULL;
     if (size > 0) {
         copy = malloc((size_t)size);
@@ -349,16 +361,13 @@ int write_rootfs(const char *path, const void *data, uint64_t size, uint32_t mod
         memcpy(copy, data, (size_t)size);
     }
 
-    add_modified_file(path, copy, (size_t)size, mode, uid, gid);
+    add_modified_file(norm, copy, (size_t)size, mode, uid, gid);
     return 0;
 }
 
 int delete_rootfs(const char *path) {
-    char abs_path[256];
-    get_absolute_path(path, abs_path, sizeof(abs_path));
-
     char norm[256];
-    normalize_path(abs_path, norm, sizeof(norm));
+    get_norm_path(path, norm, sizeof(norm));
 
     for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
         if (modified_files[i].is_active && strcmp(modified_files[i].path, norm) == 0) {
@@ -371,15 +380,16 @@ int delete_rootfs(const char *path) {
 }
 
 int mkdir_rootfs(const char *path, mode_t mode, uid_t uid, gid_t gid) {
-    add_modified_file(path, NULL, 0, mode | 0x4000, uid, gid); // S_IFDIR
+    char norm[256];
+    get_norm_path(path, norm, sizeof(norm));
+
+    add_modified_file(norm, NULL, 0, mode | 0x4000, uid, gid); // S_IFDIR
     return 0;
 }
 
 int chmod_rootfs(const char *path, mode_t mode) {
-    char abs_path[256];
-    get_absolute_path(path, abs_path, sizeof(abs_path));
     char norm[256];
-    normalize_path(abs_path, norm, sizeof(norm));
+    get_norm_path(path, norm, sizeof(norm));
 
     rootfs_file_t file = read_rootfs(path);
     if (!file.mode) return -ENOENT;
@@ -397,7 +407,6 @@ int get_rootfs_entry(int index, directory_entry_t *entry) {
 
     uint8_t *ptr = tar_archive_start;
     int count = 0;
-    int entry_index = 0;
 
     while (1) {
         struct tar_header *h = (struct tar_header *)ptr;

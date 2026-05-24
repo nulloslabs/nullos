@@ -16,13 +16,12 @@ int alloc_fd(fd_table_t *table, const char *path, fd_type_t type, uint32_t flags
             return i;
         }
     }
-    errno = EMFILE;
-    return -EMFILE;
+    return -1;
 }
 
 int free_fd(fd_table_t *table, int fd) {
-    if (fd < 0 || fd >= FD_MAX) { errno = EBADF; return -EBADF; }
-    if (!table->entries[fd].open) { errno = EBADF; return -EBADF; }
+    if (fd < 0 || fd >= FD_MAX) { return -1; }
+    if (!table->entries[fd].open) { return -1; }
     table->entries[fd].open   = false;
     table->entries[fd].type   = FD_NONE;
     table->entries[fd].offset = 0;

@@ -871,11 +871,8 @@ static int aml_exec_pts(uint8_t slp_state) {
     // DEBUG: print readbacks then halt BEFORE SMI fires so LCD stays on.
     // Remove halt() once SLPN=5, SLPT=5, RAMB looks like a valid address.
     {
-        uint8_t slpn_rb = slpn ? (uint8_t)fld_read(slpn) : 0xFF;
-        uint8_t slpt_rb = 0xFF;
         if (ramb_val && ramb_val != 0xFFFFFFFFu && slpt_fld && slpt_fld->type == AML_FIELD)
-            slpt_rb = *(volatile uint8_t*)((uintptr_t)ramb_val + hhdm_offset + slpt_fld->field.bit_off/8);
-        aml_obj_t *scio2 = ns_find("\\", "SCIO");
+            (void)*(volatile uint8_t*)((uintptr_t)ramb_val + hhdm_offset + slpt_fld->field.bit_off/8);
     }
 
     // Step 4: OEMS fires ISMI(0x9D) - SMI reads SLPN/SLPT to prepare chipset

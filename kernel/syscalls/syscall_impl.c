@@ -161,17 +161,28 @@ static void normalize_path_str(char *path) {
     path[255] = '\0';
 }
 
-static void build_abs_path(const char *path, char *out, size_t out_size) {
+static int build_abs_path_at(int dirfd, const char *path, char *out, size_t out_size) {
     if (path[0] == '/') {
         strncpy(out, path, out_size - 1);
     } else {
-        strncpy(out, current_task_ptr->cwd, out_size - 1);
+        if (dirfd == AT_FDCWD) {
+            strncpy(out, current_task_ptr->cwd, out_size - 1);
+        } else {
+            fd_entry_t *entry = get_fd(&current_task_ptr->fd_table, dirfd);
+            if (!entry || !entry->open) return -EBADF;
+            strncpy(out, entry->path, out_size - 1);
+        }
         if (strcmp(out, "/") != 0)
             strncat(out, "/", out_size - strlen(out) - 1);
         strncat(out, path, out_size - strlen(out) - 1);
     }
     out[out_size - 1] = '\0';
     normalize_path_str(out);
+    return 0;
+}
+
+static void build_abs_path(const char *path, char *out, size_t out_size) {
+    build_abs_path_at(AT_FDCWD, path, out, out_size);
 }
 
 static int copy_user_strarray(char **user_arr, char **out, int max_count) {
@@ -326,15 +337,18 @@ void sys_open(syscall_frame_t *frame) {
 
     if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
 
+    char abs_path[256];
+    build_abs_path(path, abs_path, sizeof(abs_path));
+
     char rel_path[256];
-    if (is_mounted_under(path, "devfs", rel_path)) {
+    if (is_mounted_under(abs_path, "devfs", rel_path)) {
         if (!devfs_device_exists(rel_path)) { frame->rax = (uint64_t)-ENOENT; return; }
-        int fd = alloc_fd(&current_task_ptr->fd_table, path, FD_DEV, flags);
+        int fd = alloc_fd(&current_task_ptr->fd_table, abs_path, FD_DEV, flags);
         frame->rax = (uint64_t)fd;
         return;
     }
 
-    rootfs_file_t file = read_rootfs(path);
+    rootfs_file_t file = read_rootfs(abs_path);
 
     if (!file.mode && !(flags & O_CREAT)) {
         frame->rax = (uint64_t)-ENOENT;
@@ -342,9 +356,9 @@ void sys_open(syscall_frame_t *frame) {
     }
 
     if ((flags & O_CREAT) && !file.data && !file.mode) {
-        int r = write_rootfs(path, "", 0, mode, current_task_ptr->euid, current_task_ptr->egid);
+        int r = write_rootfs(abs_path, "", 0, mode, current_task_ptr->euid, current_task_ptr->egid);
         if (r < 0) { frame->rax = (uint64_t)r; return; }
-        file = read_rootfs(path);
+        file = read_rootfs(abs_path);
     }
 
     int want_write = (flags & O_WRONLY) || (flags & O_RDWR);
@@ -354,7 +368,7 @@ void sys_open(syscall_frame_t *frame) {
         return;
     }
 
-    int fd = alloc_fd(&current_task_ptr->fd_table, path, FD_FILE, flags);
+    int fd = alloc_fd(&current_task_ptr->fd_table, abs_path, FD_FILE, flags);
     frame->rax = (uint64_t)fd;
 }
 
@@ -542,6 +556,49 @@ void sys_ioctl(syscall_frame_t *frame) {
         (void)is_tty;
         frame->rax = (uint64_t)-EINVAL;
         return;
+    }
+}
+
+void sys_fcntl(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    int cmd = (int)frame->rsi;
+    uint64_t arg = frame->rdx;
+
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+
+    switch (cmd) {
+        case F_DUPFD: {
+            int start = (int)arg;
+            if (start < 0 || start >= FD_MAX) { frame->rax = (uint64_t)-EINVAL; return; }
+            fd_table_t *table = &current_task_ptr->fd_table;
+            for (int i = start; i < FD_MAX; i++) {
+                if (!table->entries[i].open) {
+                    table->entries[i] = *entry;
+                    table->entries[i].open = true;
+                    frame->rax = (uint64_t)i;
+                    return;
+                }
+            }
+            frame->rax = (uint64_t)-EMFILE;
+            return;
+        }
+        case F_GETFD:
+            frame->rax = 0;
+            return;
+        case F_SETFD:
+            frame->rax = 0;
+            return;
+        case F_GETFL:
+            frame->rax = (uint64_t)entry->flags;
+            return;
+        case F_SETFL:
+            entry->flags = (uint32_t)arg;
+            frame->rax = 0;
+            return;
+        default:
+            frame->rax = (uint64_t)-EINVAL;
+            return;
     }
 }
 
@@ -1190,8 +1247,47 @@ void sys_gethostname(syscall_frame_t *frame) {
 }
 
 void sys_openat(syscall_frame_t *frame) {
-    // TODO: Make this not an open() wrapper
-    sys_open(frame);
+    int dirfd = (int)frame->rdi;
+    const char *path = (const char *)frame->rsi;
+    uint32_t flags = (uint32_t)frame->rdx;
+    mode_t mode = (mode_t)frame->r10;
+
+    if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    char abs_path[256];
+    int res = build_abs_path_at(dirfd, path, abs_path, sizeof(abs_path));
+    if (res < 0) { frame->rax = (uint64_t)res; return; }
+
+    char rel_path[256];
+    if (is_mounted_under(abs_path, "devfs", rel_path)) {
+        if (!devfs_device_exists(rel_path)) { frame->rax = (uint64_t)-ENOENT; return; }
+        int fd = alloc_fd(&current_task_ptr->fd_table, abs_path, FD_DEV, flags);
+        frame->rax = (uint64_t)fd;
+        return;
+    }
+
+    rootfs_file_t file = read_rootfs(abs_path);
+
+    if (!file.mode && !(flags & O_CREAT)) {
+        frame->rax = (uint64_t)-ENOENT;
+        return;
+    }
+
+    if ((flags & O_CREAT) && !file.data && !file.mode) {
+        int r = write_rootfs(abs_path, "", 0, mode, current_task_ptr->euid, current_task_ptr->egid);
+        if (r < 0) { frame->rax = (uint64_t)r; return; }
+        file = read_rootfs(abs_path);
+    }
+
+    int want_write = (flags & O_WRONLY) || (flags & O_RDWR);
+    int want_read = !want_write || (flags & O_RDWR);
+    if (!can_access_rootfs(&file, want_read, want_write, 0)) {
+        frame->rax = (uint64_t)-EACCES;
+        return;
+    }
+
+    int fd = alloc_fd(&current_task_ptr->fd_table, abs_path, FD_FILE, flags);
+    frame->rax = (uint64_t)fd;
 }
 
 void sys_fchmodat(syscall_frame_t *frame) {
@@ -1200,9 +1296,13 @@ void sys_fchmodat(syscall_frame_t *frame) {
     mode_t mode = (mode_t)frame->rdx;
     int flags = (int)frame->r10;
 
-    (void)dirfd; (void)flags; // Not fully implemented yet
+    (void)flags;
 
     if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
 
-    frame->rax = (uint64_t)chmod_rootfs(path, mode);
+    char abs_path[256];
+    int res = build_abs_path_at(dirfd, path, abs_path, sizeof(abs_path));
+    if (res < 0) { frame->rax = (uint64_t)res; return; }
+
+    frame->rax = (uint64_t)chmod_rootfs(abs_path, mode);
 }

@@ -15,7 +15,6 @@ void putc_fb(char c, int x, int y, uint32_t fg, uint32_t bg) {
     if (!fb_req.response || fb_req.response->framebuffer_count < 1) return; // If there's no framebuffer don't even bother drawing.
     if (!current_font_w || !current_font_h) return; // If there's no font don't even bother drawing.
     if ((unsigned char)c < 0x20) return; // If the character is not printable, don't even bother drawing.
-    struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
 
     // Use the index for the offset calculation
     unsigned char *glyph = &current_font[(unsigned char)c * current_font_h];

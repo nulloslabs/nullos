@@ -197,7 +197,7 @@ void usb_keyboard_process_report(uint8_t *report, int kbd_index) {
 
 void poll_usb_keyboard(void) {
     for (int k = 0; k < kbd_total; k++) {
-        if (!kbd_list[k].hcd || !kbd_list[k].dev || !kbd_list[k].prev_report)
+        if (!kbd_list[k].hcd || !kbd_list[k].dev)
             continue;
 
         uint8_t *pr = kbd_list[k].prev_report;

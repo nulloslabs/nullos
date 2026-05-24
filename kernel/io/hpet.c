@@ -33,21 +33,6 @@ void sleep_us(uint64_t us) {
     }
 }
 
-void init_hpet(void) {
-    uint64_t phys = 0xFED00000ULL;
-    struct acpi_header* hpet_tbl = find_acpi_table("HPET");
-    if (hpet_tbl) {
-        uint64_t tbl_phys = *(uint64_t*)((uint8_t*)hpet_tbl + 0x2C);
-    }
-    hpet_base = (uintptr_t)(phys + hhdm_offset);
-    volatile uint64_t* hpet_capabilities = (volatile uint64_t*)hpet_base;
-    volatile uint64_t* hpet_config = (volatile uint64_t*)(hpet_base + 0x10);
-    hpet_period = (uint32_t)(*hpet_capabilities >> 32);
-    if (hpet_period == 0 || hpet_period > 100000000) { hpet_base = 0; return; }
-    *hpet_config |= 1;
-    printf("hpet: initialized hpet\n");
-}
-
 uint64_t read_hpet_counter(void) {
     if (!hpet_base || hpet_period == 0) return 0;
     volatile uint64_t* hpet_main_counter = (volatile uint64_t*)(hpet_base + 0xF0);
@@ -71,4 +56,15 @@ void stop_hpet(void) {
         // Compiler barrier (juuuust in case)
         asm volatile ("" : : : "memory");
     }
+}
+
+void init_hpet(void) {
+    uint64_t phys = 0xFED00000ULL;
+    hpet_base = (uintptr_t)(phys + hhdm_offset);
+    volatile uint64_t* hpet_capabilities = (volatile uint64_t*)hpet_base;
+    volatile uint64_t* hpet_config = (volatile uint64_t*)(hpet_base + 0x10);
+    hpet_period = (uint32_t)(*hpet_capabilities >> 32);
+    if (hpet_period == 0 || hpet_period > 100000000) { hpet_base = 0; return; }
+    *hpet_config |= 1;
+    printf("hpet: initialized hpet\n");
 }

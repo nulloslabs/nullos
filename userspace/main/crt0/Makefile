@@ -14,7 +14,7 @@ include ../../config.mk
 all: crt0
 
 crt0: crt0.S Makefile ../../config.mk
-	@if [ -f ../../crt0.o ] && [ ../../crt0.o -nt crt0.S ]; then \
+	@if [ -f ../../crt0.o ] && [ ../../crt0.o -nt crt0.S ] && [ ../../crt0.o -nt Makefile ] && [ ../../crt0.o -nt ../../config.mk ]; then \
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/crt0.o is already up to date"; \
 	else \
 		printf "  %-7s %s\n" "AS" "$(SUBDIR)/crt0.o" && \

@@ -15,21 +15,14 @@ static uint32_t tgz_get_bits(tgz_stream *s, int bits) {
 }
 
 static void tgz_build_tree(tgz_huffman *tree, const uint8_t *lens, int n) {
-    int i, codes[TGZ_MAX_BITS + 1];
     memset(tree->counts, 0, sizeof(tree->counts));
-    for (i = 0; i < n; i++) tree->counts[lens[i]]++;
+    for (int i = 0; i < n; i++) tree->counts[lens[i]]++;
     tree->counts[0] = 0; 
-
-    int code = 0;
-    for (i = 1; i <= TGZ_MAX_BITS; i++) {
-        code = (code + tree->counts[i-1]) << 1;
-        codes[i] = code;
-    }
     
     int offsets_map[TGZ_MAX_BITS + 1];
-    for(i=0; i<=TGZ_MAX_BITS; i++) offsets_map[i] = 0;
+    memset(offsets_map, 0, sizeof(offsets_map));
 
-    for (i = 0; i < n; i++) {
+    for (int i = 0; i < n; i++) {
         if (lens[i] != 0) tree->symbols[lens[i]][offsets_map[lens[i]]++] = (uint16_t)i;
     }
 }

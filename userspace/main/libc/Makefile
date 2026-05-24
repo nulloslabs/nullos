@@ -41,11 +41,11 @@ libc: $(OBJ)
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/libc.so $(SUBDIR)/libc.a are already up to date"; \
 	fi
 
-%.o: %.c
+%.o: %.c Makefile ../../config.mk
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/main/libc/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
-%.o: %.S
+%.o: %.S Makefile ../../config.mk
 	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/main/libc/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 

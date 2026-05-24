@@ -19,7 +19,7 @@ all: ld
 
 ld: $(OBJ)
 	@needs_build=0; \
-	if [ ! -f ../../ld.so ] || [ $(OBJ) -nt ../../ld.so ]; then needs_build=1; fi; \
+	if [ ! -f ../../ld.so ] || [ $(OBJ) -nt ../../ld.so ] || [ Makefile -nt ../../ld.so ] || [ ../../config.mk -nt ../../ld.so ]; then needs_build=1; fi; \
 	if [ $$needs_build -eq 1 ]; then \
 		printf "  %-7s %s\n" "LD" "$(SUBDIR)/ld.so" && \
 		$(LD) $(LDFLAGS) -shared -fPIC -nostdlib -e _start $(OBJ) -o ../../ld.so && \
@@ -29,7 +29,7 @@ ld: $(OBJ)
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/ld.so is already up to date"; \
 	fi
 
-%.o: %.c
+%.o: %.c Makefile ../../config.mk
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/main/ld/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 

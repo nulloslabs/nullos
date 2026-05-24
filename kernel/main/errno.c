@@ -1,1 +1,3 @@
-int errno = 0;
+#include <main/errno.h>
+
+// Empty file :3

@@ -13,6 +13,7 @@ void sys_fstat(syscall_frame_t *frame);
 void sys_lseek(syscall_frame_t *frame);
 void sys_brk(syscall_frame_t *frame);
 void sys_ioctl(syscall_frame_t *frame);
+void sys_fcntl(syscall_frame_t *frame);
 void sys_dup(syscall_frame_t *frame);
 void sys_dup2(syscall_frame_t *frame);
 void sys_nanosleep(syscall_frame_t *frame);

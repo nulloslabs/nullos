@@ -2,31 +2,19 @@
 #include <stddef.h>
 #include <sys/syscall.h>
 
+#define AT_NULL   0
+#define AT_PHDR   3
+#define AT_PHENT  4
+#define AT_PHNUM  5
+#define AT_BASE   7
+#define AT_ENTRY  9
+
 typedef struct {
     uint64_t type;
     union {
         uint64_t val;
     } un;
 } __attribute__((packed)) auxv_t;
-
-#define AT_NULL   0
-#define AT_PHDR   3
-#define AT_PHENT  4
-#define AT_PHNUM  5
-#define AT_ENTRY  9
-#define AT_BASE   7
-
-static void puts(const char *s) {
-    size_t len = 0;
-    const char *p = s;
-    while (*p++) len++;
-    asm volatile(
-        "syscall"
-        :
-        : "a"(1), "D"(1), "S"(s), "d"(len)
-        : "rcx", "r11", "memory"
-    );
-}
 
 uint64_t _ld_start(uint64_t *stack) {
     uint64_t argc = stack[0];

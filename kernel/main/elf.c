@@ -11,13 +11,6 @@
 #include <main/spinlock.h>
 #include <syscalls/syscalls.h>
 
-static const char *so_search_paths[] = {
-    "/usr/lib/",
-    "/lib/",
-    "/usr/local/lib/",
-    NULL
-};
-
 static loaded_so_t *loaded_libraries = NULL;
 static uint64_t next_so_base = 0x4000000000ULL;
 static spinlock_t elf_lock = SPINLOCK_INIT;

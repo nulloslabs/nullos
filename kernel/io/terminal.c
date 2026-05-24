@@ -469,9 +469,15 @@ static void putc_unlocked(char c) {
                             if (fg) fg_color = ansi_to_hex(color, false); else bg_color = ansi_to_hex(color, false);
                         } else if (mode == 2) { // 24-bit RGB
                             int r = 0, g = 0, b = 0;
-                            if (*p == ';') p++; while (*p >= '0' && *p <= '9') r = (r * 10) + (*p++ - '0');
-                            if (*p == ';') p++; while (*p >= '0' && *p <= '9') g = (g * 10) + (*p++ - '0');
-                            if (*p == ';') p++; while (*p >= '0' && *p <= '9') b = (b * 10) + (*p++ - '0');
+                            if (*p == ';') p++; 
+                            while (*p >= '0' && *p <= '9') r = (r * 10) + (*p++ - '0');
+                            
+                            if (*p == ';') p++; 
+                            while (*p >= '0' && *p <= '9') g = (g * 10) + (*p++ - '0');
+                            
+                            if (*p == ';') p++; 
+                            while (*p >= '0' && *p <= '9') b = (b * 10) + (*p++ - '0');
+                            
                             if (fg) fg_color = rgb_to_hex(r, g, b); else bg_color = rgb_to_hex(r, g, b);
                         }
                     }

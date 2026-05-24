@@ -11,13 +11,6 @@
 enum apic_mode current_apic_mode = APIC_NONE;
 volatile uint32_t *lapic_base = NULL;
 
-// --- CPUID Helper ---
-static void cpuid(uint32_t leaf, uint32_t *eax, uint32_t *ebx, uint32_t *ecx, uint32_t *edx) {
-    asm volatile("cpuid"
-        : "=a"(*eax), "=b"(*ebx), "=c"(*ecx), "=d"(*edx)
-        : "a"(leaf), "c"(0));
-}
-
 // MSR helpers
 static inline uint64_t rdmsr(uint32_t msr) {
     uint32_t lo, hi;
@@ -29,7 +22,7 @@ static inline void wrmsr(uint32_t msr, uint64_t val) {
     asm volatile("wrmsr" :: "c"(msr), "a"((uint32_t)val), "d"((uint32_t)(val >> 32)));
 }
 
-// --- xAPIC MMIO helpers ---
+// xAPIC MMIO helpers
 static uint32_t lapic_read(uint32_t reg) {
     return lapic_base[reg / 4];
 }

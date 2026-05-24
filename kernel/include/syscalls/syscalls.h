@@ -14,6 +14,7 @@
 #define SYS_lseek 8
 #define SYS_brk 12
 #define SYS_ioctl 16
+#define SYS_fcntl 17
 #define SYS_writev 20
 #define SYS_dup 32
 #define SYS_dup2 33

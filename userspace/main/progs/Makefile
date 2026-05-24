@@ -19,7 +19,7 @@ progs: $(PROGS:=.o)
 	for p in $(PROGS); do \
 		t="../../$$p"; \
 		o="$$p.o"; \
-			if [ ! -f $$t ] || [ $$o -nt $$t ] || [ ../../crt0.o -nt $$t ] || [ ../../libc.a -nt $$t ] || [ ../../ld.so -nt $$t ]; then \
+		if [ ! -f $$t ] || [ $$o -nt $$t ] || [ ../../crt0.o -nt $$t ] || [ ../../libc.a -nt $$t ] || [ ../../ld.so -nt $$t ] || [ Makefile -nt $$t ] || [ ../../config.mk -nt $$t ]; then \
 			needs_build=1; \
 		fi; \
 	done; \
@@ -31,7 +31,7 @@ progs: $(PROGS:=.o)
 
 # Inline execution blueprint for each application target
 define PROG_rule
-../../$(1): $(1).o ../../crt0.o ../../libc.so ../../libc.a ../../ld.so
+../../$(1): $(1).o ../../crt0.o ../../libc.so ../../libc.a ../../ld.so Makefile ../../config.mk
 	@printf "  %-7s %s\n" "LD" "$(SUBDIR)/$(1)"
 	$(LD) $(LDFLAGS) ../../crt0.o $$< -o $$@ -Wl,--dynamic-linker=/ld.so -l:libc.so
 	@printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/$(1)"
@@ -40,8 +40,7 @@ endef
 
 $(foreach p,$(PROGS),$(eval $(call PROG_rule,$(p))))
 
-%.o: %.c
-
+%.o: %.c Makefile ../../config.mk
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/main/progs/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
