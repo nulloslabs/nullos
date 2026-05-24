@@ -26,7 +26,7 @@ iso:
 
 run:
 	@printf "  %-7s %s\n" "RUN" "$(ISOFILE)"
-	@qemu-system-x86_64 -cdrom $(ISOFILE) -enable-kvm -smp 1 -m 512 -serial stdio -audiodev alsa,id=audio0 -device ac97,audiodev=audio0 -netdev user,id=net0 -device rtl8139,netdev=net0
+	@$(QEMU) $(QEMUFLAGS) -cdrom $(ISOFILE)
 
 clean:
 	@$(MAKE) -C kernel clean

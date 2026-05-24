@@ -8,7 +8,7 @@ syscall_entry:
     mov r12, rsp
     mov rsp, [rip + current_task_ptr]
     mov rsp, [rsp + 40]
-    add rsp, 32768
+    add rsp, 65536
 
     // build syscall_frame_t
     push r15

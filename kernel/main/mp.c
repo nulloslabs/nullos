@@ -26,14 +26,14 @@ static void ap_entry(struct limine_mp_info *info) {
     if (idx < 0) halt();
 
     init_gdt_for_cpu(idx);
-    load_idt_for_cpu();              // ← load shared IDT into this AP's IDTR
+    load_idt_for_cpu();
 
-    void *stack = vmalloc(32768);
+    void *stack = vmalloc(65536);
     cpus[idx].kernel_stack = (void*)((uint64_t)stack + 32768);
     tss_set_kernel_stack_for_cpu(idx, cpus[idx].kernel_stack);
 
-    init_sse();                      // Enable SSE/FPU on this AP (CR0/CR4 are per-CPU)
-    init_syscalls();                 // Set EFER.SCE + STAR/LSTAR/SFMASK on this AP (MSRs are per-CPU)
+    init_sse();
+    init_syscalls();
     init_apic();
     init_apic_timer(100);
 
@@ -42,6 +42,22 @@ static void ap_entry(struct limine_mp_info *info) {
 
     sti();
     idle();
+}
+
+cpu_t *get_cpu(void) {
+    uint32_t id = get_apic_id();
+    for (int i = 0; i < cpu_count; i++) {
+        if (cpus[i].lapic_id == id) return &cpus[i];
+    }
+    return &cpus[0]; // Fallback
+}
+
+int get_cpu_index(void) {
+    uint32_t id = get_apic_id();
+    for (int i = 0; i < cpu_count; i++) {
+        if (cpus[i].lapic_id == id) return i;
+    }
+    return 0;
 }
 
 void init_mp(void) {
@@ -95,9 +111,7 @@ void init_mp(void) {
 
     // Wait for all APs to come online (with timeout)
     int expected = cpu_count - 1;
-    for (volatile int timeout = 0; timeout < 100000000 && ap_ready_count < expected; timeout++) {
-        asm volatile("pause");
-    }
+    for (volatile int timeout = 0; timeout < 100000000 && ap_ready_count < expected; timeout++) asm volatile("pause");
 
     if (ap_ready_count < expected) {
         printf("mp: warning: only %d/%d aps came online\n", ap_ready_count, expected);
@@ -108,20 +122,4 @@ void init_mp(void) {
             printf("mp: no aps available\n");
         }
     }
-}
-
-cpu_t *get_cpu(void) {
-    uint32_t id = get_apic_id();
-    for (int i = 0; i < cpu_count; i++) {
-        if (cpus[i].lapic_id == id) return &cpus[i];
-    }
-    return &cpus[0]; // Fallback
-}
-
-int get_cpu_index(void) {
-    uint32_t id = get_apic_id();
-    for (int i = 0; i < cpu_count; i++) {
-        if (cpus[i].lapic_id == id) return i;
-    }
-    return 0;
 }

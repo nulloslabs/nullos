@@ -14,6 +14,6 @@ extern cpu_t cpus[MAX_CPUS];
 extern int cpu_count;
 extern volatile int ap_ready_count;
 
-void init_mp(void);
 cpu_t *get_cpu(void);
 int get_cpu_index(void);
+void init_mp(void);
