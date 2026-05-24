@@ -181,5 +181,14 @@ void tcp_rx(const uint8_t *frame, uint16_t len);
 // --- RX dispatch ---
 void net_rx(const uint8_t *frame, uint16_t len);
 
+// --- Network Device Interface ---
+typedef struct net_device {
+    uint8_t mac[6];
+    bool (*send)(const void *data, uint16_t len);
+} net_device_t;
+
+void net_register_device(net_device_t *dev);
+extern net_device_t *net_current_device;
+
 // --- Checksum ---
 uint16_t net_checksum(const void *data, size_t len);

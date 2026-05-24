@@ -92,10 +92,6 @@ char scancode_to_ascii(uint8_t sc) {
     return c;
 }
 
-// ============================================================================
-// getc — blocking: waits until a printable character is available
-// Works with both PS/2 and USB keyboards since both feed the same ring buffer.
-// ============================================================================
 char getc(void) {
     while (1) {
         while (*(volatile uint32_t*)(&key_head) != *(volatile uint32_t*)(&key_tail)) {

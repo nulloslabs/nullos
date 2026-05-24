@@ -1,12 +1,10 @@
 #include <io/net.h>
-#include <io/rtl8139.h>
 #include <main/string.h>
 #include <io/terminal.h>
 #include <io/hpet.h>
 #include <io/io.h>
 #include <mm/mm.h>
 #include <main/spinlock.h>
-
 
 static inline uint16_t htons(uint16_t x) { return (uint16_t)((x >> 8) | (x << 8)); }
 static inline uint16_t ntohs(uint16_t x) { return htons(x); }
@@ -47,6 +45,17 @@ static uint16_t transport_checksum(uint32_t src_ip, uint32_t dst_ip,
 static spinlock_t net_lock = SPINLOCK_INIT;
 static uint16_t ip_id_counter = 1;
 
+net_device_t *net_current_device = NULL;
+
+void net_register_device(net_device_t *dev) {
+    uint64_t irq;
+    spin_lock_irqsave(&net_lock, &irq);
+    if (!net_current_device) {
+        net_current_device = dev;
+    }
+    spin_unlock_irqrestore(&net_lock, irq);
+}
+
 static bool ip_send(uint32_t dest_ip, uint8_t proto,
                     const void *payload, uint16_t payload_len) {
     uint8_t gw_mac[6];
@@ -59,7 +68,8 @@ static bool ip_send(uint32_t dest_ip, uint8_t proto,
 
     // Ethernet
     memcpy(frame + 0, gw_mac, 6);
-    memcpy(frame + 6, rtl8139.mac, 6);
+    if (!net_current_device) return false;
+    memcpy(frame + 6, net_current_device->mac, 6);
     uint16_t et = htons(ETHERTYPE_IPV4);
     memcpy(frame + 12, &et, 2);
 
@@ -75,7 +85,7 @@ static bool ip_send(uint32_t dest_ip, uint8_t proto,
     ip->checksum  = net_checksum(ip, 20);
 
     memcpy(frame + 34, payload, payload_len);
-    return rtl8139_send(frame, total);
+    return net_current_device->send(frame, total);
 }
 
 
@@ -84,21 +94,22 @@ static uint8_t  arp_cached_mac[6] = { 0 };
 static bool     arp_cache_valid   = false;
 
 static void send_arp_request(uint32_t target_ip) {
+    if (!net_current_device) return;
     arp_frame_t frame;
     static const uint8_t broadcast[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
     memcpy(frame.dst, broadcast, 6);
-    memcpy(frame.src, rtl8139.mac, 6);
+    memcpy(frame.src, net_current_device->mac, 6);
     frame.ethertype  = htons(ETHERTYPE_ARP);
     frame.arp.htype  = htons(1);
     frame.arp.ptype  = htons(0x0800);
     frame.arp.hlen   = 6;
     frame.arp.plen   = 4;
     frame.arp.oper   = htons(1);
-    memcpy(frame.arp.sha, rtl8139.mac, 6);
+    memcpy(frame.arp.sha, net_current_device->mac, 6);
     frame.arp.spa    = NET_MY_IP;
     memset(frame.arp.tha, 0, 6);
     frame.arp.tpa    = target_ip;
-    rtl8139_send(&frame, sizeof(arp_frame_t));
+    net_current_device->send(&frame, sizeof(arp_frame_t));
 }
 
 void handle_arp_rx(const uint8_t *frame, uint16_t len) {
@@ -126,18 +137,15 @@ bool resolve_arp(uint32_t ip, uint8_t mac_out[6]) {
     arp_cache_valid = false;
     spin_unlock_irqrestore(&net_lock, irq);
     // Continue below unlocked so we don't block
-
     send_arp_request(ip);
     for (uint32_t i = 0; i < 1000000; i++) {
-        rtl8139_poll();
         if (arp_cache_valid && arp_cached_ip == ip) {
             memcpy(mac_out, arp_cached_mac, 6);
             return true;
         }
         io_wait();
-        if (i % 100000 == 0) printf(".");
     }
-    printf("\narp: failed to resolve %d.%d.%d.%d\n",
+    printf("arp: failed to resolve %d.%d.%d.%d\n",
         ip&0xFF,(ip>>8)&0xFF,(ip>>16)&0xFF,(ip>>24)&0xFF);
     return false;
 }
@@ -185,7 +193,6 @@ bool ping_icmp(uint32_t dest_ip) {
         dest_ip&0xFF,(dest_ip>>8)&0xFF,(dest_ip>>16)&0xFF,(dest_ip>>24)&0xFF,icmp_ping_seq);
 
     for (int i = 0; i < 2000; i++) {
-        rtl8139_poll();
         if (icmp_got_reply) {
             printf("pong from %d.%d.%d.%d seq=%d\n",
                 dest_ip&0xFF,(dest_ip>>8)&0xFF,(dest_ip>>16)&0xFF,(dest_ip>>24)&0xFF,icmp_ping_seq);
@@ -330,25 +337,19 @@ uint32_t dns_resolve(const char *hostname) {
     dns_resolved_ip = 0;
     udp_callback    = dns_udp_rx;
 
-    printf("dns: resolving %s\n", hostname);
     if (!udp_send(NET_DNS_IP, DNS_SRC_PORT, DNS_PORT, buf, (uint16_t)off)) {
-        printf("dns: send failed\n");
         udp_callback = NULL;
         return 0;
     }
 
     for (int i = 0; i < 3000; i++) {
-        rtl8139_poll();
         if (dns_got_reply) {
             uint32_t ip = dns_resolved_ip;
-            printf("dns: %s = %d.%d.%d.%d\n", hostname,
-                ip&0xFF,(ip>>8)&0xFF,(ip>>16)&0xFF,(ip>>24)&0xFF);
             udp_callback = NULL;
             return ip;
         }
         sleep(1);
     }
-    printf("dns: timeout\n");
     udp_callback = NULL;
     return 0;
 }
@@ -544,7 +545,6 @@ tcp_socket_t *tcp_connect(uint32_t remote_ip, uint16_t remote_port) {
 
     // Wait for SYN+ACK
     for (int i = 0; i < 5000; i++) {
-        rtl8139_poll();
         if (sock->state == TCP_ESTABLISHED) return sock;
         if (sock->state == TCP_CLOSED) break;
         sleep(1);
@@ -573,7 +573,6 @@ bool tcp_send(tcp_socket_t *sock, const void *data, uint16_t len) {
         // Wait for ACK before sending next chunk
         uint32_t expected_ack = sock->local_seq;
         for (int i = 0; i < 3000; i++) {
-            rtl8139_poll();
             // Remote ACK is tracked implicitly via tcp_rx updating local_seq
             // For simplicity, we just wait a bit and continue
             if (sock->state != TCP_ESTABLISHED) return false;
@@ -601,7 +600,6 @@ int tcp_read_all(tcp_socket_t *sock, void *buf, int max_len, int timeout_ms) {
     if (!sock) return 0;
     int total = 0;
     for (int i = 0; i < timeout_ms; i++) {
-        rtl8139_poll();
         int n = tcp_read(sock, (uint8_t *)buf + total, max_len - total);
         total += n;
         if (total >= max_len) break;
@@ -620,7 +618,6 @@ void tcp_close(tcp_socket_t *sock) {
         sock->local_seq++;
         // Wait for FIN+ACK
         for (int i = 0; i < 3000; i++) {
-            rtl8139_poll();
             if (sock->state == TCP_TIME_WAIT || sock->state == TCP_CLOSED) break;
             sleep(1);
         }
@@ -629,7 +626,6 @@ void tcp_close(tcp_socket_t *sock) {
         tcp_send_segment(sock, TCP_FIN | TCP_ACK, NULL, 0);
         sock->local_seq++;
         for (int i = 0; i < 3000; i++) {
-            rtl8139_poll();
             if (sock->state == TCP_CLOSED) break;
             sleep(1);
         }
@@ -650,7 +646,7 @@ void tcp_free(tcp_socket_t *sock) {
 
 void tcp_poll(tcp_socket_t *sock) {
     (void)sock;
-    rtl8139_poll();
+    io_wait();
 }
 
 bool tcp_is_connected(tcp_socket_t *sock) {

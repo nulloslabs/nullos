@@ -7,7 +7,7 @@
 #define MAX_DEVFS_DEVICES 32
 
 typedef struct {
-    char name[64];
+    char name[65];
     uint64_t (*read)(void* buf, uint64_t count, uint64_t offset);
     uint64_t (*write)(const void* buf, uint64_t count, uint64_t offset);
     bool active;

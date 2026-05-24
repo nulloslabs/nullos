@@ -28,12 +28,6 @@ isr33:
     mov ax, es
     push rax
 
-    mov rax, [rsp + 144]
-    test al, 3
-    jz .no_swap_entry_kbd
-    swapgs
-.no_swap_entry_kbd:
-
     mov ax, 0x10
     mov ds, ax
     mov es, ax
@@ -41,19 +35,10 @@ isr33:
     in al, 0x60
     movzx rdi, al
 
-    push rsp
-    push [rsp]
-    and rsp, -16
     call handle_ps2_scancode
+
     call eoi_pic
     call eoi_apic
-    mov rsp, [rsp + 8]
-
-    mov rax, [rsp + 144]
-    test al, 3
-    jz .no_swap_exit_kbd
-    swapgs
-.no_swap_exit_kbd:
 
     pop rax
     mov es, ax
@@ -75,4 +60,5 @@ isr33:
     pop rcx
     pop rbx
     pop rax
+
     iretq

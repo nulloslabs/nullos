@@ -154,6 +154,7 @@ static char ansi_buffer[16];
 static int ansi_idx = 0;
 static bool is_bold = false;
 static bool cursor_visible = false;
+static bool cursor_enabled = true;
 static spinlock_t term_lock = SPINLOCK_INIT;
 
 static inline uint32_t rgb_to_hex(uint8_t r, uint8_t g, uint8_t b) {
@@ -222,12 +223,11 @@ static void int_to_str(uint64_t value, char *buf, size_t buf_size, int base, boo
 }
 
 void show_cursor(bool visible) {
-    if (!current_font_w|| !current_font_h) return;
+    if (!current_font_w || !current_font_h) return;
     if (cursor_visible == visible) return;
     if (!fb_req.response || fb_req.response->framebuffer_count < 1) return;
     struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
 
-    // Initialize back buffer if not already done (inline)
     if (!back_buffer_initialized) {
         back_buffer_width = fb->width;
         back_buffer_height = fb->height;
@@ -245,12 +245,24 @@ void show_cursor(bool visible) {
         }
     }
 
-    for (uint64_t y = 0; y < current_font_h; y++) {
-        uint32_t *row = (uint32_t *)((uint8_t *)fb->address + (cursor_y + y) * fb->pitch);
-        for (uint64_t x = 0; x < current_font_w; x++) {
-            row[cursor_x + x] ^= fg_color;
+    if (visible) {
+        char current_char = ' ';
+        unsigned char *glyph = &current_font[(unsigned char)current_char * current_font_h];
+
+        for (int row_idx = 0; row_idx < current_font_h; row_idx++) {
+            uint32_t *row = (uint32_t *)((uint8_t *)fb->address + (cursor_y + row_idx) * fb->pitch);
+            unsigned char row_data = glyph[row_idx];
+            
+            for (int col_idx = 0; col_idx < current_font_w; col_idx++) {
+                if (row_data & (0x80 >> col_idx)) row[cursor_x + col_idx] = bg_color;
+                else row[cursor_x + col_idx] = fg_color;
+            }
         }
+    } else {
+        if (back_buffer_available) flush_region_backbuffer(fb, cursor_x, cursor_y, current_font_w, current_font_h);
+        else putc_fb(' ', cursor_x, cursor_y, fg_color, bg_color);
     }
+
     cursor_visible = visible;
 }
 
@@ -359,8 +371,8 @@ void clrscr(void) {
     state = STATE_NORMAL;
     is_bold = false;
 
-    // Show cursor at new position
-    show_cursor(true);
+    // Show cursor at new position if enabled
+    if (cursor_enabled) show_cursor(true);
     spin_unlock_irqrestore(&term_lock, rflags);
 }
 
@@ -503,11 +515,17 @@ static void putc_unlocked(char c) {
             } else if (c == 'H') {
                 cursor_x = 0;
                 cursor_y = 0;
+            } else if (c == 'h' || c == 'l') {
+                if (strcmp(ansi_buffer, "?25") == 0) {
+                    cursor_enabled = (c == 'h');
+                }
             }
             state = STATE_NORMAL;
+        } else if (c == '?') {
+            if (ansi_idx < 15) ansi_buffer[ansi_idx++] = c;
         } else if (ansi_idx < 15) ansi_buffer[ansi_idx++] = c;
     }
-    show_cursor(true);
+    if (cursor_enabled) show_cursor(true);
 }
 
 void putc(char c) {

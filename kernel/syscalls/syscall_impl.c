@@ -4,6 +4,8 @@
 #include <freestanding/signal.h>
 #include <freestanding/fcntl.h>
 #include <freestanding/sys/ioctl.h>
+#include <freestanding/sys/fb.h>
+#include <main/limine_req.h>
 #include <freestanding/sys/stat.h>
 #include <freestanding/time.h>
 #include <freestanding/wait.h>
@@ -483,11 +485,46 @@ void sys_ioctl(syscall_frame_t *frame) {
     unsigned long req = (unsigned long)frame->rsi;
     uint64_t argp = frame->rdx;
 
+    fd_entry_t *entry = get_current_fd(fd);
+
+    // Handle framebuffer ioctl requests
+    if (entry && entry->type == FD_DEV) {
+        char rel[256];
+        if (is_mounted_under(entry->path, "devfs", rel)) {
+            if (strncmp(rel, "fb", 2) == 0) {
+                int idx = rel[2] - '0';
+                if (fb_req.response && idx >= 0 && idx < (int)fb_req.response->framebuffer_count) {
+                    struct limine_framebuffer *fb = fb_req.response->framebuffers[idx];
+                    if (req == FBIOGET_VSCREENINFO) {
+                        struct fb_var_screeninfo vinfo;
+                        memset(&vinfo, 0, sizeof(vinfo));
+                        vinfo.xres = fb->width;
+                        vinfo.yres = fb->height;
+                        vinfo.xres_virtual = fb->width;
+                        vinfo.yres_virtual = fb->height;
+                        vinfo.bits_per_pixel = fb->bpp;
+                        write_vmm(current_task_ptr->ctx, argp, &vinfo, sizeof(vinfo));
+                        frame->rax = 0;
+                        return;
+                    } else if (req == FBIOGET_FSCREENINFO) {
+                        struct fb_fix_screeninfo finfo;
+                        memset(&finfo, 0, sizeof(finfo));
+                        strncpy(finfo.id, "limine-fb", 15);
+                        finfo.line_length = fb->pitch;
+                        finfo.smem_len = fb->height * fb->pitch;
+                        write_vmm(current_task_ptr->ctx, argp, &finfo, sizeof(finfo));
+                        frame->rax = 0;
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     int is_tty = (fd == 0 || fd == 1 || fd == 2);
 
     // Also treat devfs tty devices as ttys
     if (!is_tty) {
-        fd_entry_t *entry = get_current_fd(fd);
         if (entry && entry->type == FD_DEV) {
             char rel[256];
             if (is_mounted_under(entry->path, "devfs", rel))

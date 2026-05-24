@@ -3,6 +3,28 @@
 #include <limine/limine.h>
 #include <main/limine_req.h>
 #include <io/fonts.h>
+#include <main/string.h>
+#include <main/errno.h>
+
+uint64_t fb_read_index(int idx, void* buf, uint64_t count, uint64_t offset) {
+    if (!fb_req.response || idx >= (int)fb_req.response->framebuffer_count) return (uint64_t)-ENODEV;
+    struct limine_framebuffer *fb = fb_req.response->framebuffers[idx];
+    uint64_t size = fb->height * fb->pitch;
+    if (offset >= size) return 0;
+    if (offset + count > size) count = size - offset;
+    memcpy(buf, (const uint8_t*)fb->address + offset, count);
+    return count;
+}
+
+uint64_t fb_write_index(int idx, const void* buf, uint64_t count, uint64_t offset) {
+    if (!fb_req.response || idx >= (int)fb_req.response->framebuffer_count) return (uint64_t)-ENODEV;
+    struct limine_framebuffer *fb = fb_req.response->framebuffers[idx];
+    uint64_t size = fb->height * fb->pitch;
+    if (offset >= size) return 0;
+    if (offset + count > size) count = size - offset;
+    memcpy((uint8_t*)fb->address + offset, buf, count);
+    return count;
+}
 
 void put_pixel_fb(uint32_t x, uint32_t y, uint32_t color) {
     if (!fb_req.response || fb_req.response->framebuffer_count < 1) return; // If there's no framebuffer don't even bother drawing.

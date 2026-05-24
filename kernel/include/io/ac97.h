@@ -54,12 +54,8 @@ typedef struct {
 
 extern uint16_t nam_base;
 extern uint16_t nabm_base;
-extern bool ac97_ready;
 
+void set_ac97_volume(uint8_t left, uint8_t right);
+void play_ac97(void *buf, size_t size);
+bool is_ac97_playing(void);
 void init_ac97(pci_device_t *dev);
-bool ac97_is_ready(void);
-void ac97_set_volume(uint8_t left, uint8_t right); // 0 = mute, 63 = max
-void ac97_play(void *buf, size_t size);
-void ac97_stop(void);
-bool ac97_is_playing(void);
-uint16_t ac97_get_sample_rate(void);

@@ -1,6 +1,7 @@
 // Look at this #include mess...
 #include <freestanding/stddef.h>
 #include <io/terminal.h>
+#include <io/framebuffer.h>
 #include <main/panic.h>
 #include <main/rootfs.h>
 #include <main/devfs.h>

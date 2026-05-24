@@ -232,3 +232,7 @@ int reboot(int how) {
     // NOTE 2: This dosen't match POSIX, mostly matches BSD but not exactly.
     return (int)syscall(SYS_reboot, how);
 }
+
+int64_t lseek(int fd, int64_t offset, int whence) {
+    return (int64_t)syscall(SYS_lseek, fd, offset, whence);
+}

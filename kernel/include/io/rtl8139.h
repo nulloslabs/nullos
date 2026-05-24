@@ -5,11 +5,9 @@
 #include <freestanding/stddef.h>
 #include <io/pci.h>
 
-// --- PCI ID ---
 #define RTL8139_VENDOR 0x10EC
 #define RTL8139_DEVICE 0x8139
 
-// --- Registers (IO offset) ---
 #define RTL_MAC0 0x00 // MAC address bytes 0-3
 #define RTL_MAC4 0x04 // MAC address bytes 4-5
 #define RTL_MAR0 0x08 // Multicast filter
@@ -33,20 +31,17 @@
 #define RTL_TSD2 0x18 // TX status, slot 2
 #define RTL_TSD3 0x1C // TX status, slot 3
 
-// --- CMD bits ---
 #define RTL_CMD_RST (1 << 4) // Software reset
 #define RTL_CMD_RE (1 << 3) // RX enable
 #define RTL_CMD_TE (1 << 2) // TX enable
 #define RTL_CMD_BUFE (1 << 0) // RX buffer empty
 
-// --- ISR/IMR bits ---
 #define RTL_INT_ROK (1 << 0) // RX OK
 #define RTL_INT_RER (1 << 1) // RX error
 #define RTL_INT_TOK (1 << 2) // TX OK
 #define RTL_INT_TER (1 << 3) // TX error
 #define RTL_INT_RXOVW (1 << 4) // RX buffer overflow
 
-// --- RCR bits ---
 #define RTL_RCR_AAP (1 << 0) // Accept all packets (promiscuous)
 #define RTL_RCR_APM (1 << 1) // Accept physical match
 #define RTL_RCR_AM (1 << 2) // Accept multicast
@@ -79,14 +74,11 @@ typedef struct {
     uint8_t tx_buf[RTL_TX_SLOTS][RTL_TX_BUF_SIZE] __attribute__((aligned(4)));
     uint16_t rx_offset;  // current read offset in RX ring
     int tx_slot;    // next TX slot (0-3, round robin)
-    bool ready;
 } rtl8139_t;
 
 extern rtl8139_t rtl8139;
 
+bool send_rtl8139(const void *data, uint16_t len);
+void get_rtl8139_mac(uint8_t mac[6]);
 void init_rtl8139(pci_device_t *dev);
-bool rtl8139_send(const void *data, uint16_t len);
-void rtl8139_poll(void);  // call in main loop if not using interrupts
-void rtl8139_get_mac(uint8_t mac[6]);
-
-typedef void (*rtl8139_rx_callback_t)(const uint8_t *data, uint16_t len);
+typedef void (*rtl8139_rx_callback_t)(const uint8_t *data, uint16_t len); // Don't know what this is...must be important :joy:

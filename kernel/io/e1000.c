@@ -22,33 +22,33 @@ static uint16_t tx_cur = 0;
 static bool e1000_ready = false;
 static spinlock_t e1000_lock = SPINLOCK_INIT;
 
-static void mmio_write32(uint32_t reg, uint32_t val) {
+static void write_mmio32(uint32_t reg, uint32_t val) {
     *(volatile uint32_t *)(e1000_mmio + reg) = val;
 }
 
-static uint32_t mmio_read32(uint32_t reg) {
+static uint32_t read_mmio32(uint32_t reg) {
     return *(volatile uint32_t *)(e1000_mmio + reg);
 }
 
 // Detect EEPROM and read MAC
 static bool detect_eeprom(void) {
-    mmio_write32(E1000_EEPROM, 0x1); 
-    for (int i = 0; i < 1000 && !(mmio_read32(E1000_EEPROM) & 0x10); i++) io_wait();
-    return (mmio_read32(E1000_EEPROM) & 0x10) != 0;
+    write_mmio32(E1000_EEPROM, 0x1); 
+    for (int i = 0; i < 1000 && !(read_mmio32(E1000_EEPROM) & 0x10); i++) io_wait();
+    return (read_mmio32(E1000_EEPROM) & 0x10) != 0;
 }
 
-static uint16_t eeprom_read(uint8_t addr) {
+static uint16_t read_eeprom(uint8_t addr) {
     uint32_t temp = 0;
-    mmio_write32(E1000_EEPROM, 1 | ((uint32_t)(addr) << 8));
-    while (!((temp = mmio_read32(E1000_EEPROM)) & (1 << 4))) io_wait();
+    write_mmio32(E1000_EEPROM, 1 | ((uint32_t)(addr) << 8));
+    while (!((temp = read_mmio32(E1000_EEPROM)) & (1 << 4))) io_wait();
     return (uint16_t)((temp >> 16) & 0xFFFF);
 }
 
-void e1000_get_mac(uint8_t mac[6]) {
+void get_e1000_mac(uint8_t mac[6]) {
     memcpy(mac, mac_addr, 6);
 }
 
-bool e1000_send(const void *data, uint16_t len) {
+bool send_e1000(const void *data, uint16_t len) {
     if (!e1000_ready) return false;
 
     uint64_t irq;
@@ -77,7 +77,7 @@ bool e1000_send(const void *data, uint16_t len) {
     // Advance tail pointer
     uint16_t old_cur = tx_cur;
     tx_cur = (tx_cur + 1) % E1000_NUM_TX_DESC;
-    mmio_write32(E1000_TDT, tx_cur);
+    write_mmio32(E1000_TDT, tx_cur);
 
     spin_unlock_irqrestore(&e1000_lock, irq);
 
@@ -87,11 +87,11 @@ bool e1000_send(const void *data, uint16_t len) {
     return true;
 }
 
-static void e1000_poll(void) {
+static void poll_e1000(void) {
     if (!e1000_ready) return;
 
     // Read interrupt cause
-    uint32_t icr = mmio_read32(E1000_ICR);
+    uint32_t icr = read_mmio32(E1000_ICR);
     if (!icr) return;
 
     if (icr & 0x80) { // Receiver Timer Interrupt (packet received)
@@ -115,7 +115,7 @@ static void e1000_poll(void) {
             rx_cur = (rx_cur + 1) % E1000_NUM_RX_DESC;
 
             // Update tail to allow hardware to reuse
-            mmio_write32(E1000_RDT, old_cur);
+            write_mmio32(E1000_RDT, old_cur);
 
             spin_unlock_irqrestore(&e1000_lock, irq);
 
@@ -139,22 +139,22 @@ void init_e1000(pci_device_t *dev) {
     // Read MAC Address
     if (detect_eeprom()) {
         uint16_t temp;
-        temp = eeprom_read(0);
+        temp = read_eeprom(0);
         mac_addr[0] = temp & 0xFF; mac_addr[1] = temp >> 8;
-        temp = eeprom_read(1);
+        temp = read_eeprom(1);
         mac_addr[2] = temp & 0xFF; mac_addr[3] = temp >> 8;
-        temp = eeprom_read(2);
+        temp = read_eeprom(2);
         mac_addr[4] = temp & 0xFF; mac_addr[5] = temp >> 8;
     } else {
-        uint32_t mac_lo = mmio_read32(E1000_RAL);
-        uint32_t mac_hi = mmio_read32(E1000_RAH);
+        uint32_t mac_lo = read_mmio32(E1000_RAL);
+        uint32_t mac_hi = read_mmio32(E1000_RAH);
         mac_addr[0] = mac_lo & 0xFF; mac_addr[1] = (mac_lo >> 8) & 0xFF;
         mac_addr[2] = (mac_lo >> 16) & 0xFF; mac_addr[3] = (mac_lo >> 24) & 0xFF;
         mac_addr[4] = mac_hi & 0xFF; mac_addr[5] = (mac_hi >> 8) & 0xFF;
     }
 
     // Setup Multicast Table
-    for (int i = 0; i < 128; i++) mmio_write32(E1000_MTA + (i * 4), 0);
+    for (int i = 0; i < 128; i++) write_mmio32(E1000_MTA + (i * 4), 0);
 
     // Setup RX ring (must be 16-byte aligned and contiguous physically)
     rx_descs = pmalloc(); // 4KB page, plenty of room for 32 descriptors
@@ -166,14 +166,14 @@ void init_e1000(pci_device_t *dev) {
 
     // Write RX rings
     uint64_t rx_phys = (uint64_t)virt_to_phys(rx_descs);
-    mmio_write32(E1000_RDBAL, rx_phys & 0xFFFFFFFF);
-    mmio_write32(E1000_RDBAH, rx_phys >> 32);
-    mmio_write32(E1000_RDLEN, E1000_NUM_RX_DESC * sizeof(e1000_rx_desc_t));
-    mmio_write32(E1000_RDH, 0);
-    mmio_write32(E1000_RDT, E1000_NUM_RX_DESC - 1); // Last valid index
+    write_mmio32(E1000_RDBAL, rx_phys & 0xFFFFFFFF);
+    write_mmio32(E1000_RDBAH, rx_phys >> 32);
+    write_mmio32(E1000_RDLEN, E1000_NUM_RX_DESC * sizeof(e1000_rx_desc_t));
+    write_mmio32(E1000_RDH, 0);
+    write_mmio32(E1000_RDT, E1000_NUM_RX_DESC - 1); // Last valid index
 
     // Enable RX
-    mmio_write32(E1000_RCTL, RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE | RCTL_LPE | RCTL_BAM | RCTL_BSIZE_2048 | RCTL_SECRC);
+    write_mmio32(E1000_RCTL, RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE | RCTL_LPE | RCTL_BAM | RCTL_BSIZE_2048 | RCTL_SECRC);
 
     // Setup TX ring
     tx_descs = pmalloc(); 
@@ -186,21 +186,25 @@ void init_e1000(pci_device_t *dev) {
 
     // Write TX rings
     uint64_t tx_phys = (uint64_t)virt_to_phys(tx_descs);
-    mmio_write32(E1000_TDBAL, tx_phys & 0xFFFFFFFF);
-    mmio_write32(E1000_TDBAH, tx_phys >> 32);
-    mmio_write32(E1000_TDLEN, E1000_NUM_TX_DESC * sizeof(e1000_tx_desc_t));
-    mmio_write32(E1000_TDH, 0);
-    mmio_write32(E1000_TDT, 0);
+    write_mmio32(E1000_TDBAL, tx_phys & 0xFFFFFFFF);
+    write_mmio32(E1000_TDBAH, tx_phys >> 32);
+    write_mmio32(E1000_TDLEN, E1000_NUM_TX_DESC * sizeof(e1000_tx_desc_t));
+    write_mmio32(E1000_TDH, 0);
+    write_mmio32(E1000_TDT, 0);
 
     // Enable TX
-    mmio_write32(E1000_TCTL, TCTL_EN | TCTL_PSP);
+    write_mmio32(E1000_TCTL, TCTL_EN | TCTL_PSP);
 
     // Enable interrupts
-    mmio_write32(E1000_IMS, 0x1F6DC);
-    mmio_write32(E1000_IMS, 0xFF & ~4);
-    mmio_read32(E1000_ICR); // clear pending
+    write_mmio32(E1000_IMS, 0x1F6DC);
+    write_mmio32(E1000_IMS, 0xFF & ~4);
+    read_mmio32(E1000_ICR); // clear pending
 
-    pci_request_irq(dev, e1000_poll);
+    pci_request_irq(dev, poll_e1000);
     e1000_ready = true;
-}
 
+    static net_device_t net_dev;
+    memcpy(net_dev.mac, mac_addr, 6);
+    net_dev.send = send_e1000;
+    net_register_device(&net_dev);
+}

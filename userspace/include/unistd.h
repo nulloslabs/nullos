@@ -34,3 +34,9 @@ void *sbrk(intptr_t increment);
 int gethostname(char *name, size_t size);
 int sethostname(const char *name, size_t size);
 int reboot(int how);
+
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+
+int64_t lseek(int fd, int64_t offset, int whence);

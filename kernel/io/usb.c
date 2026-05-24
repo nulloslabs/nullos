@@ -81,6 +81,5 @@ void poll_usb_hcds(void) {
         poll_counter = 0;
         poll_uhci_ports();
         poll_usb_keyboard();
-        poll_ps2_keyboard();
     }
 }

@@ -2,12 +2,13 @@
 #include <io/terminal.h>
 #include <main/string.h>
 #include <main/errno.h>
+#include <main/spinlock.h>
+#include <main/limine_req.h>
+#include <main/panic.h>
 
 static devfs_device_t devfs_devices[MAX_DEVFS_DEVICES];
+static spinlock_t devfs_lock = SPINLOCK_INIT;
 
-// ==========================================
-// Standard Devices
-// ==========================================
 static uint64_t null_read(void* buf, uint64_t count, uint64_t offset) {
     (void)buf;
     (void)count;
@@ -35,25 +36,86 @@ static uint64_t zero_write(const void* buf, uint64_t count, uint64_t offset) {
     return count;
 }
 
+#define DEFINE_FB_CALLBACKS(n) \
+static uint64_t fb##n##_read(void* buf, uint64_t count, uint64_t offset) { \
+    return fb_read_index(n, buf, count, offset); \
+} \
+static uint64_t fb##n##_write(const void* buf, uint64_t count, uint64_t offset) { \
+    return fb_write_index(n, buf, count, offset); \
+}
+
+DEFINE_FB_CALLBACKS(0)
+DEFINE_FB_CALLBACKS(1)
+DEFINE_FB_CALLBACKS(2)
+DEFINE_FB_CALLBACKS(3)
+DEFINE_FB_CALLBACKS(4)
+DEFINE_FB_CALLBACKS(5)
+DEFINE_FB_CALLBACKS(6)
+DEFINE_FB_CALLBACKS(7)
+
 int register_devfs_device(const char* name, 
     uint64_t (*read_fn)(void*, uint64_t, uint64_t), 
-    uint64_t (*write_fn)(const void*, uint64_t, uint64_t)) 
-{
+    uint64_t (*write_fn)(const void*, uint64_t, uint64_t)) {
     if (!name || name[0] == '\0') {
         return -EINVAL;
     }
 
+    const char *dev_name = name;
+    while (*dev_name == '.' || *dev_name == '/') dev_name++;
+    if (strncmp(dev_name, "dev/", 4) == 0) dev_name += 4;
+
+    uint64_t irq;
+    spin_lock_irqsave(&devfs_lock, &irq);
+
+    // Prevent duplicates
+    for (int i = 0; i < MAX_DEVFS_DEVICES; i++) {
+        if (devfs_devices[i].active && strcmp(devfs_devices[i].name, dev_name) == 0) {
+            spin_unlock_irqrestore(&devfs_lock, irq);
+            return -EEXIST;
+        }
+    }
+
     for (int i = 0; i < MAX_DEVFS_DEVICES; i++) {
         if (!devfs_devices[i].active) {
-            strncpy(devfs_devices[i].name, name, 63);
-            devfs_devices[i].name[63] = '\0';
+            strncpy(devfs_devices[i].name, dev_name, 63);
+            devfs_devices[i].name[65] = '\0';
             devfs_devices[i].read = read_fn;
             devfs_devices[i].write = write_fn;
             devfs_devices[i].active = true;
+            spin_unlock_irqrestore(&devfs_lock, irq);
             return 0;
         }
     }
+
+    spin_unlock_irqrestore(&devfs_lock, irq);
     return -ENOMEM;
+}
+
+int unregister_devfs_device(const char* name) {
+    if (!name || name[0] == '\0') {
+        return -EINVAL;
+    }
+
+    const char *dev_name = name;
+    while (*dev_name == '.' || *dev_name == '/') dev_name++;
+    if (strncmp(dev_name, "dev/", 4) == 0) dev_name += 4;
+
+    uint64_t irq;
+    spin_lock_irqsave(&devfs_lock, &irq);
+
+    for (int i = 0; i < MAX_DEVFS_DEVICES; i++) {
+        if (devfs_devices[i].active && strcmp(devfs_devices[i].name, dev_name) == 0) {
+            devfs_devices[i].active = false;
+            devfs_devices[i].name[0] = '\0';
+            devfs_devices[i].read = NULL;
+            devfs_devices[i].write = NULL;
+            spin_unlock_irqrestore(&devfs_lock, irq);
+            return 0;
+        }
+    }
+
+    spin_unlock_irqrestore(&devfs_lock, irq);
+    return -ENOENT;
 }
 
 bool devfs_device_exists(const char* name) {
@@ -61,11 +123,17 @@ bool devfs_device_exists(const char* name) {
     while (*dev_name == '.' || *dev_name == '/') dev_name++;
     if (strncmp(dev_name, "dev/", 4) == 0) dev_name += 4;
 
+    uint64_t irq;
+    spin_lock_irqsave(&devfs_lock, &irq);
+
     for (int i = 0; i < MAX_DEVFS_DEVICES; i++) {
         if (devfs_devices[i].active && strcmp(devfs_devices[i].name, dev_name) == 0) {
+            spin_unlock_irqrestore(&devfs_lock, irq);
             return true;
         }
     }
+
+    spin_unlock_irqrestore(&devfs_lock, irq);
     return false;
 }
 
@@ -74,14 +142,22 @@ uint64_t read_devfs(const char* name, void* buf, uint64_t count, uint64_t offset
     while (*dev_name == '.' || *dev_name == '/') dev_name++;
     if (strncmp(dev_name, "dev/", 4) == 0) dev_name += 4;
 
+    uint64_t irq;
+    spin_lock_irqsave(&devfs_lock, &irq);
+
     for (int i = 0; i < MAX_DEVFS_DEVICES; i++) {
         if (devfs_devices[i].active && strcmp(devfs_devices[i].name, dev_name) == 0) {
-            if (devfs_devices[i].read) {
-                return devfs_devices[i].read(buf, count, offset);
+            uint64_t (*read_fn)(void*, uint64_t, uint64_t) = devfs_devices[i].read;
+            spin_unlock_irqrestore(&devfs_lock, irq);
+
+            if (read_fn) {
+                return read_fn(buf, count, offset);
             }
             return (uint64_t)-EPERM;
         }
     }
+
+    spin_unlock_irqrestore(&devfs_lock, irq);
     return (uint64_t)-ENOENT;
 }
 
@@ -90,28 +166,47 @@ uint64_t write_devfs(const char* name, const void* buf, uint64_t count, uint64_t
     while (*dev_name == '.' || *dev_name == '/') dev_name++;
     if (strncmp(dev_name, "dev/", 4) == 0) dev_name += 4;
 
+    uint64_t irq;
+    spin_lock_irqsave(&devfs_lock, &irq);
+
     for (int i = 0; i < MAX_DEVFS_DEVICES; i++) {
         if (devfs_devices[i].active && strcmp(devfs_devices[i].name, dev_name) == 0) {
-            if (devfs_devices[i].write) {
-                return devfs_devices[i].write(buf, count, offset);
+            uint64_t (*write_fn)(const void*, uint64_t, uint64_t) = devfs_devices[i].write;
+            spin_unlock_irqrestore(&devfs_lock, irq);
+
+            if (write_fn) {
+                return write_fn(buf, count, offset);
             }
             return (uint64_t)-EPERM;
         }
     }
+
+    spin_unlock_irqrestore(&devfs_lock, irq);
     return (uint64_t)-ENOENT;
 }
 
 const char *devfs_get_device_name(int index) {
+    uint64_t irq;
+    spin_lock_irqsave(&devfs_lock, &irq);
+
     int count = 0;
     for (int i = 0; i < MAX_DEVFS_DEVICES; i++) {
         if (!devfs_devices[i].active) continue;
-        if (count == index) return devfs_devices[i].name;
+        if (count == index) {
+            const char *name = devfs_devices[i].name;
+            spin_unlock_irqrestore(&devfs_lock, irq);
+            return name;
+        }
         count++;
     }
+
+    spin_unlock_irqrestore(&devfs_lock, irq);
     return NULL;
 }
 
 void init_devfs(void) {
+    devfs_lock = SPINLOCK_INIT;
+
     for (int i = 0; i < MAX_DEVFS_DEVICES; i++) {
         devfs_devices[i].active = false;
         devfs_devices[i].name[0] = '\0';
@@ -121,5 +216,28 @@ void init_devfs(void) {
 
     register_devfs_device("null", null_read, null_write);
     register_devfs_device("zero", zero_read, zero_write);
+
+    // Macro for helping register framebuffer devices
+    #define REGISTER_FB_DEVICE(x) case x: register_devfs_device("fb" #x, fb##x##_read, fb##x##_write); break;
+
+    if (fb_req.response && fb_req.response->framebuffer_count > 0) {
+        for (int i = 0; i < fb_req.response->framebuffer_count; i++) {
+            switch (i) {
+                REGISTER_FB_DEVICE(0)
+                REGISTER_FB_DEVICE(1)
+                REGISTER_FB_DEVICE(2)
+                REGISTER_FB_DEVICE(3)
+                REGISTER_FB_DEVICE(4)
+                REGISTER_FB_DEVICE(5)
+                REGISTER_FB_DEVICE(6)
+                REGISTER_FB_DEVICE(7)
+                default:
+                    panic("too many framebuffers");
+            }
+        }
+    }
+
+    #undef REGISTER_FB_DEVICE
+
     printf("devfs: initialized devfs\n");
 }
