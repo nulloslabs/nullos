@@ -32,6 +32,8 @@
 #include <syscalls/syscalls.h>
 #include <main/madt.h>
 #include <main/uname.h>
+#include <io/tty.h>
+#include <io/pty.h>
 // Lets never do that again.
 
 void kmain(void) {
@@ -46,6 +48,8 @@ void kmain(void) {
     init_mm();
     init_rootfs();
     init_devfs();
+    init_ttys();
+    init_ptys();
     show_cursor(true);
     init_pmm();
     init_vmm();

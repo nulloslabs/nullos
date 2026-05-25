@@ -12,6 +12,9 @@
 #define SYS_stat 4
 #define SYS_fstat 5
 #define SYS_lseek 8
+#define SYS_mmap 9
+#define SYS_mprotect 10
+#define SYS_munmap 11
 #define SYS_brk 12
 #define SYS_ioctl 16
 #define SYS_fcntl 17

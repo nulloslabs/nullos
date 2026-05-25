@@ -10,9 +10,10 @@
 // File descriptor types
 typedef enum {
     FD_NONE = 0,
-    FD_FILE = 1,  // rootfs file
-    FD_STREAM = 2,  // std(in/out/err) device
-    FD_DEV = 3,   // char device
+    FD_FILE = 1,        // rootfs file
+    FD_STREAM = 2,      // std(in/out/err) device
+    FD_DEV = 3,         // char device
+    FD_PTY_MASTER = 4,  // open pty master (path encodes index as "ptm:N")
 } fd_type_t;
 
 typedef struct {

@@ -16,6 +16,9 @@ void syscall_dispatch(syscall_frame_t *frame) {
         case SYS_stat: sys_stat(frame); break;
         case SYS_fstat: sys_fstat(frame); break;
         case SYS_lseek: sys_lseek(frame); break;
+        case SYS_mmap: sys_mmap(frame); break;
+        case SYS_mprotect: sys_mprotect(frame); break;
+        case SYS_munmap: sys_munmap(frame); break;
         case SYS_brk: sys_brk(frame); break;
         case SYS_ioctl: sys_ioctl(frame); break;
         case SYS_fcntl: sys_fcntl(frame); break;

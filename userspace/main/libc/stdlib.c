@@ -5,59 +5,33 @@
 #include <unistd.h>
 #include <errno.h>
 #include <limits.h>
-
-// Variables, structs etc. for functions
-typedef struct block {
-    size_t size;
-    int free;
-    struct block *next;
-} block_t;
+#include <sys/mman.h>
 
 #define ALIGN 16
-#define HDR sizeof(block_t)
+#define HDR  (sizeof(size_t))
 
-static block_t *heap_head = NULL;
+// Each allocation is an anonymous mmap. The mapping starts with a size_t
+// storing the total mapped length, followed by the user data.
 
 void *malloc(size_t size) {
     if (!size) return NULL;
-    size = (size + ALIGN - 1) & ~(ALIGN - 1);
-
-    block_t *b = heap_head;
-    while (b) {
-        if (b->free && b->size >= size) {
-            b->free = 0;
-            return (void *)(b + 1);
-        }
-        b = b->next;
-    }
-
-    b = sbrk(0);
-    if (sbrk(HDR + size) == (void *)-1) return NULL;
-    b->size = size;
-    b->free = 0;
-    b->next = NULL;
-
-    if (!heap_head) {
-        heap_head = b;
-    } else {
-        block_t *cur = heap_head;
-        while (cur->next) cur = cur->next;
-        cur->next = b;
-    }
-
-    return (void *)(b + 1);
+    size = (size + ALIGN - 1) & ~(size_t)(ALIGN - 1);
+    size_t total = HDR + size;
+    void *p = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) return NULL;
+    *(size_t *)p = total;
+    return (char *)p + HDR;
 }
 
 void *realloc(void *ptr, size_t size) {
     if (!ptr) return malloc(size);
     if (!size) { free(ptr); return NULL; }
-
-    block_t *b = (block_t *)ptr - 1;
-    if (b->size >= size) return ptr;
-
+    void *p = (char *)ptr - HDR;
+    size_t old_total = *(size_t *)p;
+    size_t old_size  = old_total - HDR;
     void *new = malloc(size);
     if (!new) return NULL;
-    memcpy(new, ptr, b->size);
+    memcpy(new, ptr, old_size < size ? old_size : size);
     free(ptr);
     return new;
 }
@@ -71,8 +45,9 @@ void *calloc(size_t nmemb, size_t size) {
 
 void free(void *ptr) {
     if (!ptr) return;
-    block_t *b = (block_t *)ptr - 1;
-    b->free = 1;
+    void *p = (char *)ptr - HDR;
+    size_t total = *(size_t *)p;
+    munmap(p, total);
 }
 
 __attribute__((noreturn)) void _Exit(int status) {

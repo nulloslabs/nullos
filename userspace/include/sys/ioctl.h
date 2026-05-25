@@ -11,5 +11,7 @@
 #define FIONREAD 0x541B
 #define TIOCEXCL 0x540C
 #define TIOCNXCL 0x540D
+#define TIOCGPTN 0x80045430
+#define TIOCSPTLCK 0x40045431
 
 int ioctl(int fd, unsigned long op, ...);

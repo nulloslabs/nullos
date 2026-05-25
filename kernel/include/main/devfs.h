@@ -4,7 +4,7 @@
 #include <freestanding/stddef.h>
 #include <freestanding/stdbool.h>
 
-#define MAX_DEVFS_DEVICES 32
+#define MAX_DEVFS_DEVICES 64
 
 typedef struct {
     char name[65];
@@ -13,10 +13,11 @@ typedef struct {
     bool active;
 } devfs_device_t;
 
-int register_devfs_device(const char* name, 
-    uint64_t (*read_fn)(void*, uint64_t, uint64_t), 
+int register_devfs_device(const char* name,
+    uint64_t (*read_fn)(void*, uint64_t, uint64_t),
     uint64_t (*write_fn)(const void*, uint64_t, uint64_t));
 
+int unregister_devfs_device(const char* name);
 uint64_t read_devfs(const char* name, void* buf, uint64_t count, uint64_t offset);
 uint64_t write_devfs(const char* name, const void* buf, uint64_t count, uint64_t offset);
 bool devfs_device_exists(const char* name);

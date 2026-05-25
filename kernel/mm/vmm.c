@@ -138,7 +138,8 @@ void unmap_vmm(vmm_context_t* ctx, uint64_t virt) {
     if (!pt) goto out;
 
     // Get the physical address so we can free it in the PMM
-    uint64_t phys = pt[pt_idx] & ~0xFFFULL;
+    // Mask out flag bits: low 12 (page flags) and bit 63 (NX)
+    uint64_t phys = pt[pt_idx] & 0x000ffffffffff000ULL;
     if (phys) {
         pfree((void*)phys);
     }
@@ -173,7 +174,7 @@ uint64_t get_vmm_phys(vmm_context_t* ctx, uint64_t virt) {
     if (!(entry & VMM_PRESENT)) return 0;
 
     // Mask out the flags to get the pure physical address, then add the page offset
-    return (entry & ~0xFFFULL) + offset;
+    return (entry & 0x000ffffffffff000ULL) + offset;
 }
 
 void read_vmm(vmm_context_t* ctx, void* dest, uint64_t virt_src, size_t size) {

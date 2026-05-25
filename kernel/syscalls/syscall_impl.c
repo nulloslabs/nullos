@@ -5,10 +5,11 @@
 #include <freestanding/fcntl.h>
 #include <freestanding/sys/ioctl.h>
 #include <freestanding/sys/fb.h>
-#include <main/limine_req.h>
 #include <freestanding/sys/stat.h>
 #include <freestanding/time.h>
 #include <freestanding/wait.h>
+#include <freestanding/termios.h>
+#include <main/limine_req.h>
 #include <syscalls/syscalls.h>
 #include <main/fd.h>
 #include <main/rootfs.h>
@@ -28,6 +29,8 @@
 #include <main/uname.h>
 #include <main/acpi.h>
 #include <main/msr.h>
+#include <io/tty.h>
+#include <io/pty.h>
 #include <io/hpet.h>
 
 static char stdin_buf[256];
@@ -52,21 +55,12 @@ typedef struct {
 } winsize_t;
 
 typedef struct {
-    uint32_t c_iflag;
-    uint32_t c_oflag;
-    uint32_t c_cflag;
-    uint32_t c_lflag;
-    uint8_t  c_line;
-    uint8_t  c_cc[19];
-} termios_t;
-
-typedef struct {
     uint64_t d_ino;
     int64_t d_off;
     uint16_t d_reclen;
     uint8_t d_type;
     char d_name[256];
-} __attribute__((packed)) dirent_t;
+} dirent_t;
 
 #define DT_UNKNOWN 0
 #define DT_DIR 4
@@ -205,6 +199,14 @@ static int copy_user_strarray(char **user_arr, char **out, int max_count) {
     return count;
 }
 
+static int ptm_path_idx(const char *path) {
+    if (path[0]!='p'||path[1]!='t'||path[2]!='m'||path[3]!=':') return -1;
+    const char *n = path + 4;
+    int idx = 0;
+    while (*n >= '0' && *n <= '9') idx = idx * 10 + (*n++ - '0');
+    return idx;
+}
+
 static void free_strarray(char **arr, int count) {
     for (int i = 0; i < count; i++) free(arr[i]);
 }
@@ -258,6 +260,13 @@ void sys_read(syscall_frame_t *frame) {
         return;
     }
 
+    if (entry->type == FD_PTY_MASTER) {
+        int idx = ptm_path_idx(entry->path);
+        int got = read_pty_master(idx, (char *)buf, (int)count);
+        frame->rax = (got < 0) ? (uint64_t)-EBADF : (uint64_t)got;
+        return;
+    }
+
     rootfs_file_t file = read_rootfs(entry->path);
     if (!file.data || entry->offset >= file.size) { frame->rax = 0; return; }
 
@@ -306,6 +315,13 @@ void sys_write(syscall_frame_t *frame) {
         return;
     }
 
+    if (entry->type == FD_PTY_MASTER) {
+        int idx = ptm_path_idx(entry->path);
+        int w = write_pty_master(idx, (const char *)buf, (int)count);
+        frame->rax = (w < 0) ? (uint64_t)-EBADF : (uint64_t)w;
+        return;
+    }
+
     rootfs_file_t file = read_rootfs(entry->path);
     if (!can_access_rootfs(&file, 0, 1, 0)) {
         frame->rax = (uint64_t)-EACCES;
@@ -332,6 +348,9 @@ void sys_write(syscall_frame_t *frame) {
     frame->rax = count;
 }
 
+extern void register_pts_device(int idx);
+extern void unregister_pts_device(int idx);
+
 void sys_open(syscall_frame_t *frame) {
     const char *path = (const char *)frame->rdi;
     uint32_t flags = (uint32_t)frame->rsi;
@@ -345,6 +364,19 @@ void sys_open(syscall_frame_t *frame) {
     char rel_path[256];
     if (is_mounted_under(abs_path, "devfs", rel_path)) {
         if (!devfs_device_exists(rel_path)) { frame->rax = (uint64_t)-ENOENT; return; }
+        // ptmx: allocate a PTY and return a master fd
+        if (strcmp(rel_path, "ptmx") == 0 || strcmp(rel_path, "pts/ptmx") == 0) {
+            int idx = alloc_pty();
+            if (idx < 0) { frame->rax = (uint64_t)-ENOSPC; return; }
+            char ptm_path[32];
+            ptm_path[0]='p'; ptm_path[1]='t'; ptm_path[2]='m'; ptm_path[3]=':';
+            if (idx < 10) { ptm_path[4]='0'+idx; ptm_path[5]='\0'; }
+            else          { ptm_path[4]='1'; ptm_path[5]='0'+(idx-10); ptm_path[6]='\0'; }
+            int fd = alloc_fd(&current_task_ptr->fd_table, ptm_path, FD_PTY_MASTER, flags);
+            if (fd < 0) { free_pty(idx); frame->rax = (uint64_t)fd; return; }
+            frame->rax = (uint64_t)fd;
+            return;
+        }
         int fd = alloc_fd(&current_task_ptr->fd_table, abs_path, FD_DEV, flags);
         frame->rax = (uint64_t)fd;
         return;
@@ -376,6 +408,9 @@ void sys_open(syscall_frame_t *frame) {
 
 void sys_close(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
+    fd_entry_t *entry = get_current_fd(fd);
+    if (entry && entry->type == FD_PTY_MASTER)
+        free_pty(ptm_path_idx(entry->path));
     int res = free_fd(&current_task_ptr->fd_table, fd);
     frame->rax = (res < 0) ? (uint64_t)res : 0;
 }
@@ -450,6 +485,81 @@ void sys_lseek(syscall_frame_t *frame) {
     }
 
     frame->rax = (uint64_t)entry->offset;
+}
+
+void sys_mmap(syscall_frame_t *frame) {
+    uint64_t addr   = frame->rdi;
+    size_t   length = (size_t)frame->rsi;
+    int      prot   = (int)frame->rdx;
+    int      flags  = (int)frame->r10;
+    // fd (r8) and offset (r9) ignored — anonymous only for now
+
+    (void)addr; (void)flags;
+
+    if (length == 0) {
+        frame->rax = (uint64_t)-EINVAL;
+        return;
+    }
+
+    uint64_t num_pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint64_t vmm_flags = VMM_USER;
+    if (prot & 2) vmm_flags |= VMM_WRITABLE;
+    if (!(prot & 4)) vmm_flags |= VMM_NX;
+
+    void *ptr = vmalloc_ex(current_task_ptr->ctx, num_pages * PAGE_SIZE, vmm_flags);
+    if (!ptr) {
+        frame->rax = (uint64_t)-ENOMEM;
+        return;
+    }
+
+    frame->rax = (uint64_t)ptr;
+}
+
+void sys_mprotect(syscall_frame_t *frame) {
+    uint64_t addr   = frame->rdi;
+    size_t   length = (size_t)frame->rsi;
+    int      prot   = (int)frame->rdx;
+
+    if (length == 0) {
+        frame->rax = 0;
+        return;
+    }
+
+    uint64_t start = addr & ~(uint64_t)(PAGE_SIZE - 1);
+    uint64_t end   = (addr + length + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+
+    for (uint64_t a = start; a < end; a += PAGE_SIZE) {
+        uint64_t phys = get_vmm_phys(current_task_ptr->ctx, a);
+        if (!phys) {
+            frame->rax = (uint64_t)-ENOMEM;
+            return;
+        }
+        uint64_t vmm_flags = VMM_USER;
+        if (prot & 2) vmm_flags |= VMM_WRITABLE;
+        if (!(prot & 4)) vmm_flags |= VMM_NX;
+        map_vmm(current_task_ptr->ctx, a, phys, vmm_flags);
+    }
+
+    frame->rax = 0;
+}
+
+void sys_munmap(syscall_frame_t *frame) {
+    uint64_t addr   = frame->rdi;
+    size_t   length = (size_t)frame->rsi;
+
+    if (length == 0) {
+        frame->rax = (uint64_t)-EINVAL;
+        return;
+    }
+
+    uint64_t start = addr & ~(uint64_t)(PAGE_SIZE - 1);
+    uint64_t end   = (addr + length + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+
+    for (uint64_t a = start; a < end; a += PAGE_SIZE) {
+        unmap_vmm(current_task_ptr->ctx, a);
+    }
+
+    frame->rax = 0;
 }
 
 void sys_brk(syscall_frame_t *frame) {
@@ -546,13 +656,18 @@ void sys_ioctl(syscall_frame_t *frame) {
         return;
 
     case TCGETS: {
-        // Return a sane default termios so apps don't bail out
         termios_t t = {0};
-        t.c_iflag = 0x0500;   // ICRNL | IXON
-        t.c_oflag = 0x0005;   // OPOST | ONLCR
-        t.c_cflag = 0x04BF;   // CS8 | CREAD | CLOCAL | B38400
-        t.c_lflag = 0x8A3B;   // ISIG | ICANON | ECHO | ECHOE | ECHOK | IEXTEN
-        t.c_cc[4] = 1;        // VMIN = 1
+        if (entry && entry->type == FD_DEV) {
+            char rel[256];
+            if (is_mounted_under(entry->path, "devfs", rel)) {
+                if (strncmp(rel, "tty", 3) == 0) {
+                     int idx = rel[3] - '0';
+                     if (idx >= 0 && idx < NUM_TTYS) {
+                         t = get_tty(idx)->termios;
+                     }
+                }
+            }
+        }
         write_vmm(current_task_ptr->ctx, argp, &t, sizeof(t));
         frame->rax = 0;
         return;
@@ -588,6 +703,26 @@ void sys_ioctl(syscall_frame_t *frame) {
         // Exclusive mode — no-op
         frame->rax = 0;
         return;
+
+    case TIOCGPTN: {
+        if (!entry || entry->type != FD_PTY_MASTER) { frame->rax = (uint64_t)-ENOTTY; return; }
+        int idx = ptm_path_idx(entry->path);
+        unsigned int uidx = (unsigned int)idx;
+        write_vmm(current_task_ptr->ctx, argp, &uidx, sizeof(unsigned int));
+        frame->rax = 0;
+        return;
+    }
+    case TIOCSPTLCK: {
+        if (!entry || entry->type != FD_PTY_MASTER) { frame->rax = (uint64_t)-ENOTTY; return; }
+        int idx = ptm_path_idx(entry->path);
+        pty_t *p = get_pty(idx);
+        if (!p) { frame->rax = (uint64_t)-EBADF; return; }
+        int val = 0;
+        read_vmm(current_task_ptr->ctx, &val, argp, sizeof(int));
+        p->locked = (val != 0);
+        frame->rax = 0;
+        return;
+    }
 
     default:
         (void)is_tty;
@@ -1298,6 +1433,18 @@ void sys_openat(syscall_frame_t *frame) {
     char rel_path[256];
     if (is_mounted_under(abs_path, "devfs", rel_path)) {
         if (!devfs_device_exists(rel_path)) { frame->rax = (uint64_t)-ENOENT; return; }
+        if (strcmp(rel_path, "ptmx") == 0 || strcmp(rel_path, "pts/ptmx") == 0) {
+            int idx = alloc_pty();
+            if (idx < 0) { frame->rax = (uint64_t)-ENOSPC; return; }
+            char ptm_path[32];
+            ptm_path[0]='p'; ptm_path[1]='t'; ptm_path[2]='m'; ptm_path[3]=':';
+            if (idx < 10) { ptm_path[4]='0'+idx; ptm_path[5]='\0'; }
+            else          { ptm_path[4]='1'; ptm_path[5]='0'+(idx-10); ptm_path[6]='\0'; }
+            int fd = alloc_fd(&current_task_ptr->fd_table, ptm_path, FD_PTY_MASTER, flags);
+            if (fd < 0) { free_pty(idx); frame->rax = (uint64_t)fd; return; }
+            frame->rax = (uint64_t)fd;
+            return;
+        }
         int fd = alloc_fd(&current_task_ptr->fd_table, abs_path, FD_DEV, flags);
         frame->rax = (uint64_t)fd;
         return;

@@ -1,5 +1,8 @@
 #include <main/devfs.h>
+#include <io/tty.h>
+#include <io/pty.h>
 #include <io/terminal.h>
+#include <io/keyboard.h>
 #include <main/string.h>
 #include <main/errno.h>
 #include <main/spinlock.h>
@@ -36,8 +39,7 @@ static uint64_t zero_write(const void* buf, uint64_t count, uint64_t offset) {
     return count;
 }
 
-#define DEFINE_FB_CALLBACKS(n) \
-static uint64_t fb##n##_read(void* buf, uint64_t count, uint64_t offset) { \
+#define DEFINE_FB_CALLBACKS(n) static uint64_t fb##n##_read(void* buf, uint64_t count, uint64_t offset) { \
     return fb_read_index(n, buf, count, offset); \
 } \
 static uint64_t fb##n##_write(const void* buf, uint64_t count, uint64_t offset) { \
@@ -52,6 +54,16 @@ DEFINE_FB_CALLBACKS(4)
 DEFINE_FB_CALLBACKS(5)
 DEFINE_FB_CALLBACKS(6)
 DEFINE_FB_CALLBACKS(7)
+
+static uint64_t read_ptmx(void *buf, uint64_t count, uint64_t offset) {
+    (void)buf; (void)count; (void)offset;
+    return (uint64_t)-EIO;
+}
+
+static uint64_t write_ptmx(const void *buf, uint64_t count, uint64_t offset) {
+    (void)buf; (void)count; (void)offset;
+    return (uint64_t)-EIO;
+}
 
 int register_devfs_device(const char* name, 
     uint64_t (*read_fn)(void*, uint64_t, uint64_t), 
@@ -203,6 +215,17 @@ const char *devfs_get_device_name(int index) {
     spin_unlock_irqrestore(&devfs_lock, irq);
     return NULL;
 }
+static uint64_t tty_read(void* buf, uint64_t count, uint64_t offset) {
+    (void)buf; (void)count; (void)offset;
+    return 0; // TTY input handled by keyboard/input system
+}
+
+static uint64_t tty_write(const void* buf, uint64_t count, uint64_t offset) {
+    for (uint64_t i = 0; i < count; i++) {
+        putc(((const char*)buf)[i]);
+    }
+    return count;
+}
 
 void init_devfs(void) {
     devfs_lock = SPINLOCK_INIT;
@@ -217,27 +240,32 @@ void init_devfs(void) {
     register_devfs_device("null", null_read, null_write);
     register_devfs_device("zero", zero_read, zero_write);
 
-    // Macro for helping register framebuffer devices
-    #define REGISTER_FB_DEVICE(x) case x: register_devfs_device("fb" #x, fb##x##_read, fb##x##_write); break;
-
     if (fb_req.response && fb_req.response->framebuffer_count > 0) {
         for (int i = 0; i < fb_req.response->framebuffer_count; i++) {
-            switch (i) {
-                REGISTER_FB_DEVICE(0)
-                REGISTER_FB_DEVICE(1)
-                REGISTER_FB_DEVICE(2)
-                REGISTER_FB_DEVICE(3)
-                REGISTER_FB_DEVICE(4)
-                REGISTER_FB_DEVICE(5)
-                REGISTER_FB_DEVICE(6)
-                REGISTER_FB_DEVICE(7)
-                default:
-                    panic("too many framebuffers");
-            }
+            if (i == 0) register_devfs_device("fb0", fb0_read, fb0_write);
+            else if (i == 1) register_devfs_device("fb1", fb1_read, fb1_write);
+            else if (i == 2) register_devfs_device("fb2", fb2_read, fb2_write);
+            else if (i == 3) register_devfs_device("fb3", fb3_read, fb3_write);
+            else if (i == 4) register_devfs_device("fb4", fb4_read, fb4_write);
+            else if (i == 5) register_devfs_device("fb5", fb5_read, fb5_write);
+            else if (i == 6) register_devfs_device("fb6", fb6_read, fb6_write);
+            else if (i == 7) register_devfs_device("fb7", fb7_read, fb7_write);
+            else panic("too many framebuffers");
         }
     }
 
-    #undef REGISTER_FB_DEVICE
+    register_devfs_device("tty",  tty_read, tty_write);
+    register_devfs_device("tty0", tty_read, tty_write);
+    register_devfs_device("tty1", tty_read, tty_write);
+    register_devfs_device("tty2", tty_read, tty_write);
+    register_devfs_device("tty3", tty_read, tty_write);
+    register_devfs_device("tty4", tty_read, tty_write);
+    register_devfs_device("tty5", tty_read, tty_write);
+    register_devfs_device("tty6", tty_read, tty_write);
+    register_devfs_device("tty7", tty_read, tty_write);
+
+    register_devfs_device("ptmx",     read_ptmx, write_ptmx);
+    register_devfs_device("pts/ptmx", read_ptmx, write_ptmx);
 
     printf("devfs: initialized devfs\n");
 }
