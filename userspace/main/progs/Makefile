@@ -9,7 +9,7 @@ endif
 
 include ../../config.mk
 
-PROGS = $(patsubst %.c,%,$(wildcard *.c))
+PROGS = $(patsubst %.c,%,$(wildcard *.c)) $(patsubst %.S,%,$(wildcard *.S))
 TARGETS = $(foreach p,$(PROGS),../../$(p))
 
 all: progs
@@ -44,9 +44,13 @@ $(foreach p,$(PROGS),$(eval $(call PROG_rule,$(p))))
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/main/progs/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+%.o: %.S Makefile ../../config.mk
+	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/main/progs/$@"
+	@$(AS) $(AFLAGS) -c $< -o $@
+
 clean:
 	@printf "  %-7s %s\n" "CLEAN" "$(foreach p,$(PROGS),$(SUBDIR)/$(p)) $(SUBDIR)/main/progs/*.o $(SUBDIR)/main/progs/*.d"
 	@rm -f $(foreach p,$(PROGS),../../$(p)) *.o *.d
 
 mrproper: clean
-.PHONY: all clean mrproper progs
+.PHONY: all progs clean mrproper
