@@ -19,7 +19,7 @@ crt0: crt0.S Makefile ../../config.mk
 	else \
 		printf "  %-7s %s\n" "AS" "$(SUBDIR)/crt0.o" && \
 		# I fucking don't know why but it makes a crt0.o.d without -MF (wtf) && \
-		$(CC) $(CFLAGS) -MF crt0.d -c $< -o ../../crt0.o && \
+		$(AS) $(AFLAGS) -MF crt0.d -c $< -o ../../crt0.o && \
 		printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/crt0.o" && \
 		$(STRIP) $(STRIPFLAGS) --strip-debug ../../crt0.o; \
 	fi
