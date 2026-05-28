@@ -1,5 +1,5 @@
 CC = gcc
 LD = $(CC)
-CFLAGS = 
+CFLAGS = -MMD -MP
 LDFLAGS = 
 SUBDIR = tools
