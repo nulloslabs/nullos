@@ -33,7 +33,7 @@ progs: $(PROGS:=.o)
 define PROG_rule
 ../../$(1): $(1).o ../../crt0.o ../../libc.so ../../libc.a ../../ld.so Makefile ../../config.mk
 	@printf "  %-7s %s\n" "LD" "$(SUBDIR)/$(1)"
-	$(LD) $(LDFLAGS) ../../crt0.o $$< -o $$@ -Wl,--dynamic-linker=/ld.so -l:libc.so
+	$(LD) $(LDFLAGS) ../../crt0.o $$< -o $$@ -Wl,--dynamic-linker=/usr/lib/ld.so -l:libc.so
 	@printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/$(1)"
 	$(STRIP) $(STRIPFLAGS) $$@
 endef
