@@ -13,7 +13,7 @@ tools:
 	@if [ ! -d limine/.git ]; then \
 		mkdir -p limine && \
 		printf "  %-7s %s\n" "FETCH" "$(SUBDIR)/limine/" && \
-		git clone --branch v7.x-binary --depth=1 https://github.com/limine-bootloader/limine 2>/dev/null; \
+		git clone --branch v11.x-binary --depth=1 https://github.com/limine-bootloader/limine 2>/dev/null; \
 	fi
 	@if [ ! -f limine/limine ] || [ config.mk -nt limine/limine ] || [ Makefile -nt limine/limine ]; then \
 		printf "  %-7s %s\n" "CC" "$(SUBDIR)/limine/limine.o" && \
