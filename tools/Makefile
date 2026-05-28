@@ -25,7 +25,8 @@ tools:
 	fi
 
 clean:
-	@:
+	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/limine/limine $(SUBDIR)/limine/*.d $(SUBDIR)/limine/*.o"
+    @rm -rf limine/limine limine/*.d limine/*.o
 
 mrproper: clean
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/limine/"
