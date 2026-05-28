@@ -23,7 +23,7 @@ rootfs:
 		ln -snf usr/sbin main/sbin && \
 		ln -snf usr/lib main/lib && \
 		cp ../userspace/libc.so ../userspace/libc.a ../userspace/crt0.o main/usr/lib && \
-		cp ../userspace/ld.so main/ld.so && \
+		cp ../userspace/ld.so main/usr/lib/ld.so && \
 		cp -a ../userspace/include/ main/usr && \
 		cp $(filter-out ../userspace/init,$(USERSPACE_PROGS)) main/usr/bin && \
 		# Create config files && \
