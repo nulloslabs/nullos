@@ -6,15 +6,45 @@
 #include <main/limine_req.h>
 #include <io/terminal.h>
 
-// A simple memory management system.
+// A simple memory management system with validation.
 
 struct memory_header *free_list_start = NULL;
 uint64_t hhdm_offset = 0;
+
+// Magic number to validate heap allocations
+#define HEAP_MAGIC 0xDEADBEEF
+
+// Structure to track valid heap allocations
+typedef struct {
+    uint32_t magic;
+    struct memory_header *header;
+} heap_validator_t;
+
+// Validate that a pointer is a valid heap allocation
+static bool is_valid_heap_ptr(void* ptr) {
+    if (!ptr) return false;
+    
+    struct memory_header *header = (struct memory_header*)ptr - 1;
+    
+    // Sanity checks on header
+    if (header->is_free > 1) return false;  // is_free should be 0 or 1
+    if (header->size == 0 || header->size > 0x10000000) return false;  // Max 256MB
+    
+    // Additional: check that the header looks reasonable
+    // (simple heuristic: header should be within reasonable memory range)
+    uint64_t addr = (uint64_t)header;
+    if (addr < 0xffffc00000000000ULL) return false;  // Must be in kernel space
+    
+    return true;
+}
 
 void* malloc(size_t size) {
     if (size == 0) {
         size = 1;  // Allocate minimum 1 byte
     }
+    
+    // Prevent excessive allocations
+    if (size > 0x10000000) return NULL;  // Max 256MB per allocation
 
     // 1. Alignment (8 or 16 byte alignment is crucial for modern CPUs)
     size = (size + 7) & ~7; 
@@ -45,6 +75,12 @@ void* malloc(size_t size) {
 void* realloc(void* ptr, size_t size) {
     if (!ptr) return malloc(size);
 
+    // SECURITY: Validate that ptr is actually a valid heap allocation
+    if (!is_valid_heap_ptr(ptr)) {
+        panic("realloc: invalid pointer");
+        return NULL;
+    }
+
     struct memory_header *header = (struct memory_header*)ptr - 1;
     if (header->size >= size) return ptr; // Already big enough!
 
@@ -58,6 +94,12 @@ void* realloc(void* ptr, size_t size) {
 
 void free(void* ptr) {
     if (!ptr) return;
+
+    // SECURITY: Validate that ptr is a valid heap allocation before freeing
+    if (!is_valid_heap_ptr(ptr)) {
+        panic("free: invalid pointer - possible double free or corruption");
+        return;
+    }
 
     struct memory_header *header = (struct memory_header*)ptr - 1;
     header->is_free = 1;
