@@ -11,6 +11,11 @@ static uint64_t vmalloc_cursor = 0xffffc00000000000;
 static uint64_t vuser_cursor   = 0x0000700000000000;
 static spinlock_t vmm_lock = SPINLOCK_INIT;
 
+// Security: Define maximum allocatable pages to prevent DoS
+#define MAX_ALLOCATABLE_PAGES 0x100000  // 1M pages = 4GB max per allocation
+#define MAX_VMALLOC_SPACE (0xffffffff80000000 - 0xffffc00000000000)
+#define MAX_USER_SPACE (0x0000800000000000 - 0x0000700000000000)
+
 // Helper: Get virtual address of a physical page using HHDM
 void* phys_to_virt(uint64_t phys) {
     return (void*)(phys + hhdm_req.response->offset);
@@ -280,6 +285,10 @@ vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
     vmm_context_t* child = create_vmm_context();
     if (!child) return NULL;
 
+    // SECURITY: Lock entire traversal to prevent use-after-free during cloning
+    uint64_t flags_irq;
+    spin_lock_irqsave(&vmm_lock, &flags_irq);
+
     // Traverse the parent's page tables and copy all user pages (indices 0-255)
     for (uint64_t pml4_i = 0; pml4_i < 256; pml4_i++) {
         if (!(parent->pml4[pml4_i] & VMM_PRESENT)) continue;
@@ -307,7 +316,8 @@ vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
                     void* new_phys = pmalloc();
                     if (!new_phys) {
                         // In a real OS, we should rollback and free everything. 
-                        // For now, just return what we have or crash.
+                        // For now, unlock and return what we have
+                        spin_unlock_irqrestore(&vmm_lock, flags_irq);
                         return NULL;
                     }
 
@@ -324,6 +334,7 @@ vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
         }
     }
 
+    spin_unlock_irqrestore(&vmm_lock, flags_irq);
     return child;
 }
 
@@ -343,43 +354,72 @@ void* vmalloc_ex(vmm_context_t* ctx, size_t size, uint64_t flags) {
     uint64_t total_size = size + sizeof(vmalloc_header_t);
     uint64_t num_pages = (total_size + 4095) / 4096;
     
+    // SECURITY: Check for reasonable page count to prevent DoS
+    if (num_pages == 0 || num_pages > MAX_ALLOCATABLE_PAGES) {
+        return NULL;
+    }
+    
     uint64_t flags_irq;
     spin_lock_irqsave(&vmm_lock, &flags_irq);
     
     // Check if another vmalloc on another core moved the cursor while we waited
     uint64_t *cursor = (flags & VMM_USER) ? &vuser_cursor : &vmalloc_cursor;
+    uint64_t max_space = (flags & VMM_USER) ? MAX_USER_SPACE : MAX_VMALLOC_SPACE;
+    
+    // SECURITY: Check cursor overflow before advancing
+    if (*cursor > (max_space - (num_pages * PAGE_SIZE))) {
+        spin_unlock_irqrestore(&vmm_lock, flags_irq);
+        return NULL;  // Virtual address space exhausted
+    }
+    
     void* start_addr = (void*)*cursor;
     
-    // We reserve the virtual address space immediately so it's thread-safe
-    *cursor += (num_pages * PAGE_SIZE);
-    
+    // Reserve space but don't advance yet - we'll advance after successful allocation
     spin_unlock_irqrestore(&vmm_lock, flags_irq);
 
-    void* first_phys = NULL;
+    // SECURITY: Only advance cursor after all allocations succeed
     uint64_t curr_addr = (uint64_t)start_addr;
+    uint64_t first_phys = 0;
 
     for (uint64_t i = 0; i < num_pages; i++) {
         void* phys = pmalloc();
-        if (!phys) return NULL; 
-        if (i == 0) first_phys = phys;
-
+        if (!phys) {
+            // Allocation failed - free what we've allocated so far
+            for (uint64_t j = 0; j < i; j++) {
+                unmap_vmm(ctx, (uint64_t)start_addr + (j * PAGE_SIZE));
+            }
+            return NULL;
+        }
+        
+        if (i == 0) first_phys = (uint64_t)phys;
         map_vmm(ctx, curr_addr, (uint64_t)phys, flags | VMM_PRESENT);
         curr_addr += PAGE_SIZE;
     }
+    
+    // Now advance cursor only after successful allocation
+    spin_lock_irqsave(&vmm_lock, &flags_irq);
+    *cursor += (num_pages * PAGE_SIZE);
+    spin_unlock_irqrestore(&vmm_lock, flags_irq);
 
     // Heed the warning: 'start_addr' is a virtual address in 'ctx', which might 
     // not be the current address space. Use HHDM to write the header directly.
-    vmalloc_header_t* header = (vmalloc_header_t*)phys_to_virt((uint64_t)first_phys);
+    vmalloc_header_t* header = (vmalloc_header_t*)phys_to_virt(first_phys);
     header->page_count = num_pages;
 
     return (void*)((uintptr_t)start_addr + sizeof(vmalloc_header_t));
 }
 
 void* vmap_mmio(uint64_t phys, size_t num_pages) {
-    if (num_pages == 0) return NULL;
+    if (num_pages == 0 || num_pages > MAX_ALLOCATABLE_PAGES) return NULL;
     
     uint64_t flags_irq;
     spin_lock_irqsave(&vmm_lock, &flags_irq);
+    
+    // Check cursor overflow
+    if (vmalloc_cursor > (MAX_VMALLOC_SPACE - (num_pages * PAGE_SIZE))) {
+        spin_unlock_irqrestore(&vmm_lock, flags_irq);
+        return NULL;
+    }
     
     void* start_addr = (void*)vmalloc_cursor;
     vmalloc_cursor += (num_pages * PAGE_SIZE);
@@ -414,6 +454,12 @@ void* vrealloc(void* ptr, size_t size) {
     if (!ptr) return vmalloc(size);
     
     vmalloc_header_t* header = (vmalloc_header_t*)((uintptr_t)ptr - sizeof(vmalloc_header_t));
+    
+    // SECURITY: Validate page count before using it
+    if (header->page_count == 0 || header->page_count > MAX_ALLOCATABLE_PAGES) {
+        return NULL;  // Invalid header
+    }
+    
     size_t old_data_size = (header->page_count * PAGE_SIZE) - sizeof(vmalloc_header_t);
 
     uint64_t new_total_size = size + sizeof(vmalloc_header_t);
@@ -438,6 +484,12 @@ void vfree(void* ptr) {
     if (!ptr) return;
 
     vmalloc_header_t* header = (vmalloc_header_t*)((uintptr_t)ptr - sizeof(vmalloc_header_t));
+    
+    // SECURITY: Validate page count to prevent unbounded loop/DoS
+    if (header->page_count == 0 || header->page_count > MAX_ALLOCATABLE_PAGES) {
+        return;  // Invalid header - silently fail to prevent panic
+    }
+    
     uint64_t virt = (uintptr_t)header;
 
     for (uint64_t i = 0; i < header->page_count; i++) {
