@@ -16,6 +16,10 @@ static uint64_t read_pts##n(void *buf, uint64_t count, uint64_t offset) { \
     char *b = (char *)buf; int got = 0; \
     while (got == 0) { \
         uint64_t irq; spin_lock_irqsave(&pty_lock, &irq); \
+        if (!p->allocated || p->master_refs == 0) { \
+            spin_unlock_irqrestore(&pty_lock, irq); \
+            return 0; \
+        } \
         got = read_tty_ring(&p->m2s, b, (int)count); \
         spin_unlock_irqrestore(&pty_lock, irq); \
     } \
@@ -25,6 +29,10 @@ static uint64_t write_pts##n(const void *buf, uint64_t count, uint64_t offset) {
     (void)offset; \
     pty_t *p = &ptys[n]; \
     uint64_t irq; spin_lock_irqsave(&pty_lock, &irq); \
+    if (!p->allocated || p->master_refs == 0) { \
+        spin_unlock_irqrestore(&pty_lock, irq); \
+        return (uint64_t)-EIO; \
+    } \
     int w = write_tty_ring(&p->s2m, (const char *)buf, (int)count); \
     spin_unlock_irqrestore(&pty_lock, irq); \
     return (uint64_t)w; \
@@ -57,6 +65,8 @@ int alloc_pty(void) {
         if (!ptys[i].allocated) {
             ptys[i].allocated = true;
             ptys[i].locked = true;
+            ptys[i].master_refs = 1;
+            ptys[i].slave_refs = 0;
             ptys[i].m2s.head = ptys[i].m2s.tail = 0;
             ptys[i].s2m.head = ptys[i].s2m.tail = 0;
             
@@ -73,7 +83,7 @@ int alloc_pty(void) {
     return -ENOSPC;
 }
 
-void free_pty(int idx) {
+static void destroy_pty(int idx) {
     if (idx < 0 || idx >= NUM_PTYS) return;
     char name[16] = "pts/";
     if (idx < 10) { name[4] = '0' + idx; name[5] = '\0'; }
@@ -83,7 +93,95 @@ void free_pty(int idx) {
     uint64_t irq;
     spin_lock_irqsave(&pty_lock, &irq);
     ptys[idx].allocated = false;
+    ptys[idx].locked = false;
+    ptys[idx].master_refs = 0;
+    ptys[idx].slave_refs = 0;
     spin_unlock_irqrestore(&pty_lock, irq);
+}
+
+void retain_pty_master(int idx) {
+    if (idx < 0 || idx >= NUM_PTYS) return;
+    uint64_t irq;
+    spin_lock_irqsave(&pty_lock, &irq);
+    if (ptys[idx].allocated)
+        ptys[idx].master_refs++;
+    spin_unlock_irqrestore(&pty_lock, irq);
+}
+
+void release_pty_master(int idx) {
+    if (idx < 0 || idx >= NUM_PTYS) return;
+
+    bool destroy = false;
+    uint64_t irq;
+    spin_lock_irqsave(&pty_lock, &irq);
+    if (ptys[idx].allocated && ptys[idx].master_refs > 0) {
+        ptys[idx].master_refs--;
+        destroy = (ptys[idx].master_refs == 0 && ptys[idx].slave_refs == 0);
+    }
+    spin_unlock_irqrestore(&pty_lock, irq);
+
+    if (destroy)
+        destroy_pty(idx);
+}
+
+int open_pty_slave(int idx) {
+    if (idx < 0 || idx >= NUM_PTYS) return -ENOENT;
+
+    uint64_t irq;
+    spin_lock_irqsave(&pty_lock, &irq);
+    if (!ptys[idx].allocated || ptys[idx].master_refs == 0) {
+        spin_unlock_irqrestore(&pty_lock, irq);
+        return -EIO;
+    }
+    if (ptys[idx].locked) {
+        spin_unlock_irqrestore(&pty_lock, irq);
+        return -EIO;
+    }
+    ptys[idx].slave_refs++;
+    spin_unlock_irqrestore(&pty_lock, irq);
+    return 0;
+}
+
+void retain_pty_slave(int idx) {
+    if (idx < 0 || idx >= NUM_PTYS) return;
+    uint64_t irq;
+    spin_lock_irqsave(&pty_lock, &irq);
+    if (ptys[idx].allocated)
+        ptys[idx].slave_refs++;
+    spin_unlock_irqrestore(&pty_lock, irq);
+}
+
+void release_pty_slave(int idx) {
+    if (idx < 0 || idx >= NUM_PTYS) return;
+    bool destroy = false;
+    uint64_t irq;
+    spin_lock_irqsave(&pty_lock, &irq);
+    if (ptys[idx].slave_refs > 0) {
+        ptys[idx].slave_refs--;
+        destroy = (ptys[idx].master_refs == 0 && ptys[idx].slave_refs == 0);
+    }
+    spin_unlock_irqrestore(&pty_lock, irq);
+
+    if (destroy)
+        destroy_pty(idx);
+}
+
+int pty_slave_path_idx(const char *path) {
+    if (!path) return -1;
+    const char *p = path;
+    while (*p == '.' || *p == '/') p++;
+    if (strncmp(p, "dev/", 4) == 0) p += 4;
+    if (strncmp(p, "pts/", 4) != 0) return -1;
+    p += 4;
+    if (*p < '0' || *p > '9') return -1;
+
+    int idx = 0;
+    while (*p >= '0' && *p <= '9') {
+        idx = idx * 10 + (*p - '0');
+        p++;
+    }
+    if (*p != '\0' || idx >= NUM_PTYS) return -1;
+    return idx;
 }
 
 int read_pty_master(int idx, char *buf, int len) {
@@ -92,6 +190,10 @@ int read_pty_master(int idx, char *buf, int len) {
     int got = 0;
     while (got == 0) {
         uint64_t irq; spin_lock_irqsave(&pty_lock, &irq);
+        if (!p->allocated || p->slave_refs == 0) {
+            spin_unlock_irqrestore(&pty_lock, irq);
+            return -EIO;
+        }
         got = read_tty_ring(&p->s2m, buf, len);
         spin_unlock_irqrestore(&pty_lock, irq);
     }
@@ -102,6 +204,10 @@ int write_pty_master(int idx, const char *buf, int len) {
     pty_t *p = get_pty(idx);
     if (!p) return -1;
     uint64_t irq; spin_lock_irqsave(&pty_lock, &irq);
+    if (!p->allocated) {
+        spin_unlock_irqrestore(&pty_lock, irq);
+        return -1;
+    }
     int w = write_tty_ring(&p->m2s, buf, len);
     spin_unlock_irqrestore(&pty_lock, irq);
     return w;
@@ -111,5 +217,7 @@ void init_ptys(void) {
     for (int i = 0; i < NUM_PTYS; i++) {
         ptys[i].allocated = false;
         ptys[i].locked = false;
+        ptys[i].master_refs = 0;
+        ptys[i].slave_refs = 0;
     }
 }

@@ -6,42 +6,24 @@
 #include <main/limine_req.h>
 #include <io/terminal.h>
 
+// A simple memory management system.
+
 struct memory_header *free_list_start = NULL;
 uint64_t hhdm_offset = 0;
 
-#define HEAP_MAGIC 0xDEADBEEF
-
-typedef struct {
-    uint32_t magic;
-    struct memory_header *header;
-} heap_validator_t;
-
-static bool is_valid_heap_ptr(void* ptr) {
-    if (!ptr) return false;
-    
-    struct memory_header *header = (struct memory_header*)ptr - 1;
-    
-    if (header->is_free > 1) return false;
-    if (header->size == 0 || header->size > 0x10000000) return false;
-    
-    uint64_t addr = (uint64_t)header;
-    if (addr < 0xffffc00000000000ULL) return false;
-    
-    return true;
-}
-
 void* malloc(size_t size) {
     if (size == 0) {
-        size = 1;
+        size = 1;  // Allocate minimum 1 byte
     }
-    
-    if (size > 0x10000000) return NULL;
 
+    // 1. Alignment (8 or 16 byte alignment is crucial for modern CPUs)
     size = (size + 7) & ~7; 
 
     struct memory_header *curr = free_list_start;
     while (curr) {
         if (curr->is_free && curr->size >= size) {
+            // Can we split this block? 
+            // We need enough space for the requested size + a new header + at least some data
             if (curr->size >= (size + sizeof(struct memory_header) + 16)) {
                 struct memory_header *new_block = (struct memory_header*)((uint8_t*)curr + sizeof(struct memory_header) + size);
                 new_block->size = curr->size - size - sizeof(struct memory_header);
@@ -63,13 +45,8 @@ void* malloc(size_t size) {
 void* realloc(void* ptr, size_t size) {
     if (!ptr) return malloc(size);
 
-    if (!is_valid_heap_ptr(ptr)) {
-        panic("realloc: invalid pointer");
-        return NULL;
-    }
-
     struct memory_header *header = (struct memory_header*)ptr - 1;
-    if (header->size >= size) return ptr;
+    if (header->size >= size) return ptr; // Already big enough!
 
     void *new_ptr = malloc(size);
     if (new_ptr) {
@@ -82,11 +59,6 @@ void* realloc(void* ptr, size_t size) {
 void free(void* ptr) {
     if (!ptr) return;
 
-    if (!is_valid_heap_ptr(ptr)) {
-        panic("free: invalid pointer - possible double free or corruption");
-        return;
-    }
-
     struct memory_header *header = (struct memory_header*)ptr - 1;
     header->is_free = 1;
 
@@ -95,6 +67,7 @@ void free(void* ptr) {
         if (curr->is_free && curr->next->is_free) {
             curr->size += sizeof(struct memory_header) + curr->next->size;
             curr->next = curr->next->next;
+            // Don't move to next yet, check if the NEW next is also free
             continue; 
         }
         curr = curr->next;

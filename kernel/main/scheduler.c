@@ -137,6 +137,10 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
             tasks[i].kernel_stack = kstack;
 
             memcpy(&tasks[i].fd_table, &current_task_ptr->fd_table, sizeof(fd_table_t));
+            for (int fd = 0; fd < FD_MAX; fd++) {
+                if (tasks[i].fd_table.entries[fd].open)
+                    retain_fd_entry(&tasks[i].fd_table.entries[fd]);
+            }
 
             uint64_t v_rsp = (uint64_t)kstack + KERNEL_STACK_SIZE;
 

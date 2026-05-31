@@ -3,6 +3,7 @@
 #include <main/string.h>
 #include <main/errno.h>
 #include <main/scheduler.h>
+#include <io/pty.h>
 
 int alloc_fd(fd_table_t *table, const char *path, fd_type_t type, uint32_t flags) {
     for (int i = 0; i < FD_MAX; i++) {
@@ -22,6 +23,22 @@ int alloc_fd(fd_table_t *table, const char *path, fd_type_t type, uint32_t flags
 int free_fd(fd_table_t *table, int fd) {
     if (fd < 0 || fd >= FD_MAX) { return -EBADF; }
     if (!table->entries[fd].open) { return -EBADF; }
+    if (table->entries[fd].type == FD_PTY_MASTER) {
+        int idx = -1;
+        if (strncmp(table->entries[fd].path, "ptm:", 4) == 0) {
+            const char *p = table->entries[fd].path + 4;
+            idx = 0;
+            while (*p >= '0' && *p <= '9') {
+                idx = idx * 10 + (*p - '0');
+                p++;
+            }
+        }
+        release_pty_master(idx);
+    } else if (table->entries[fd].type == FD_DEV) {
+        int idx = pty_slave_path_idx(table->entries[fd].path);
+        if (idx >= 0)
+            release_pty_slave(idx);
+    }
     table->entries[fd].open   = false;
     table->entries[fd].type   = FD_NONE;
     table->entries[fd].offset = 0;
@@ -39,6 +56,26 @@ fd_entry_t *get_current_fd(int fd) {
     if (fd < 0 || fd >= FD_MAX) return NULL;
     fd_entry_t* entry = &current_task_ptr->fd_table.entries[fd];
     return entry->open ? entry : NULL;
+}
+
+void retain_fd_entry(fd_entry_t *entry) {
+    if (!entry || !entry->open) return;
+    if (entry->type == FD_PTY_MASTER) {
+        int idx = -1;
+        if (strncmp(entry->path, "ptm:", 4) == 0) {
+            const char *p = entry->path + 4;
+            idx = 0;
+            while (*p >= '0' && *p <= '9') {
+                idx = idx * 10 + (*p - '0');
+                p++;
+            }
+        }
+        retain_pty_master(idx);
+    } else if (entry->type == FD_DEV) {
+        int idx = pty_slave_path_idx(entry->path);
+        if (idx >= 0)
+            retain_pty_slave(idx);
+    }
 }
 
 void init_fd_table(fd_table_t *table) {

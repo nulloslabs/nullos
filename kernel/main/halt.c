@@ -1,38 +1,37 @@
 #include <main/halt.h>
 #include <io/apic.h>
-#include <io/pic.h>
-#include <io/io.h>
+#include <main/mp.h>
 
 volatile int system_halted = 0;
 
-// MSR helpers (defined in apic.c, need local copies to avoid circular deps)
-static inline uint64_t rdmsr(uint32_t msr) {
-    uint32_t lo, hi;
-    asm volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
-    return ((uint64_t)hi << 32) | lo;
-}
-
-static inline void wrmsr(uint32_t msr, uint64_t val) {
-    asm volatile("wrmsr" :: "c"(msr), "a"((uint32_t)val), "d"((uint32_t)(val >> 32)));
-}
-
-// Disable interrupts
 void cli(void) {
     asm volatile("cli" : : : "memory");
 }
 
-// Enable interrupts
 void sti(void) {
     asm volatile("sti" : : : "memory");
 }
 
+static void halt_other_cpus(void) {
+    if (current_apic_mode == APIC_NONE || cpu_count <= 1)
+        return;
+
+    uint32_t self = get_apic_id();
+    for (int i = 0; i < cpu_count; i++) {
+        if (!cpus[i].active || cpus[i].lapic_id == self)
+            continue;
+        send_init_apic(cpus[i].lapic_id);
+    }
+}
+
 __attribute__((noreturn)) void halt(void) {
-    system_halted = 1;
+    if (!__sync_lock_test_and_set(&system_halted, 1))
+        halt_other_cpus();
+
     asm volatile("cli" : : : "memory");
     for (;;) asm volatile("hlt" : : : "memory");
 }
 
-// Idle halt
 __attribute__((noreturn)) void idle(void) {
     for (;;) asm volatile("hlt" : : : "memory");
 }

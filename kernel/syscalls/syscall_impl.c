@@ -373,11 +373,18 @@ void sys_open(syscall_frame_t *frame) {
             if (idx < 10) { ptm_path[4]='0'+idx; ptm_path[5]='\0'; }
             else          { ptm_path[4]='1'; ptm_path[5]='0'+(idx-10); ptm_path[6]='\0'; }
             int fd = alloc_fd(&current_task_ptr->fd_table, ptm_path, FD_PTY_MASTER, flags);
-            if (fd < 0) { free_pty(idx); frame->rax = (uint64_t)fd; return; }
+            if (fd < 0) { release_pty_master(idx); frame->rax = (uint64_t)fd; return; }
             frame->rax = (uint64_t)fd;
             return;
         }
+        int pty_idx = pty_slave_path_idx(rel_path);
+        if (pty_idx >= 0) {
+            int r = open_pty_slave(pty_idx);
+            if (r < 0) { frame->rax = (uint64_t)r; return; }
+        }
         int fd = alloc_fd(&current_task_ptr->fd_table, abs_path, FD_DEV, flags);
+        if (fd < 0 && pty_idx >= 0)
+            release_pty_slave(pty_idx);
         frame->rax = (uint64_t)fd;
         return;
     }
@@ -408,9 +415,6 @@ void sys_open(syscall_frame_t *frame) {
 
 void sys_close(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
-    fd_entry_t *entry = get_current_fd(fd);
-    if (entry && entry->type == FD_PTY_MASTER)
-        free_pty(ptm_path_idx(entry->path));
     int res = free_fd(&current_task_ptr->fd_table, fd);
     frame->rax = (res < 0) ? (uint64_t)res : 0;
 }
@@ -638,7 +642,7 @@ void sys_ioctl(syscall_frame_t *frame) {
         if (entry && entry->type == FD_DEV) {
             char rel[256];
             if (is_mounted_under(entry->path, "devfs", rel))
-                if (strncmp(rel, "tty", 3) == 0 || strcmp(rel, "console") == 0)
+                if (strncmp(rel, "tty", 3) == 0 || strncmp(rel, "pts/", 4) == 0 || strcmp(rel, "console") == 0)
                     is_tty = 1;
         }
     }
@@ -665,6 +669,12 @@ void sys_ioctl(syscall_frame_t *frame) {
                      if (idx >= 0 && idx < NUM_TTYS) {
                          t = get_tty(idx)->termios;
                      }
+                } else if (strncmp(rel, "pts/", 4) == 0) {
+                    t.c_iflag = 0x0500;
+                    t.c_oflag = 0x0005;
+                    t.c_cflag = 0x04BF;
+                    t.c_lflag = 0x8A3B;
+                    t.c_cc[4] = 1;
                 }
             }
         }
@@ -748,6 +758,7 @@ void sys_fcntl(syscall_frame_t *frame) {
                 if (!table->entries[i].open) {
                     table->entries[i] = *entry;
                     table->entries[i].open = true;
+                    retain_fd_entry(&table->entries[i]);
                     frame->rax = (uint64_t)i;
                     return;
                 }
@@ -786,6 +797,7 @@ void sys_dup(syscall_frame_t *frame) {
         if (!table->entries[i].open) {
             table->entries[i] = *src;   // copy full entry
             table->entries[i].open = true;
+            retain_fd_entry(&table->entries[i]);
             frame->rax = (uint64_t)i;
             return;
         }
@@ -812,6 +824,7 @@ void sys_dup2(syscall_frame_t *frame) {
 
     table->entries[newfd] = *src;
     table->entries[newfd].open = true;
+    retain_fd_entry(&table->entries[newfd]);
     frame->rax = (uint64_t)newfd;
 }
 
@@ -1441,11 +1454,18 @@ void sys_openat(syscall_frame_t *frame) {
             if (idx < 10) { ptm_path[4]='0'+idx; ptm_path[5]='\0'; }
             else          { ptm_path[4]='1'; ptm_path[5]='0'+(idx-10); ptm_path[6]='\0'; }
             int fd = alloc_fd(&current_task_ptr->fd_table, ptm_path, FD_PTY_MASTER, flags);
-            if (fd < 0) { free_pty(idx); frame->rax = (uint64_t)fd; return; }
+            if (fd < 0) { release_pty_master(idx); frame->rax = (uint64_t)fd; return; }
             frame->rax = (uint64_t)fd;
             return;
         }
+        int pty_idx = pty_slave_path_idx(rel_path);
+        if (pty_idx >= 0) {
+            int r = open_pty_slave(pty_idx);
+            if (r < 0) { frame->rax = (uint64_t)r; return; }
+        }
         int fd = alloc_fd(&current_task_ptr->fd_table, abs_path, FD_DEV, flags);
+        if (fd < 0 && pty_idx >= 0)
+            release_pty_slave(pty_idx);
         frame->rax = (uint64_t)fd;
         return;
     }

@@ -22,6 +22,7 @@ void eoi_apic(void);
 uint32_t get_apic_id(void);
 void init_apic_timer(uint32_t frequency_hz);
 void send_apic_ipi(uint32_t apic_id, uint32_t vector);
+void send_init_apic(uint32_t apic_id);
 
 // LAPIC register offsets (for xAPIC MMIO)
 #define LAPIC_ID 0x020
@@ -53,6 +54,9 @@ void send_apic_ipi(uint32_t apic_id, uint32_t vector);
 // Timer modes
 #define LAPIC_TIMER_PERIODIC (1 << 17)
 #define LAPIC_TIMER_MASKED   (1 << 16)
+
+#define LAPIC_ICR_DELIVERY_INIT (5 << 8)
+#define LAPIC_ICR_LEVEL_ASSERT  (1 << 14)
 
 // IA32_APIC_BASE MSR
 #define MSR_APIC_BASE       0x1B

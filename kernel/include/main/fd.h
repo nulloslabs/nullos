@@ -33,3 +33,4 @@ int alloc_fd(fd_table_t *table, const char *path, fd_type_t type, uint32_t flags
 int free_fd(fd_table_t *table, int fd);
 fd_entry_t *get_fd(fd_table_t *table, int fd);
 fd_entry_t *get_current_fd(int fd);
+void retain_fd_entry(fd_entry_t *entry);

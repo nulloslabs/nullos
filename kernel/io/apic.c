@@ -194,3 +194,16 @@ void send_apic_ipi(uint32_t target_apic_id, uint32_t vector) {
         while (lapic_read(LAPIC_ICR_LO) & (1 << 12));
     }
 }
+
+void send_init_apic(uint32_t target_apic_id) {
+    uint32_t command = LAPIC_ICR_DELIVERY_INIT | LAPIC_ICR_LEVEL_ASSERT;
+
+    if (current_apic_mode == APIC_X2APIC) {
+        uint64_t icr = ((uint64_t)target_apic_id << 32) | command;
+        wrmsr(X2APIC_MSR_ICR, icr);
+    } else if (current_apic_mode == APIC_XAPIC) {
+        lapic_write(LAPIC_ICR_HI, target_apic_id << 24);
+        lapic_write(LAPIC_ICR_LO, command);
+        while (lapic_read(LAPIC_ICR_LO) & (1 << 12));
+    }
+}
