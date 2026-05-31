@@ -178,14 +178,21 @@ static int load_shared_library(const char *soname, vmm_context_t *ctx) {
         if (phdrs[i].type == PT_LOAD) {
             uint64_t start = base_addr + phdrs[i].vaddr;
             uint64_t end = start + phdrs[i].memsz;
+            uint64_t final_flags = VMM_USER;
+            if (phdrs[i].flags & PF_W) final_flags |= VMM_WRITABLE;
+            if (!(phdrs[i].flags & PF_X)) final_flags |= VMM_NX;
             for (uint64_t a = start & ~0xFFFULL; a < ((end + 4095) & ~0xFFFULL); a += 4096) {
                 if (get_vmm_phys(ctx, a) == 0) {
-                    map_vmm(ctx, a, (uint64_t)pmalloc(), VMM_USER | VMM_WRITABLE);
+                    map_vmm(ctx, a, (uint64_t)pmalloc(), VMM_USER | VMM_WRITABLE | VMM_NX);
                     memset_vmm(ctx, a, 0, 4096);
                 }
             }
             if (phdrs[i].filesz > 0)
                 write_vmm(ctx, start, data + phdrs[i].offset, phdrs[i].filesz);
+            for (uint64_t a = start & ~0xFFFULL; a < ((end + 4095) & ~0xFFFULL); a += 4096) {
+                uint64_t phys = get_vmm_phys(ctx, a);
+                if (phys) map_vmm(ctx, a, phys, final_flags);
+            }
         } else if (phdrs[i].type == PT_DYNAMIC) {
             so->dynamic = (elf64_dyn_t *)(base_addr + phdrs[i].vaddr);
         }
@@ -298,6 +305,9 @@ static int load_elf_segments(vmm_context_t *ctx, uint8_t *data,
         if (ph->type == PT_LOAD) {
             uint64_t seg_start = base_addr + ph->vaddr;
             uint64_t seg_end   = seg_start + ph->memsz;
+            uint64_t final_flags = VMM_USER;
+            if (ph->flags & PF_W) final_flags |= VMM_WRITABLE;
+            if (!(ph->flags & PF_X)) final_flags |= VMM_NX;
 
             uint64_t page_start = seg_start & ~0xFFFULL;
             uint64_t page_end   = (seg_end + 0xFFFULL) & ~0xFFFULL;
@@ -305,7 +315,7 @@ static int load_elf_segments(vmm_context_t *ctx, uint8_t *data,
             for (uint64_t a = page_start; a < page_end; a += 0x1000) {
                 if (get_vmm_phys(ctx, a) == 0) {
                     void *page = pmalloc();
-                    map_vmm(ctx, a, (uint64_t)page, VMM_USER | VMM_WRITABLE);
+                    map_vmm(ctx, a, (uint64_t)page, VMM_USER | VMM_WRITABLE | VMM_NX);
                     memset_vmm(ctx, a, 0, 0x1000);
                 }
             }
@@ -325,6 +335,11 @@ static int load_elf_segments(vmm_context_t *ctx, uint8_t *data,
                 for (uint64_t i = 0; i < bss_size; i++) {
                     write_vmm(ctx, bss_start + i, &zero, 1);
                 }
+            }
+
+            for (uint64_t a = page_start; a < page_end; a += 0x1000) {
+                uint64_t phys = get_vmm_phys(ctx, a);
+                if (phys) map_vmm(ctx, a, phys, final_flags);
             }
 
         } else if (ph->type == PT_DYNAMIC && dynamic_out) {

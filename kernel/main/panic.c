@@ -7,7 +7,7 @@
 #include <main/scheduler.h>
 #include <mm/vmm.h>
 
-void panic(const char *reason) {
+__attribute__((noreturn)) void panic(const char *reason) {
     cli();
     uint64_t rip = (uint64_t)__builtin_return_address(0);
     uint64_t rsp;
@@ -19,7 +19,7 @@ void panic(const char *reason) {
     halt();
 }
 
-void exception_panic(uint64_t vector, uint64_t error_code, uint64_t rip, uint64_t rsp, uint64_t cs) {
+__attribute__((noreturn)) void exception_panic(uint64_t vector, uint64_t rip, uint64_t rsp, uint64_t cs) {
     const char *reason = "";
     switch (vector) {
         case 0: reason = "a diving by 0 instruction occurred"; break;

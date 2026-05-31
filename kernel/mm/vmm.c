@@ -3,8 +3,11 @@
 #include <mm/mm.h>
 #include <main/string.h>
 #include <main/limine_req.h>
-#include <io/terminal.h>
 #include <main/spinlock.h>
+#include <main/machine_info.h>
+#include <main/msr.h>
+#include <main/panic.h>
+#include <io/terminal.h>
 
 vmm_context_t kernel_context;
 static uint64_t vmalloc_cursor = 0xffffc00000000000;
@@ -35,9 +38,6 @@ uint64_t virt_to_phys(void* virt) {
     return addr - hhdm_req.response->offset;
 }
 
-// Helper: Walk the table and return the entry for a virtual address.
-// When allocating, 'flags' are OR'd into existing intermediate entries so that
-// e.g. VMM_USER propagates through PML4E -> PDPTE -> PDE for user-mode pages.
 static uint64_t* get_vmm_next_level(uint64_t* current_level, uint64_t index, bool allocate, uint64_t flags) {
     if (!current_level) {
         return NULL;
@@ -62,9 +62,6 @@ static uint64_t* get_vmm_next_level(uint64_t* current_level, uint64_t index, boo
     return next_level_virt;
 }
 
-// Make an existing page mapping accessible from user mode (Ring 3).
-// Walks the page table and ORs VMM_USER into every level (PML4E, PDPTE, PDE, PTE).
-// Correctly handles 2MB and 1GB large pages (PS bit = bit 7).
 void set_vmm_user(vmm_context_t* ctx, uint64_t virt) {
     uint64_t pml4_idx = (virt >> 39) & 0x1FF;
     uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
@@ -312,12 +309,12 @@ vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
                     }
 
                     // Copy the 4KB data from the parent's physical page to the new one
-                    uint64_t old_phys = entry & ~0xFFFULL;
+                    uint64_t old_phys = entry & 0x000ffffffffff000ULL;
                     memcpy(phys_to_virt((uint64_t)new_phys), phys_to_virt(old_phys), PAGE_SIZE);
 
                     // Map it in the child context exactly identically
                     // vmm_map will automatically allocate the required intermediate tables
-                    uint64_t flags = entry & 0xFFF; // Extract lower 12 bits out of the entry
+                    uint64_t flags = entry & (0xFFFULL | VMM_NX);
                     map_vmm(child, virt, (uint64_t)new_phys, flags & ~VMM_PRESENT);
                 }
             }
@@ -325,16 +322,6 @@ vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
     }
 
     return child;
-}
-
-void init_vmm(void) {
-    // Read the current CR3 (Limine's page tables)
-    uint64_t current_cr3;
-    asm volatile("mov %%cr3, %0" : "=r"(current_cr3));
-    
-    // Use Limine's existing page tables as kernel_context
-    kernel_context.pml4 = (uint64_t*)phys_to_virt(current_cr3);
-    printf("vmm: initialized vmm\n");
 }
 
 void* vmalloc_ex(vmm_context_t* ctx, size_t size, uint64_t flags) {
@@ -390,7 +377,7 @@ void* vmap_mmio(uint64_t phys, size_t num_pages) {
     uint64_t curr_phys = phys & ~0xFFFULL; // Align to page
 
     for (uint64_t i = 0; i < num_pages; i++) {
-        map_vmm(&kernel_context, curr_addr, curr_phys, VMM_PRESENT | VMM_WRITABLE | VMM_PWT | VMM_PCD);
+        map_vmm(&kernel_context, curr_addr, curr_phys, VMM_PRESENT | VMM_WRITABLE | VMM_PWT | VMM_PCD | VMM_NX);
         curr_addr += PAGE_SIZE;
         curr_phys += PAGE_SIZE;
     }
@@ -399,11 +386,11 @@ void* vmap_mmio(uint64_t phys, size_t num_pages) {
 }
 
 void* vmalloc_user_ex(vmm_context_t* ctx, size_t size) {
-    return vmalloc_ex(ctx, size, VMM_WRITABLE | VMM_USER);
+    return vmalloc_ex(ctx, size, VMM_WRITABLE | VMM_USER | VMM_NX);
 }
 
 void* vmalloc(size_t size) {
-    return vmalloc_ex(&kernel_context, size, VMM_WRITABLE);
+    return vmalloc_ex(&kernel_context, size, VMM_WRITABLE | VMM_NX);
 }
 
 void* vmalloc_user(size_t size) {
@@ -449,4 +436,20 @@ void vfree(void* ptr) {
             pfree((void*)phys);
         }
     }
+}
+
+void init_vmm(void) {
+    // Check if we have the NX bit (mandatory for our OS)
+    if (!cpu_has_feature(CPU_FEATURE_NX)) panic("cpu doesn't support the nx bit");
+
+    // Enable the NX bit
+    uint64_t efer = read_msr(MSR_EFER);
+    write_msr(MSR_EFER, efer | MSR_EFER_NXE);
+
+    uint64_t current_cr3;
+    asm volatile("mov %%cr3, %0" : "=r"(current_cr3));
+    
+    // Use Limine's existing page tables as kernel_context
+    kernel_context.pml4 = (uint64_t*)phys_to_virt(current_cr3);
+    printf("vmm: initialized vmm\n");
 }

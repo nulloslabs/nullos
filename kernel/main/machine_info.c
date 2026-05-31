@@ -127,12 +127,16 @@ uint32_t get_cpu_freq(void) {
 }
 
 bool cpu_has_feature(cpu_feature_t feature) {
-    static uint32_t ecx1 = 0, edx1 = 0, ebx7 = 0;
+    static uint32_t ecx1 = 0, edx1 = 0, ebx7 = 0, edx_ext1 = 0;
     static bool initialized = false;
     if (!initialized) {
         uint32_t eax, ebx, ecx, edx;
         cpuid(1, 0, &eax, &ebx, &ecx1, &edx1);
         cpuid(7, 0, &eax, &ebx7, &ecx, &edx);
+        cpuid(0x80000000, 0, &eax, &ebx, &ecx, &edx);
+        if (eax >= 0x80000001) {
+            cpuid(0x80000001, 0, &eax, &ebx, &ecx, &edx_ext1);
+        }
         initialized = true;
     }
     switch (feature) {
@@ -149,6 +153,7 @@ bool cpu_has_feature(cpu_feature_t feature) {
         case CPU_FEATURE_POPCNT: return (ecx1 >> 23) & 1;
         case CPU_FEATURE_AES:    return (ecx1 >> 25) & 1;
         case CPU_FEATURE_AVX2:   return (ebx7 >> 5) & 1;
+        case CPU_FEATURE_NX:     return (edx_ext1 >> 20) & 1;
         default: return false;
     }
 }

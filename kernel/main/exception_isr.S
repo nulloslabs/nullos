@@ -9,7 +9,7 @@
 
 /*
 Table of all CPU faults:
-  0: Divide by 0 | Does not push an error code
+  0: Divide error | Does not push an error code
   1: Debug | Does not push an error code
   2: Non-Maskable Interrupt | Does not push an error code
   3: Breakpoint | Does not push an error code
@@ -105,9 +105,8 @@ isrhdr:
     mov ds, ax
     mov es, ax
 
-    // exception_panic(vector, error_code, rip, rsp, cs)
+    // exception_panic(vector, rip, rsp, cs)
     mov rdi, [rsp + 80]         // vector number
-    mov rsi, [rsp + 80 + 8]     // error code
     mov rdx, [rsp + 80 + 16]    // rip
     mov rcx, [rsp + 80 + 40]    // rsp
     mov r8,  [rsp + 80 + 24]    // cs
@@ -115,7 +114,7 @@ isrhdr:
     call exception_panic
 
     // Swap GS back if returning to user space
-    mov rax, [rsp + 80 + 24]    // CS
+    mov rax, [rsp + 80 + 24]    // cs
     test al, 3
     jz .no_swap_exit
     swapgs

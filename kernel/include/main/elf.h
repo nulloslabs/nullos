@@ -18,6 +18,11 @@
 #define PT_DYNAMIC 2
 #define PT_INTERP 3
 
+// Program header flags
+#define PF_X 1
+#define PF_W 2
+#define PF_R 4
+
 // Dynamic tags
 #define DT_NULL 0
 #define DT_NEEDED 1

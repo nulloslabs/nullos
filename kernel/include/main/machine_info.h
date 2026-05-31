@@ -17,6 +17,7 @@ typedef enum {
     CPU_FEATURE_X2APIC,
     CPU_FEATURE_POPCNT,
     CPU_FEATURE_AES,
+    CPU_FEATURE_NX,
 } cpu_feature_t;
 
 #define CPUID_VENDOR_INTEL "GenuineIntel"

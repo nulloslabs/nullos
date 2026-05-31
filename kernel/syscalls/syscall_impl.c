@@ -504,6 +504,10 @@ void sys_mmap(syscall_frame_t *frame) {
         frame->rax = (uint64_t)-EINVAL;
         return;
     }
+    if ((prot & 2) && (prot & 4)) {
+        frame->rax = (uint64_t)-EACCES;
+        return;
+    }
 
     uint64_t num_pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
     uint64_t vmm_flags = VMM_USER;
@@ -526,6 +530,10 @@ void sys_mprotect(syscall_frame_t *frame) {
 
     if (length == 0) {
         frame->rax = 0;
+        return;
+    }
+    if ((prot & 2) && (prot & 4)) {
+        frame->rax = (uint64_t)-EACCES;
         return;
     }
 
@@ -584,7 +592,7 @@ void sys_brk(syscall_frame_t *frame) {
         for (uint64_t a = old_brk; a < new_brk; a += 4096) {
             if (get_vmm_phys(current_task_ptr->ctx, a) == 0) {
                 map_vmm(current_task_ptr->ctx, a, (uint64_t)pmalloc(),
-                        VMM_USER | VMM_WRITABLE);
+                        VMM_USER | VMM_WRITABLE | VMM_NX);
                 memset_vmm(current_task_ptr->ctx, a, 0, 4096);
             }
         }
