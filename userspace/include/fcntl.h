@@ -2,6 +2,10 @@
 
 #include <sys/types.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define O_RDONLY    0x0000
 #define O_WRONLY    0x0001
 #define O_RDWR      0x0002
@@ -33,3 +37,7 @@ int open(const char *path, int flags, ...);
 int openat(int dirfd, const char *path, int flags, ...);
 int creat(const char *path, mode_t mode);
 int fcntl(int fd, int cmd, ...);
+
+#ifdef __cplusplus
+}
+#endif

@@ -2,6 +2,10 @@
 
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define SIGHUP 1
 #define SIGINT 2
 #define SIGILL 4
@@ -14,3 +18,7 @@
 #define SIGTSTP 20
 
 int kill(pid_t pid, int sig);
+
+#ifdef __cplusplus
+}
+#endif

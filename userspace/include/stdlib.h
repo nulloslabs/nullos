@@ -1,5 +1,11 @@
 #pragma once
 
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Defines
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
@@ -29,4 +35,7 @@ long atol(const char *s);
 long long atoll(const char *s);
 double atof(const char *s);
 
+#ifdef __cplusplus
+}
+#endif
 

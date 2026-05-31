@@ -2,6 +2,10 @@
 
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void *memcpy(void *dest, const void *src, size_t n);
 void *memmove(void *dest, const void *src, size_t n);
 void *memset(void *s, int c, size_t n);
@@ -20,3 +24,7 @@ char* strtok(char* str, const char* delim);
 char* strchr(const char* s, int c);
 char* strrchr(const char* s, int c);
 char *strerror(int errnum);
+
+#ifdef __cplusplus
+}
+#endif

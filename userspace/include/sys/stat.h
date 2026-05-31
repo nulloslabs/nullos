@@ -3,6 +3,10 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct stat {
     dev_t st_dev;
     ino_t st_ino;
@@ -25,3 +29,7 @@ int chmod(const char *path, mode_t mode);
 int fchmod(int fd, mode_t mode);
 int fchmodat(int dirfd, const char *path, mode_t mode, int flags);
 int mkdir(const char *path, mode_t mode);
+
+#ifdef __cplusplus
+}
+#endif

@@ -1,5 +1,9 @@
 #pragma once
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define MS_FORCE 0x01
 #define MS_DETACH 0x02
 #define MS_EXPIRE 0x04
@@ -12,3 +16,7 @@
 
 int mount(const char *source, const char *target, const char *filesystemtype, unsigned long mountflags, const void *data);
 int umount(const char *target, int flags);
+
+#ifdef __cplusplus
+}
+#endif

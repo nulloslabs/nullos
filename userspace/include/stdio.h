@@ -3,6 +3,10 @@
 #include <stddef.h>
 #include <stdarg.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define EOF (-1)
 
 typedef struct {
@@ -42,3 +46,7 @@ int vsprintf(char *str, const char *fmt, va_list args);
 int sprintf(char *str, const char *fmt, ...);
 
 void perror(const char *s);
+
+#ifdef __cplusplus
+}
+#endif

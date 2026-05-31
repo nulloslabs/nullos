@@ -1,7 +1,7 @@
-#include <freestanding/stddef.h>
-#include <freestanding/ctype.h>
-#include <main/strings.h>
-#include <main/string.h>
+#include <stddef.h>
+#include <ctype.h>
+#include <strings.h>
+#include <string.h>
 
 char *index(const char *s, int c) {
     return strchr(s, c);

@@ -14,7 +14,12 @@ typedef int ptrdiff_t;
 #error "Unsupported architecture for stddef.h."
 #endif
 typedef int pid_t;
+
+#ifndef _WCHAR_T
+#define _WCHAR_T
 typedef unsigned int wchar_t;
+#endif
+
 typedef unsigned int wint_t;
 
 #define NULL ((void*)0)

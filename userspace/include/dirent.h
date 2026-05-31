@@ -2,6 +2,10 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct dirent {
     uint64_t d_ino;
     int64_t d_off;
@@ -16,3 +20,7 @@ struct dirent {
 #define DT_LNK 10
 
 int getdents(int fd, struct dirent *buf, int count);
+
+#ifdef __cplusplus
+}
+#endif

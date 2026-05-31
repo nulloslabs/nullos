@@ -1,5 +1,9 @@
 #pragma once
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define TCGETS 0x5401
 #define TCSETS 0x5402
 #define TCSETSW 0x5403
@@ -15,3 +19,7 @@
 #define TIOCSPTLCK 0x40045431
 
 int ioctl(int fd, unsigned long op, ...);
+
+#ifdef __cplusplus
+}
+#endif
