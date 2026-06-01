@@ -1,36 +1,36 @@
 #include <setjmp.h>
 
 __attribute__((naked)) int setjmp(jmp_buf env) {
-    __asm__ volatile (
-        "mov [rdi], rbx\n\t"
-        "mov [rdi + 8], rbp\n\t"
-        "mov [rdi + 16], r12\n\t"
-        "mov [rdi + 24], r13\n\t"
-        "mov [rdi + 32], r14\n\t"
-        "mov [rdi + 40], r15\n\t"
-        "lea rax, [rsp + 8]\n\t"
-        "mov [rdi + 48], rax\n\t"
-        "mov rax, [rsp]\n\t"
-        "mov [rdi + 56], rax\n\t"
-        "xor rax, rax\n\t"
+    asm volatile (
+        "movq %rbx, (%rdi)\n\t"
+        "movq %rbp, 8(%rdi)\n\t"
+        "movq %r12, 16(%rdi)\n\t"
+        "movq %r13, 24(%rdi)\n\t"
+        "movq %r14, 32(%rdi)\n\t"
+        "movq %r15, 40(%rdi)\n\t"
+        "leaq 8(%rsp), %rax\n\t"
+        "movq %rax, 48(%rdi)\n\t"
+        "movq (%rsp), %rax\n\t"
+        "movq %rax, 56(%rdi)\n\t"
+        "xorq %rax, %rax\n\t"
         "ret"
     );
 }
 
 __attribute__((naked, noreturn)) void longjmp(jmp_buf env, int val) {
-    __asm__ volatile (
-        "mov rax, rsi\n\t"
-        "test rax, rax\n\t"
+    asm volatile (
+        "movq %rsi, %rax\n\t"
+        "testq %rax, %rax\n\t"
         "jnz 1f\n\t"
-        "mov rax, 1\n\t"
+        "movq $1, %rax\n\t"
         "1:\n\t"
-        "mov rbx, [rdi]\n\t"
-        "mov rbp, [rdi + 8]\n\t"
-        "mov r12, [rdi + 16]\n\t"
-        "mov r13, [rdi + 24]\n\t"
-        "mov r14, [rdi + 32]\n\t"
-        "mov r15, [rdi + 40]\n\t"
-        "mov rsp, [rdi + 48]\n\t"
-        "jmp [rdi + 56]"
+        "movq (%rdi), %rbx\n\t"
+        "movq 8(%rdi), %rbp\n\t"
+        "movq 16(%rdi), %r12\n\t"
+        "movq 24(%rdi), %r13\n\t"
+        "movq 32(%rdi), %r14\n\t"
+        "movq 40(%rdi), %r15\n\t"
+        "movq 48(%rdi), %rsp\n\t"
+        "jmp *56(%rdi)"
     );
 }

@@ -16,6 +16,7 @@
 cpu_t cpus[MAX_CPUS];
 int cpu_count = 0;
 volatile int ap_ready_count = 0;
+cpu_index_map_entry_t cpu_index_map[CPU_INDEX_MAP_SIZE];
 
 // Called by Limine on each AP
 static void ap_entry(struct limine_mp_info *info) {
@@ -28,7 +29,7 @@ static void ap_entry(struct limine_mp_info *info) {
     init_gdt_for_cpu(idx);
     load_idt_for_cpu();
 
-    void *stack = vmalloc(65536);
+    void *stack = vmalloc(32768);
     cpus[idx].kernel_stack = (void*)((uint64_t)stack + 32768);
     tss_set_kernel_stack_for_cpu(idx, cpus[idx].kernel_stack);
 
@@ -44,29 +45,59 @@ static void ap_entry(struct limine_mp_info *info) {
     idle();
 }
 
-cpu_t *get_cpu(void) {
-    uint32_t id = get_apic_id();
-    for (int i = 0; i < cpu_count; i++) {
-        if (cpus[i].lapic_id == id) return &cpus[i];
+uint32_t cpu_index_hash(uint32_t lapic_id) {
+    return (lapic_id * 2654435761u) % CPU_INDEX_MAP_SIZE;
+}
+
+void clear_cpu_index_map(void) {
+    for (int i = 0; i < CPU_INDEX_MAP_SIZE; i++) {
+        cpu_index_map[i].used = false;
     }
-    return &cpus[0]; // Fallback
+}
+
+void map_cpu_index(uint32_t lapic_id, int cpu_index) {
+    uint32_t slot = cpu_index_hash(lapic_id);
+
+    for (int i = 0; i < CPU_INDEX_MAP_SIZE; i++) {
+        cpu_index_map_entry_t *entry = &cpu_index_map[slot];
+        if (!entry->used || entry->lapic_id == lapic_id) {
+            entry->lapic_id = lapic_id;
+            entry->cpu_index = cpu_index;
+            entry->used = true;
+            return;
+        }
+        slot = (slot + 1) % CPU_INDEX_MAP_SIZE;
+    }
 }
 
 int get_cpu_index(void) {
     uint32_t id = get_apic_id();
-    for (int i = 0; i < cpu_count; i++) {
-        if (cpus[i].lapic_id == id) return i;
+
+    uint32_t slot = cpu_index_hash(id);
+    for (int i = 0; i < CPU_INDEX_MAP_SIZE; i++) {
+        cpu_index_map_entry_t *entry = &cpu_index_map[slot];
+        if (!entry->used) break;
+        if (entry->lapic_id == id) return entry->cpu_index;
+        slot = (slot + 1) % CPU_INDEX_MAP_SIZE;
     }
+
     return 0;
 }
 
+cpu_t *get_cpu(void) {
+    return &cpus[get_cpu_index()];
+}
+
 void init_mp(void) {
+    clear_cpu_index_map();
+
     if (current_apic_mode == APIC_NONE) {
         // No APIC, single CPU mode
         cpu_count = 1;
         cpus[0].lapic_id = 0;
         cpus[0].current_task = 0;
         cpus[0].active = 1;
+        map_cpu_index(0, 0);
         printf("mp: no apic, running single cpu\n");
         return;
     }
@@ -76,6 +107,7 @@ void init_mp(void) {
         cpus[0].lapic_id = get_apic_id();
         cpus[0].current_task = 0;
         cpus[0].active = 1;
+        map_cpu_index(cpus[0].lapic_id, 0);
         return;
     }
 
@@ -90,6 +122,7 @@ void init_mp(void) {
         cpus[i].lapic_id = mp->cpus[i]->lapic_id;
         cpus[i].current_task = -1;
         cpus[i].active = 0;
+        map_cpu_index(cpus[i].lapic_id, i);
     }
 
     // Mark BSP as active

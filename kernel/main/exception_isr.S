@@ -107,9 +107,9 @@ isrhdr:
 
     // exception_panic(vector, rip, rsp, cs)
     mov rdi, [rsp + 80]         // vector number
-    mov rdx, [rsp + 80 + 16]    // rip
-    mov rcx, [rsp + 80 + 40]    // rsp
-    mov r8,  [rsp + 80 + 24]    // cs
+    mov rsi, [rsp + 80 + 16]    // rip
+    mov rdx, [rsp + 80 + 40]    // rsp
+    mov rcx, [rsp + 80 + 24]    // cs
 
     call exception_panic
 
