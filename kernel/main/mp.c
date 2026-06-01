@@ -35,7 +35,7 @@ static void ap_entry(struct limine_mp_info *info) {
     init_sse();
     init_syscalls();
     init_apic();
-    init_apic_timer(100);
+    init_apic_timer(250);
 
     cpus[idx].active = 1;
     __sync_fetch_and_add(&ap_ready_count, 1);
