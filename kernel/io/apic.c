@@ -7,20 +7,10 @@
 #include <main/machine_info.h>
 #include <io/ioapic.h>
 #include <main/madt.h>
+#include <main/msr.h>
 
 enum apic_mode current_apic_mode = APIC_NONE;
 volatile uint32_t *lapic_base = NULL;
-
-// MSR helpers
-static inline uint64_t rdmsr(uint32_t msr) {
-    uint32_t lo, hi;
-    asm volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
-    return ((uint64_t)hi << 32) | lo;
-}
-
-static inline void wrmsr(uint32_t msr, uint64_t val) {
-    asm volatile("wrmsr" :: "c"(msr), "a"((uint32_t)val), "d"((uint32_t)(val >> 32)));
-}
 
 // xAPIC MMIO helpers
 static uint32_t lapic_read(uint32_t reg) {
@@ -47,10 +37,10 @@ static void init_xapic(uint64_t base_phys) {
     lapic_base = (volatile uint32_t *)phys_to_virt(base_phys);
 
     // Enable LAPIC via IA32_APIC_BASE MSR
-    uint64_t msr = rdmsr(MSR_APIC_BASE);
+    uint64_t msr = read_msr(MSR_APIC_BASE);
     msr |= MSR_APIC_BASE_EN;
     msr &= ~MSR_APIC_BASE_X2EN; // Make sure x2APIC bit is clear
-    wrmsr(MSR_APIC_BASE, msr);
+    write_msr(MSR_APIC_BASE, msr);
 
     // Set Spurious Interrupt Vector Register: enable + vector 0xFF
     lapic_write(LAPIC_SVR, LAPIC_SVR_ENABLE | 0xFF);
@@ -62,12 +52,12 @@ static void init_xapic(uint64_t base_phys) {
 
 static void init_x2apic(void) {
     // Enable x2APIC via IA32_APIC_BASE MSR
-    uint64_t msr = rdmsr(MSR_APIC_BASE);
+    uint64_t msr = read_msr(MSR_APIC_BASE);
     msr |= MSR_APIC_BASE_EN | MSR_APIC_BASE_X2EN;
-    wrmsr(MSR_APIC_BASE, msr);
+    write_msr(MSR_APIC_BASE, msr);
 
     // Set SVR: enable + vector 0xFF
-    wrmsr(X2APIC_MSR_SVR, LAPIC_SVR_ENABLE | 0xFF);
+    write_msr(X2APIC_MSR_SVR, LAPIC_SVR_ENABLE | 0xFF);
     printf("apic: initialized x2apic\n");
 }
 
@@ -75,7 +65,7 @@ void init_apic(void) {
     if (current_apic_mode == APIC_X2APIC) {
         init_x2apic();
     } else if (current_apic_mode == APIC_XAPIC) {
-        uint64_t msr = rdmsr(MSR_APIC_BASE);
+        uint64_t msr = read_msr(MSR_APIC_BASE);
         uint64_t base_phys = msr & 0xFFFFF000ULL;
         init_xapic(base_phys);
     } else {
@@ -97,7 +87,7 @@ void init_apic(void) {
 // --- EOI ---
 void eoi_apic(void) {
     if (current_apic_mode == APIC_X2APIC) {
-        wrmsr(X2APIC_MSR_EOI, 0);
+        write_msr(X2APIC_MSR_EOI, 0);
     } else if (current_apic_mode == APIC_XAPIC) {
         lapic_write(LAPIC_EOI, 0);
     } else {
@@ -108,7 +98,7 @@ void eoi_apic(void) {
 // --- APIC ID ---
 uint32_t get_apic_id(void) {
     if (current_apic_mode == APIC_X2APIC) {
-        return (uint32_t)rdmsr(X2APIC_MSR_ID);
+        return (uint32_t)read_msr(X2APIC_MSR_ID);
     } else if (current_apic_mode == APIC_XAPIC) {
         return lapic_read(LAPIC_ID) >> 24;
     }
@@ -121,7 +111,7 @@ void init_apic_timer(uint32_t frequency_hz) {
     uint32_t divide = 0x3; // divide by 16
 
     if (current_apic_mode == APIC_X2APIC) {
-        wrmsr(X2APIC_MSR_TIMER_DCR, divide);
+        write_msr(X2APIC_MSR_TIMER_DCR, divide);
 
         // Calibrate: use a short busy-wait with PIT channel 2
         // Set up PIT channel 2 for ~10ms one-shot
@@ -137,21 +127,21 @@ void init_apic_timer(uint32_t frequency_hz) {
         outb(0x61, tmp | 1);
 
         // Start LAPIC timer with max initial count
-        wrmsr(X2APIC_MSR_LVT_TIMER, LAPIC_TIMER_MASKED | 32);
-        wrmsr(X2APIC_MSR_TIMER_ICR, 0xFFFFFFFF);
+        write_msr(X2APIC_MSR_LVT_TIMER, LAPIC_TIMER_MASKED | 32);
+        write_msr(X2APIC_MSR_TIMER_ICR, 0xFFFFFFFF);
 
         // Wait for PIT to expire
         while (!(inb(0x61) & 0x20));
 
         // Read how many ticks elapsed
-        uint32_t elapsed = 0xFFFFFFFF - (uint32_t)rdmsr(X2APIC_MSR_TIMER_CCR);
+        uint32_t elapsed = 0xFFFFFFFF - (uint32_t)read_msr(X2APIC_MSR_TIMER_CCR);
         // Scale to desired frequency
         uint32_t ticks_per_interval = (elapsed * 100) / (1000 / (1000 / frequency_hz));
         if (ticks_per_interval == 0) ticks_per_interval = elapsed * 100 / 10; // fallback for 100 Hz
 
         // Set periodic mode on vector 32
-        wrmsr(X2APIC_MSR_LVT_TIMER, LAPIC_TIMER_PERIODIC | 32);
-        wrmsr(X2APIC_MSR_TIMER_ICR, ticks_per_interval);
+        write_msr(X2APIC_MSR_LVT_TIMER, LAPIC_TIMER_PERIODIC | 32);
+        write_msr(X2APIC_MSR_TIMER_ICR, ticks_per_interval);
     } else if (current_apic_mode == APIC_XAPIC) {
         lapic_write(LAPIC_TIMER_DCR, divide);
 
@@ -185,7 +175,7 @@ void send_apic_ipi(uint32_t target_apic_id, uint32_t vector) {
     if (current_apic_mode == APIC_X2APIC) {
         // x2APIC: single 64-bit write to ICR MSR
         uint64_t icr = ((uint64_t)target_apic_id << 32) | vector;
-        wrmsr(X2APIC_MSR_ICR, icr);
+        write_msr(X2APIC_MSR_ICR, icr);
     } else if (current_apic_mode == APIC_XAPIC) {
         // xAPIC: write destination to ICR_HI, then command to ICR_LO
         lapic_write(LAPIC_ICR_HI, target_apic_id << 24);
@@ -200,7 +190,7 @@ void send_init_apic(uint32_t target_apic_id) {
 
     if (current_apic_mode == APIC_X2APIC) {
         uint64_t icr = ((uint64_t)target_apic_id << 32) | command;
-        wrmsr(X2APIC_MSR_ICR, icr);
+        write_msr(X2APIC_MSR_ICR, icr);
     } else if (current_apic_mode == APIC_XAPIC) {
         lapic_write(LAPIC_ICR_HI, target_apic_id << 24);
         lapic_write(LAPIC_ICR_LO, command);

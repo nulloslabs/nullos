@@ -20,5 +20,9 @@
 #define MSR_EFER_FFXSR (1ULL << 14)
 #define MSR_EFER_TCE (1ULL << 15)
 
+#define MSR_APIC_BASE       0x1B
+#define MSR_APIC_BASE_EN    (1 << 11)
+#define MSR_APIC_BASE_X2EN  (1 << 10)
+
 uint64_t read_msr(uint32_t msr);
 void write_msr(uint32_t msr, uint64_t val);

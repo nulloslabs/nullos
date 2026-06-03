@@ -439,12 +439,16 @@ void vfree(void* ptr) {
 }
 
 void init_vmm(void) {
-    // Check if we have the NX bit (mandatory for our OS)
-    if (!cpu_has_feature(CPU_FEATURE_NX)) panic("cpu doesn't support the nx bit");
+    // Check if we have the NX/XD bit (mandatory for our OS)
+    if (strcmp(get_cpu_vendor(), CPUID_VENDOR_INTEL) == 0) {
+        if (!cpu_has_feature(CPU_FEATURE_XD)) panic("cpu doesn't support the xd bit");
+    } else {
+        if (!cpu_has_feature(CPU_FEATURE_NX)) panic("cpu doesn't support the nx bit");
+    }
 
-    // Enable the NX bit
+    // Enable the NX/XD bit
     uint64_t efer = read_msr(MSR_EFER);
-    write_msr(MSR_EFER, efer | MSR_EFER_NXE);
+    write_msr(MSR_EFER, efer | MSR_EFER_NXE); // It's also called NXE on Intel...what the actual fuck?
 
     uint64_t current_cr3;
     asm volatile("mov %%cr3, %0" : "=r"(current_cr3));

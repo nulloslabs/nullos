@@ -3,27 +3,6 @@
 #include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
 
-// APIC modes detected via CPUID
-enum apic_mode {
-    APIC_NONE = 0, // No APIC, use 8259 PIC
-    APIC_XAPIC, // xAPIC (MMIO-based)
-    APIC_X2APIC // x2APIC (MSR-based)
-};
-
-extern enum apic_mode current_apic_mode;
-extern volatile uint32_t *lapic_base;
-
-// Detection and initialization
-enum apic_mode detect_apic(void);
-void init_apic(void);
-
-// Common API (dispatches based on current_apic_mode)
-void eoi_apic(void);
-uint32_t get_apic_id(void);
-void init_apic_timer(uint32_t frequency_hz);
-void send_apic_ipi(uint32_t apic_id, uint32_t vector);
-void send_init_apic(uint32_t apic_id);
-
 // LAPIC register offsets (for xAPIC MMIO)
 #define LAPIC_ID 0x020
 #define LAPIC_VERSION 0x030
@@ -58,7 +37,21 @@ void send_init_apic(uint32_t apic_id);
 #define LAPIC_ICR_DELIVERY_INIT (5 << 8)
 #define LAPIC_ICR_LEVEL_ASSERT  (1 << 14)
 
-// IA32_APIC_BASE MSR
-#define MSR_APIC_BASE       0x1B
-#define MSR_APIC_BASE_EN    (1 << 11)
-#define MSR_APIC_BASE_X2EN  (1 << 10)
+// APIC modes detected via CPUID
+enum apic_mode {
+    APIC_NONE = 0, // No APIC, use 8259 PIC
+    APIC_XAPIC, // xAPIC (MMIO-based)
+    APIC_X2APIC // x2APIC (MSR-based)
+};
+
+extern enum apic_mode current_apic_mode;
+extern volatile uint32_t *lapic_base;
+
+// Common API (dispatches based on current_apic_mode)
+void eoi_apic(void);
+uint32_t get_apic_id(void);
+void init_apic_timer(uint32_t frequency_hz);
+void send_apic_ipi(uint32_t apic_id, uint32_t vector);
+void send_init_apic(uint32_t apic_id);
+enum apic_mode detect_apic(void);
+void init_apic(void);
