@@ -72,6 +72,10 @@ typedef struct {
 #define ARCH_GET_FS 0x1003
 #define ARCH_GET_GS 0x1004
 
+#define RB_REBOOT 0x00
+#define RB_POWEROFF 0x01
+#define RB_HALT 0x02
+
 static bool can_access_rootfs(const rootfs_file_t *file, int want_read, int want_write, int want_exec) {
     if (!file) return false;
     if (current_task_ptr && current_task_ptr->euid == 0) return true;
@@ -866,13 +870,13 @@ void sys_reboot(syscall_frame_t *frame) {
     if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
 
     switch (how) {
-        case 0: // Shutdown
-            poweroff();
-            __builtin_unreachable();
-        case 1: // Reboot
+        case RB_REBOOT:
             reboot();
             __builtin_unreachable();
-        case 2: // Halt
+        case RB_POWEROFF:
+            poweroff();
+            __builtin_unreachable();
+        case RB_HALT:
             halt();
             __builtin_unreachable();
         default:
