@@ -149,13 +149,11 @@ bool cpu_has_feature(cpu_feature_t feature) {
         case CPU_FEATURE_AVX:    return (ecx1 >> 28) & 1;
         case CPU_FEATURE_AVX2:   return (ebx7 >> 5) & 1;
         case CPU_FEATURE_FPU:    return (edx1 >> 0) & 1;
-        case CPU_FEATURE_XAPIC:   return (edx1 >> 9) & 1;
+        case CPU_FEATURE_XAPIC:  return (edx1 >> 9) & 1;
         case CPU_FEATURE_X2APIC: return (ecx1 >> 21) & 1;
         case CPU_FEATURE_POPCNT: return (ecx1 >> 23) & 1;
         case CPU_FEATURE_AES:    return (ecx1 >> 25) & 1;
-        case CPU_FEATURE_NX:
-        case CPU_FEATURE_XD:
-            return (edx_ext1 >> 20) & 1;
+        case CPU_FEATURE_NX:     return (edx_ext1 >> 20) & 1;
         default: return false;
     }
 }

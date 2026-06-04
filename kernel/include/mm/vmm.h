@@ -13,7 +13,6 @@
 #define VMM_PWT      (1ULL << 3)
 #define VMM_PCD      (1ULL << 4)
 #define VMM_NX       (1ULL << 63)
-#define VMM_XD       VMM_NX
 
 typedef struct {
     uint64_t* pml4; // Virtual address of the PML4 table
