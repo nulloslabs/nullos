@@ -9,6 +9,7 @@
 #include <freestanding/time.h>
 #include <freestanding/wait.h>
 #include <freestanding/termios.h>
+#include <freestanding/sys/resource.h>
 #include <main/limine_req.h>
 #include <syscalls/syscalls.h>
 #include <main/fd.h>
@@ -32,10 +33,12 @@
 #include <io/tty.h>
 #include <io/pty.h>
 #include <io/hpet.h>
+#include <io/sockets.h>
 
-static char stdin_buf[256];
+static char stdin_buf[4096];
 static int stdin_buf_len = 0;
 static int stdin_buf_pos = 0;
+static spinlock_t stdin_lock = SPINLOCK_INIT;
 
 #define MAX_MOUNTS 16
 typedef struct {
@@ -75,6 +78,14 @@ typedef struct {
 #define RB_REBOOT 0x00
 #define RB_POWEROFF 0x01
 #define RB_HALT 0x02
+
+#define SOL_SOCKET 1
+#define SO_REUSEADDR 2
+#define SO_ERROR 4
+#define SO_TYPE 3
+#define SO_BROADCAST 6
+#define SO_KEEPALIVE 9
+#define SO_LINGER 13
 
 static bool can_access_rootfs(const rootfs_file_t *file, int want_read, int want_write, int want_exec) {
     if (!file) return false;
@@ -224,32 +235,72 @@ void sys_read(syscall_frame_t *frame) {
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
 
     if (fd == 0) {
+        uint64_t irq;
+        spin_lock_irqsave(&stdin_lock, &irq);
         if (stdin_buf_pos >= stdin_buf_len) {
             stdin_buf_len = 0;
             stdin_buf_pos = 0;
+            spin_unlock_irqrestore(&stdin_lock, irq);
+
             reset_term_line_start();
-            while (stdin_buf_len < (int)sizeof(stdin_buf) - 1) {
+            while (1) {
                 current_task_ptr->state = TASK_READY;
                 sched_lock = 0;
                 char c = getc();
                 sched_lock = 1;
                 current_task_ptr->state = TASK_RUNNING;
 
+                spin_lock_irqsave(&stdin_lock, &irq);
                 if (c == '\b' || c == 127) {
-                    if (stdin_buf_len > 0) { stdin_buf_len--; puts("\b \b"); }
+                    if (stdin_buf_len > 0) {
+                        stdin_buf_len--;
+                        puts("\b \b");
+                    }
+                    spin_unlock_irqrestore(&stdin_lock, irq);
                     continue;
                 }
-                putc(c);
-                stdin_buf[stdin_buf_len++] = c;
-                if (c == '\n') break;
+
+                if (c == '\n') {
+                    putc(c);
+                    if (stdin_buf_len < (int)sizeof(stdin_buf)) {
+                        stdin_buf[stdin_buf_len++] = c;
+                    }
+                    spin_unlock_irqrestore(&stdin_lock, irq);
+                    break;
+                }
+
+                if (stdin_buf_len < (int)sizeof(stdin_buf) - 1) {
+                    putc(c);
+                    stdin_buf[stdin_buf_len++] = c;
+                }
+                
+                spin_unlock_irqrestore(&stdin_lock, irq);
             }
+            spin_lock_irqsave(&stdin_lock, &irq);
         }
 
-        uint64_t copied = 0;
-        while (copied < count && stdin_buf_pos < stdin_buf_len)
-            buf[copied++] = (uint8_t)stdin_buf[stdin_buf_pos++];
+        uint64_t avail = (uint64_t)(stdin_buf_len - stdin_buf_pos);
+        uint64_t to_copy = (count < avail) ? count : avail;
+        if (to_copy > 0) {
+            char tmp[512];
+            uint64_t total_copied = 0;
+            while (total_copied < to_copy) {
+                uint64_t chunk = to_copy - total_copied;
+                if (chunk > sizeof(tmp)) chunk = sizeof(tmp);
+                
+                memcpy(tmp, stdin_buf + stdin_buf_pos, chunk);
+                stdin_buf_pos += (int)chunk;
+                
+                spin_unlock_irqrestore(&stdin_lock, irq);
+                write_vmm(current_task_ptr->ctx, (uint64_t)buf + total_copied, tmp, chunk);
+                total_copied += chunk;
+                if (total_copied < to_copy) spin_lock_irqsave(&stdin_lock, &irq);
+            }
+        } else {
+            spin_unlock_irqrestore(&stdin_lock, irq);
+        }
 
-        frame->rax = copied;
+        frame->rax = to_copy;
         return;
     }
 
@@ -258,16 +309,41 @@ void sys_read(syscall_frame_t *frame) {
         if (!is_mounted_under(entry->path, "devfs", rel)) {
             frame->rax = (uint64_t)-ENODEV; return;
         }
-        uint64_t res = read_devfs(rel, buf, count, entry->offset);
-        if ((int64_t)res >= 0) entry->offset += res;
+        
+        uint8_t *kbuf = malloc(count);
+        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
+        uint64_t res = read_devfs(rel, kbuf, count, entry->offset);
+        if ((int64_t)res >= 0) {
+            write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, res);
+            entry->offset += res;
+        }
+        free(kbuf);
         frame->rax = res;
         return;
     }
 
     if (entry->type == FD_PTY_MASTER) {
         int idx = ptm_path_idx(entry->path);
-        int got = read_pty_master(idx, (char *)buf, (int)count);
+        uint8_t *kbuf = malloc(count);
+        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
+        int got = read_pty_master(idx, (char *)kbuf, (int)count);
+        if (got >= 0) {
+            write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, got);
+        }
+        free(kbuf);
         frame->rax = (got < 0) ? (uint64_t)-EBADF : (uint64_t)got;
+        return;
+    }
+
+    if (entry->type == FD_PIPE || entry->type == FD_SOCKET) {
+        uint8_t *kbuf = malloc(count);
+        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
+        int64_t got = read_unix_handle((unix_handle_t *)entry->handle, kbuf, count, entry->flags);
+        if (got >= 0) {
+            write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, got);
+        }
+        free(kbuf);
+        frame->rax = (uint64_t)got;
         return;
     }
 
@@ -276,7 +352,7 @@ void sys_read(syscall_frame_t *frame) {
 
     uint64_t avail = file.size - entry->offset;
     uint64_t to_read = (count < avail) ? count : avail;
-    memcpy(buf, (uint8_t *)file.data + entry->offset, to_read);
+    write_vmm(current_task_ptr->ctx, (uint64_t)buf, (uint8_t *)file.data + entry->offset, to_read);
     entry->offset += to_read;
     frame->rax = to_read;
 }
@@ -297,9 +373,7 @@ void sys_write(syscall_frame_t *frame) {
         while (processed < count) {
             uint64_t chunk = count - processed;
             if (chunk > 255) chunk = 255;
-            for (uint64_t i = 0; i < chunk; i++) {
-                read_vmm(current_task_ptr->ctx, (uint8_t*)&kbuf[i], (uint64_t)buf + processed + i, 1);
-            }
+            read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf + processed, chunk);
             kbuf[chunk] = '\0';
             puts(kbuf);
             processed += chunk;
@@ -313,16 +387,34 @@ void sys_write(syscall_frame_t *frame) {
         if (!is_mounted_under(entry->path, "devfs", rel)) {
             frame->rax = (uint64_t)-ENODEV; return;
         }
-        uint64_t res = write_devfs(rel, buf, count, entry->offset);
+        uint8_t *kbuf = malloc(count);
+        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
+        read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count);
+        uint64_t res = write_devfs(rel, kbuf, count, entry->offset);
         if ((int64_t)res >= 0) entry->offset += res;
+        free(kbuf);
         frame->rax = res;
         return;
     }
 
     if (entry->type == FD_PTY_MASTER) {
         int idx = ptm_path_idx(entry->path);
-        int w = write_pty_master(idx, (const char *)buf, (int)count);
+        uint8_t *kbuf = malloc(count);
+        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
+        read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count);
+        int w = write_pty_master(idx, (const char *)kbuf, (int)count);
+        free(kbuf);
         frame->rax = (w < 0) ? (uint64_t)-EBADF : (uint64_t)w;
+        return;
+    }
+
+    if (entry->type == FD_PIPE || entry->type == FD_SOCKET) {
+        uint8_t *kbuf = malloc(count);
+        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
+        read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count);
+        int64_t w = write_unix_handle((unix_handle_t *)entry->handle, kbuf, count, entry->flags);
+        free(kbuf);
+        frame->rax = (uint64_t)w;
         return;
     }
 
@@ -339,7 +431,7 @@ void sys_write(syscall_frame_t *frame) {
     if (!new_data) { frame->rax = (uint64_t)-ENOMEM; return; }
 
     if (file.data && file.size) memcpy(new_data, file.data, file.size);
-    memcpy((uint8_t *)new_data + entry->offset, buf, count);
+    read_vmm(current_task_ptr->ctx, (uint8_t *)new_data + entry->offset, (uint64_t)buf, count);
 
     int res = write_rootfs(entry->path, new_data, new_size,
                            file.mode ? file.mode : 0644,
@@ -472,7 +564,10 @@ void sys_lseek(syscall_frame_t *frame) {
 
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry || !entry->open) { frame->rax = -EBADF; return; }
-    if (entry->type == FD_STREAM) { frame->rax = -ESPIPE; return; }
+    if (entry->type == FD_STREAM || entry->type == FD_PIPE || entry->type == FD_SOCKET) {
+        frame->rax = -ESPIPE;
+        return;
+    }
 
     switch (whence) {
         case 0: // SEEK_SET
@@ -715,7 +810,10 @@ void sys_ioctl(syscall_frame_t *frame) {
 
     case FIONREAD: {
         // Report bytes available in stdin buffer; 0 for everything else
+        uint64_t irq;
+        spin_lock_irqsave(&stdin_lock, &irq);
         int avail = (fd == 0) ? (stdin_buf_len - stdin_buf_pos) : 0;
+        spin_unlock_irqrestore(&stdin_lock, irq);
         write_vmm(current_task_ptr->ctx, argp, &avail, sizeof(int));
         frame->rax = 0;
         return;
@@ -797,6 +895,36 @@ void sys_fcntl(syscall_frame_t *frame) {
     }
 }
 
+void sys_pipe(syscall_frame_t *frame) {
+    int *pipefd = (int *)frame->rdi;
+    unix_handle_t *read_end = NULL;
+    unix_handle_t *write_end = NULL;
+    int fds[2];
+    int r;
+
+    if (!pipefd) { frame->rax = (uint64_t)-EINVAL; return; }
+    r = create_unix_pipe(&read_end, &write_end);
+    if (r < 0) { frame->rax = (uint64_t)r; return; }
+
+    fds[0] = alloc_fd_handle(&current_task_ptr->fd_table, "pipe:r", FD_PIPE, O_RDONLY, read_end);
+    if (fds[0] < 0) {
+        release_unix_handle(read_end);
+        release_unix_handle(write_end);
+        frame->rax = (uint64_t)fds[0];
+        return;
+    }
+    fds[1] = alloc_fd_handle(&current_task_ptr->fd_table, "pipe:w", FD_PIPE, O_WRONLY, write_end);
+    if (fds[1] < 0) {
+        free_fd(&current_task_ptr->fd_table, fds[0]);
+        release_unix_handle(write_end);
+        frame->rax = (uint64_t)fds[1];
+        return;
+    }
+
+    write_vmm(current_task_ptr->ctx, (uint64_t)pipefd, fds, sizeof(fds));
+    frame->rax = 0;
+}
+
 void sys_dup(syscall_frame_t *frame) {
     int oldfd = (int)frame->rdi;
 
@@ -815,6 +943,175 @@ void sys_dup(syscall_frame_t *frame) {
         }
     }
     frame->rax = (uint64_t)-EMFILE;
+}
+
+void sys_socket(syscall_frame_t *frame) {
+    int domain = (int)frame->rdi;
+    int type = (int)frame->rsi;
+    int protocol = (int)frame->rdx;
+    unix_handle_t *h = NULL;
+    int r = create_unix_socket(domain, type, protocol, &h);
+    if (r < 0) { frame->rax = (uint64_t)r; return; }
+
+    int fd = alloc_fd_handle(&current_task_ptr->fd_table, "socket", FD_SOCKET, O_RDWR, h);
+    if (fd < 0) {
+        release_unix_handle(h);
+        frame->rax = (uint64_t)fd;
+        return;
+    }
+    frame->rax = (uint64_t)fd;
+}
+
+void sys_socketpair(syscall_frame_t *frame) {
+    int domain = (int)frame->rdi;
+    int type = (int)frame->rsi;
+    int protocol = (int)frame->rdx;
+    int *sv = (int *)frame->r10;
+    unix_handle_t *a = NULL;
+    unix_handle_t *b = NULL;
+    int fds[2];
+    int r;
+
+    if (!sv) { frame->rax = (uint64_t)-EINVAL; return; }
+    r = create_unix_socketpair(domain, type, protocol, &a, &b);
+    if (r < 0) { frame->rax = (uint64_t)r; return; }
+
+    fds[0] = alloc_fd_handle(&current_task_ptr->fd_table, "socketpair", FD_SOCKET, O_RDWR, a);
+    if (fds[0] < 0) {
+        release_unix_handle(a);
+        release_unix_handle(b);
+        frame->rax = (uint64_t)fds[0];
+        return;
+    }
+    fds[1] = alloc_fd_handle(&current_task_ptr->fd_table, "socketpair", FD_SOCKET, O_RDWR, b);
+    if (fds[1] < 0) {
+        free_fd(&current_task_ptr->fd_table, fds[0]);
+        release_unix_handle(b);
+        frame->rax = (uint64_t)fds[1];
+        return;
+    }
+
+    write_vmm(current_task_ptr->ctx, (uint64_t)sv, fds, sizeof(fds));
+    frame->rax = 0;
+}
+
+void sys_bind(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    const void *addr = (const void *)frame->rsi;
+    uint32_t addrlen = (uint32_t)frame->rdx;
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
+    frame->rax = (uint64_t)bind_unix_socket((unix_handle_t *)entry->handle, addr, addrlen);
+}
+
+void sys_listen(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    int backlog = (int)frame->rsi;
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
+    frame->rax = (uint64_t)listen_unix_socket((unix_handle_t *)entry->handle, backlog);
+}
+
+void sys_connect(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    const void *addr = (const void *)frame->rsi;
+    uint32_t addrlen = (uint32_t)frame->rdx;
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
+    frame->rax = (uint64_t)connect_unix_socket((unix_handle_t *)entry->handle, addr, addrlen);
+}
+
+void sys_accept(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    fd_entry_t *entry = get_current_fd(fd);
+    unix_handle_t *accepted = NULL;
+    int r;
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
+
+    r = accept_unix_socket((unix_handle_t *)entry->handle, &accepted);
+    if (r < 0) { frame->rax = (uint64_t)r; return; }
+    int newfd = alloc_fd_handle(&current_task_ptr->fd_table, "socket:accepted", FD_SOCKET, O_RDWR, accepted);
+    if (newfd < 0) {
+        release_unix_handle(accepted);
+        frame->rax = (uint64_t)newfd;
+        return;
+    }
+    frame->rax = (uint64_t)newfd;
+}
+
+void sys_sendto(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    const void *buf = (const void *)frame->rsi;
+    size_t len = (size_t)frame->rdx;
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
+    frame->rax = (uint64_t)write_unix_handle((unix_handle_t *)entry->handle, buf, len, entry->flags);
+}
+
+void sys_recvfrom(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    void *buf = (void *)frame->rsi;
+    size_t len = (size_t)frame->rdx;
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
+    frame->rax = (uint64_t)read_unix_handle((unix_handle_t *)entry->handle, buf, len, entry->flags);
+}
+
+void sys_shutdown(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    int how = (int)frame->rsi;
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
+    frame->rax = (uint64_t)shutdown_unix_socket((unix_handle_t *)entry->handle, how);
+}
+
+void sys_getsockopt(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    int level = (int)frame->rsi;
+    int optname = (int)frame->rdx;
+    int *optval = (int *)frame->r10;
+    uint32_t *optlen = (uint32_t *)frame->r8;
+    fd_entry_t *entry = get_current_fd(fd);
+    int val;
+
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
+    if (level != SOL_SOCKET || !optval || !optlen) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (optname == SO_ERROR) val = get_unix_socket_error((unix_handle_t *)entry->handle);
+    else if (optname == SO_TYPE) val = get_unix_socket_type((unix_handle_t *)entry->handle);
+    else { frame->rax = (uint64_t)-ENOPROTOOPT; return; }
+    write_vmm(current_task_ptr->ctx, (uint64_t)optval, &val, sizeof(int));
+    uint32_t len = sizeof(int);
+    write_vmm(current_task_ptr->ctx, (uint64_t)optlen, &len, sizeof(uint32_t));
+    frame->rax = 0;
+}
+
+void sys_setsockopt(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    int level = (int)frame->rsi;
+    int optname = (int)frame->rdx;
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
+    if (level != SOL_SOCKET) { frame->rax = (uint64_t)-ENOPROTOOPT; return; }
+    switch (optname) {
+        case SO_REUSEADDR:
+        case SO_KEEPALIVE:
+        case SO_BROADCAST:
+        case SO_LINGER:
+            frame->rax = 0;
+            return;
+        default:
+            frame->rax = (uint64_t)-ENOPROTOOPT;
+            return;
+    }
 }
 
 void sys_dup2(syscall_frame_t *frame) {
@@ -939,17 +1236,18 @@ void sys_exit(syscall_frame_t *frame) {
     exit_task(status);
 }
 
-void sys_waitpid(syscall_frame_t *frame) {
+void sys_wait4(syscall_frame_t *frame) {
     pid_t pid = (pid_t)frame->rdi;
     int *wstatus = (int *)frame->rsi;
     int options = (int)frame->rdx;
+    struct rusage *rusage = (struct rusage *)frame->r10;
 
     while (1) {
         int found_child = 0;
 
         for (int i = 0; i < MAX_TASKS; i++) {
             // Only care about children of the current task
-            if (!tasks[i].state || tasks[i].parent_pid != current_task_ptr->pid) 
+            if (!tasks[i].state || tasks[i].ppid != current_task_ptr->pid) 
                 continue;
             
             // If user asked for a specific PID, ignore others
@@ -963,6 +1261,11 @@ void sys_waitpid(syscall_frame_t *frame) {
                 if (wstatus) {
                     int status = tasks[i].exit_status << 8;
                     write_vmm(current_task_ptr->ctx, (uint64_t)wstatus, &status, sizeof(int));
+                }
+                
+                if (rusage) {
+                    struct rusage ru = {0};
+                    write_vmm(current_task_ptr->ctx, (uint64_t)rusage, &ru, sizeof(struct rusage));
                 }
                 
                 pid_t ret = tasks[i].pid;
@@ -1054,11 +1357,11 @@ void sys_kill(syscall_frame_t *frame) {
 
                     // Reparent children to init
                     for (int j = 1; j < MAX_TASKS; j++) {
-                        if (tasks[j].state != TASK_DEAD && tasks[j].parent_pid == pid) {
+                        if (tasks[j].state != TASK_DEAD && tasks[j].ppid == pid) {
                             if (tasks[j].state == TASK_ZOMBIE) {
                                 tasks[j].state = TASK_DEAD;
                             } else {
-                                tasks[j].parent_pid = 1;
+                                tasks[j].ppid = 1;
                             }
                         }
                     }
@@ -1299,7 +1602,7 @@ void sys_getegid(syscall_frame_t *frame) {
 }
 
 void sys_getppid(syscall_frame_t *frame) {
-    frame->rax = (uint64_t)-ENOSYS; // Added back stub to ensure compliance
+    frame->rax = current_task_ptr->ppid;
 }
 
 void sys_seteuid(syscall_frame_t *frame) {

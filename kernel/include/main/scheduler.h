@@ -12,7 +12,7 @@
 
 typedef struct {
     pid_t pid;
-    pid_t parent_pid;
+    pid_t ppid;
     int state;
     int priority;
     uint8_t ring;

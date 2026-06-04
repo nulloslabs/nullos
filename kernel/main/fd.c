@@ -4,20 +4,26 @@
 #include <main/errno.h>
 #include <main/scheduler.h>
 #include <io/pty.h>
+#include <io/sockets.h>
 
-int alloc_fd(fd_table_t *table, const char *path, fd_type_t type, uint32_t flags) {
+int alloc_fd_handle(fd_table_t *table, const char *path, fd_type_t type, uint32_t flags, void *handle) {
     for (int i = 0; i < FD_MAX; i++) {
         if (!table->entries[i].open) {
             table->entries[i].open   = true;
             table->entries[i].type   = type;
             table->entries[i].offset = 0;
             table->entries[i].flags  = flags;
+            table->entries[i].handle = handle;
             strncpy(table->entries[i].path, path, 255);
             table->entries[i].path[255] = '\0';
             return i;
         }
     }
     return -EMFILE;
+}
+
+int alloc_fd(fd_table_t *table, const char *path, fd_type_t type, uint32_t flags) {
+    return alloc_fd_handle(table, path, type, flags, NULL);
 }
 
 int free_fd(fd_table_t *table, int fd) {
@@ -38,10 +44,13 @@ int free_fd(fd_table_t *table, int fd) {
         int idx = pty_slave_path_idx(table->entries[fd].path);
         if (idx >= 0)
             release_pty_slave(idx);
+    } else if (table->entries[fd].type == FD_PIPE || table->entries[fd].type == FD_SOCKET) {
+        release_unix_handle((unix_handle_t *)table->entries[fd].handle);
     }
     table->entries[fd].open   = false;
     table->entries[fd].type   = FD_NONE;
     table->entries[fd].offset = 0;
+    table->entries[fd].handle = NULL;
     table->entries[fd].path[0] = '\0';
     return 0;
 }
@@ -75,6 +84,8 @@ void retain_fd_entry(fd_entry_t *entry) {
         int idx = pty_slave_path_idx(entry->path);
         if (idx >= 0)
             retain_pty_slave(idx);
+    } else if (entry->type == FD_PIPE || entry->type == FD_SOCKET) {
+        retain_unix_handle((unix_handle_t *)entry->handle);
     }
 }
 
@@ -85,6 +96,7 @@ void init_fd_table(fd_table_t *table) {
         table->entries[i].type = FD_NONE;
         table->entries[i].offset = 0;
         table->entries[i].flags = 0;
+        table->entries[i].handle = NULL;
         table->entries[i].path[0] = '\0';
     }
 

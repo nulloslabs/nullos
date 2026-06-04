@@ -14,6 +14,8 @@ typedef enum {
     FD_STREAM = 2,      // std(in/out/err) device
     FD_DEV = 3,         // char device
     FD_PTY_MASTER = 4,  // open pty master (path encodes index as "ptm:N")
+    FD_PIPE = 5,
+    FD_SOCKET = 6,
 } fd_type_t;
 
 typedef struct {
@@ -22,6 +24,7 @@ typedef struct {
     char path[256];
     uint64_t offset;   // current read/write position
     uint32_t flags;    // O_RDONLY, O_WRONLY, O_RDWR
+    void *handle;
 } fd_entry_t;
 
 typedef struct {
@@ -30,6 +33,7 @@ typedef struct {
 
 void init_fd_table(fd_table_t *table);
 int alloc_fd(fd_table_t *table, const char *path, fd_type_t type, uint32_t flags);
+int alloc_fd_handle(fd_table_t *table, const char *path, fd_type_t type, uint32_t flags, void *handle);
 int free_fd(fd_table_t *table, int fd);
 fd_entry_t *get_fd(fd_table_t *table, int fd);
 fd_entry_t *get_current_fd(int fd);

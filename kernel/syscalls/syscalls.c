@@ -22,15 +22,25 @@ void syscall_dispatch(syscall_frame_t *frame) {
         case SYS_brk: sys_brk(frame); break;
         case SYS_ioctl: sys_ioctl(frame); break;
         case SYS_fcntl: sys_fcntl(frame); break;
+        case SYS_pipe: sys_pipe(frame); break;
         case SYS_dup: sys_dup(frame); break;
         case SYS_dup2: sys_dup2(frame); break;
         case SYS_nanosleep: sys_nanosleep(frame); break;
         case SYS_getpid: sys_getpid(frame); break;
+        case SYS_socket: sys_socket(frame); break;
+        case SYS_connect: sys_connect(frame); break;
+        case SYS_accept: sys_accept(frame); break;
+        case SYS_sendto: sys_sendto(frame); break;
+        case SYS_recvfrom: sys_recvfrom(frame); break;
+        case SYS_shutdown: sys_shutdown(frame); break;
+        case SYS_bind: sys_bind(frame); break;
+        case SYS_listen: sys_listen(frame); break;
+        case SYS_socketpair: sys_socketpair(frame); break;
         case SYS_reboot: sys_reboot(frame); break;
         case SYS_fork: sys_fork(frame); break;
         case SYS_execve: sys_execve(frame); break;
         case SYS_exit: sys_exit(frame); break;
-        case SYS_waitpid: sys_waitpid(frame); break;
+        case SYS_wait4: sys_wait4(frame); break;
         case SYS_kill: sys_kill(frame); break;
         case SYS_uname: sys_uname(frame); break;
         case SYS_getdents: sys_getdents(frame); break;
@@ -55,6 +65,8 @@ void syscall_dispatch(syscall_frame_t *frame) {
         case SYS_gethostname: sys_gethostname(frame); break;
         case SYS_openat: sys_openat(frame); break;
         case SYS_fchmodat: sys_fchmodat(frame); break;
+        case SYS_getsockopt: sys_getsockopt(frame); break;
+        case SYS_setsockopt: sys_setsockopt(frame); break;
         default:
             frame->rax = (uint64_t)-ENOSYS;
             break;

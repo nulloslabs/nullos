@@ -393,6 +393,8 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
     rootfs_file_t file = read_rootfs(path);
     if (!file.data) return -ENOENT;
 
+    if (file.mode & 0x4000) return -EISDIR;
+
     uint8_t *data = (uint8_t *)file.data;
     elf64_ehdr_t *ehdr = (elf64_ehdr_t *)data;
 
@@ -493,6 +495,8 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
 
     rootfs_file_t file = read_rootfs(path);
     if (!file.data) return -ENOENT;
+
+    if (file.mode & 0x4000) return -EISDIR;
 
     uint8_t *data = (uint8_t *)file.data;
     elf64_ehdr_t *ehdr = (elf64_ehdr_t *)data;

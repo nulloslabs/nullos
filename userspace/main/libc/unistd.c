@@ -76,6 +76,10 @@ int close(int fd) {
     return (int)syscall(SYS_close, fd);
 }
 
+int pipe(int pipefd[2]) {
+    return (int)syscall(SYS_pipe, pipefd);
+}
+
 ssize_t read(int fd, void *buf, size_t count) {
     return (ssize_t)syscall(SYS_read, fd, (int64_t)buf, count);
 }
@@ -161,10 +165,6 @@ int execvp(const char *file, char *const argv[]) {
 
 pid_t fork(void) {
     return (pid_t)syscall(SYS_fork, 0, 0, 0, 0, 0, 0);
-}
-
-pid_t waitpid(pid_t pid, int *wstatus, int options) {
-    return (pid_t)syscall(SYS_waitpid, pid, wstatus, options);
 }
 
 pid_t getpid(void) {

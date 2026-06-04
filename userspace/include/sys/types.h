@@ -15,10 +15,13 @@ typedef long blkcnt_t;
 #endif
 
 typedef long time_t;
+typedef long suseconds_t;
 typedef int id_t;
 typedef int key_t;
+typedef int pid_t;
 typedef unsigned int uid_t;
 typedef unsigned int gid_t;
 typedef unsigned int mode_t;
 typedef long blksize_t;
 typedef long clock_t;
+typedef long clockid_t;

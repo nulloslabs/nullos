@@ -99,7 +99,7 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
 
             tasks[i].rsp = k_rsp;
             tasks[i].pid = (pid_t)i;
-            tasks[i].parent_pid = current_task_ptr->pid;
+            tasks[i].ppid = current_task_ptr->pid;
             tasks[i].state = TASK_READY;
             tasks[i].priority = 1;
 
@@ -121,7 +121,7 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
             tasks[i].ring = current_task_ptr->ring;
             tasks[i].ctx = child_ctx;
             strcpy(tasks[i].cwd, current_task_ptr->cwd);
-            tasks[i].parent_pid = current_task_ptr->pid;
+            tasks[i].ppid = current_task_ptr->pid;
             tasks[i].uid = current_task_ptr->uid;
             tasks[i].euid = current_task_ptr->euid;
             tasks[i].gid = current_task_ptr->gid;
@@ -207,7 +207,7 @@ void schedule(void) {
         }
     }
 
-    if (tasks[old_task].state == TASK_ZOMBIE && tasks[old_task].parent_pid == 0) {
+    if (tasks[old_task].state == TASK_ZOMBIE && tasks[old_task].ppid == 0) {
         if (tasks[old_task].stack_base) {
             free(tasks[old_task].stack_base);
             tasks[old_task].stack_base = NULL;
@@ -247,11 +247,11 @@ void exit_task(int status) {
 
     pid_t my_pid = current_task_ptr->pid;
     for (int i = 1; i < MAX_TASKS; i++) {
-        if (tasks[i].state != TASK_DEAD && tasks[i].parent_pid == my_pid) {
+        if (tasks[i].state != TASK_DEAD && tasks[i].ppid == my_pid) {
             if (tasks[i].state == TASK_ZOMBIE) {
                 tasks[i].state = TASK_DEAD;
             } else {
-                tasks[i].parent_pid = 1; // re-parent to init
+                tasks[i].ppid = 1; // re-parent to init
             }
         }
     }
