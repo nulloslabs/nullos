@@ -4,7 +4,7 @@
 #include <io/terminal.h>
 #include <io/keyboard.h>
 #include <main/string.h>
-#include <main/errno.h>
+#include <freestanding/errno.h>
 #include <main/spinlock.h>
 #include <main/limine_req.h>
 #include <main/panic.h>

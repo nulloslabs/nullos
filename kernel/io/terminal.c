@@ -20,6 +20,21 @@ static uint64_t back_buffer_pitch = 0;
 static bool back_buffer_initialized = false;
 static bool back_buffer_available = false;  // Set when MM is ready
 
+uint64_t cursor_x = 0;
+uint64_t cursor_y = 0;
+uint32_t fg_color = 0xAAAAAA;
+uint32_t bg_color = 0x000000;
+uint32_t default_color = 0xAAAAAA;
+uint64_t line_start_y = 0; // Track where current input line started
+
+static parser_state_t state = STATE_NORMAL;
+static char ansi_buffer[16];
+static int ansi_idx = 0;
+static bool is_bold = false;
+static bool cursor_visible = false;
+static bool cursor_enabled = true;
+static spinlock_t term_lock = SPINLOCK_INIT;
+
 static void flush_backbuffer(struct limine_framebuffer *fb) {
     if (!back_buffer_initialized || !back_buffer || !back_buffer_available) return;
     if (!fb || !fb->address) return;
@@ -125,7 +140,6 @@ static void put_pixel_bb(uint32_t x, uint32_t y, uint32_t color) {
 
 static void putc_bb(char c, int x, int y, uint32_t fg, uint32_t bg) {
     if (!current_font_w || !current_font_h) return;
-    if ((unsigned char)c < 0x20) return;
     if (!back_buffer_initialized || !back_buffer || !back_buffer_available) return;
 
     unsigned char *glyph = &current_font[(unsigned char)c * current_font_h];
@@ -141,21 +155,6 @@ static void putc_bb(char c, int x, int y, uint32_t fg, uint32_t bg) {
         }
     }
 }
-
-uint64_t cursor_x = 0;
-uint64_t cursor_y = 0;
-uint32_t fg_color = 0xAAAAAA;
-uint32_t bg_color = 0x000000;
-uint32_t default_color = 0xAAAAAA;
-uint64_t line_start_y = 0; // Track where current input line started
-
-static parser_state_t state = STATE_NORMAL;
-static char ansi_buffer[16];
-static int ansi_idx = 0;
-static bool is_bold = false;
-static bool cursor_visible = false;
-static bool cursor_enabled = true;
-static spinlock_t term_lock = SPINLOCK_INIT;
 
 static inline uint32_t rgb_to_hex(uint8_t r, uint8_t g, uint8_t b) {
     return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
@@ -191,6 +190,26 @@ static uint32_t ansi_to_hex(int code, bool bold) {
         }
     }
     return default_color;
+}
+
+static bool is_visible_control(unsigned char c) {
+    if (c == 0x7F) return true;
+    if (c >= 0x20) return false;
+
+    switch (c) {
+        case '\033':
+        case '\r':
+        case '\n':
+        case '\b':
+        case '\t':
+            return false;
+        default:
+            return true;
+    }
+}
+
+static char visible_control_char(unsigned char c) {
+    return (c == 0x7F) ? '?' : (char)(c + '@');
 }
 
 static void int_to_str(uint64_t value, char *buf, size_t buf_size, int base, bool uppercase) {
@@ -384,6 +403,12 @@ void reset_term_line_start(void) {
 }
 
 static void putc_unlocked(char c) {
+    if (state == STATE_NORMAL && is_visible_control((unsigned char)c)) {
+        putc_unlocked('^');
+        putc_unlocked(visible_control_char((unsigned char)c));
+        return;
+    }
+
     serial_putc(COM1, c);
     if (!current_font_w || !current_font_h) { // If there's no font don't even bother drawing.
         return;
@@ -418,6 +443,12 @@ static void putc_unlocked(char c) {
             case '\033': state = STATE_EXPECT_BRACKET; break;
             case '\r':   cursor_x = 0; break;
             case '\n':   cursor_x = 0; cursor_y += current_font_h; line_start_y = cursor_y; break;
+            case '\t': {
+                uint64_t col = cursor_x / current_font_w;
+                cursor_x = ((col + 8) & ~7ULL) * current_font_w;
+                if (cursor_x >= fb->width) { cursor_x = 0; cursor_y += current_font_h; }
+                break;
+            }
             case '\b':
                 if (cursor_x >= current_font_w) cursor_x -= current_font_w;
                 else if (cursor_y > line_start_y) { cursor_y -= current_font_h; cursor_x = fb->width - current_font_w; }
@@ -437,8 +468,6 @@ static void putc_unlocked(char c) {
                 }
                 break;
             default:
-                if ((unsigned char)c < 0x20) return;
-
                 // Draw character - use back buffer if available, otherwise direct FB
                 if (back_buffer_available) {
                     putc_bb(c, cursor_x, cursor_y, fg_color, bg_color);

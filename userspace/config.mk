@@ -1,11 +1,42 @@
-CC = gcc
-CFLAGS = -Wall -m64 -fno-stack-protector -fPIC -fno-builtin -nostdlib -nostdinc -nodefaultlibs -I./../../include/ -L../../ -L. -MMD -MP -std=gnu99 -march=x86-64 -mtune=generic
+KERNEL := $(shell uname -s)
+ARCH := $(shell uname -m)
+
+ifeq ($(KERNEL)-$(ARCH),Linux-x86_64)
+	CC = gcc
+else ifeq ($(KERNEL),Darwin)
+	CC = x86_64-elf-gcc
+else
+	CC = x86_64-linux-gnu-gcc
+endif
+
+CFLAGS = -Wall -m64 -fno-stack-protector -fPIC -fno-builtin -nostdlib -nostdinc -nodefaultlibs -I$(shell pwd | sed 's|/main.*||')/include -L../../ -L. -MMD -MP -std=gnu99 -march=x86-64 -mtune=generic
+
+# No need for if checks here...
 AS = $(CC)
 AFLAGS = $(CFLAGS) -D__ASSEMBLY__
 LD = $(CC)
 LDFLAGS = $(CFLAGS)
-AR = ar
+
+ifeq ($(KERNEL)-$(ARCH),Linux-x86_64)
+	AR = ar
+else ifeq ($(KERNEL),Darwin)
+	AR = x86_64-elf-ar
+else
+	AR = x86_64-linux-gnu-ar
+endif
+
 ARFLAGS = 
-STRIP = strip
+
+ifeq ($(KERNEL)-$(ARCH),Linux-x86_64)
+	STRIP = strip
+else ifeq ($(KERNEL),Darwin)
+	STRIP = x86_64-elf-strip
+else
+	STRIP = x86_64-linux-gnu-strip
+endif
+
 STRIPFLAGS = 
 SUBDIR = userspace
+
+undefine KERNEL
+undefine ARCH

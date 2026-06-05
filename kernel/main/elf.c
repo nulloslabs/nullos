@@ -1,7 +1,7 @@
 #include <main/elf.h>
 #include <main/rootfs.h>
 #include <main/devfs.h>
-#include <main/errno.h>
+#include <freestanding/errno.h>
 #include <main/string.h>
 #include <io/terminal.h>
 #include <mm/mm.h>

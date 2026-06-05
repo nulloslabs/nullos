@@ -16,7 +16,7 @@
 #include <main/rootfs.h>
 #include <main/scheduler.h>
 #include <main/string.h>
-#include <main/errno.h>
+#include <freestanding/errno.h>
 #include <io/terminal.h>
 #include <io/keyboard.h>
 #include <mm/mm.h>
@@ -372,10 +372,11 @@ void sys_write(syscall_frame_t *frame) {
         uint64_t processed = 0;
         while (processed < count) {
             uint64_t chunk = count - processed;
-            if (chunk > 255) chunk = 255;
+            if (chunk > sizeof(kbuf)) chunk = sizeof(kbuf);
             read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf + processed, chunk);
-            kbuf[chunk] = '\0';
-            puts(kbuf);
+            for (uint64_t i = 0; i < chunk; i++) {
+                putc(kbuf[i]);
+            }
             processed += chunk;
         }
         frame->rax = count;

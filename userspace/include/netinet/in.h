@@ -3,6 +3,10 @@
 #include <stdint.h>
 #include <sys/socket.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef uint16_t in_port_t;
 typedef uint32_t in_addr_t;
 
@@ -53,3 +57,7 @@ static inline uint32_t htonl(uint32_t x) {
            ((x & 0xff000000U) >> 24);
 }
 static inline uint32_t ntohl(uint32_t x) { return htonl(x); }
+
+#ifdef __cplusplus
+}
+#endif

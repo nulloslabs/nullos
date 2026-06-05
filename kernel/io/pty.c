@@ -1,7 +1,7 @@
 #include <main/devfs.h>
 #include <main/string.h>
 #include <main/spinlock.h>
-#include <main/errno.h>
+#include <freestanding/errno.h>
 #include <io/terminal.h>
 #include <io/pty.h>
 #include <io/tty.h>

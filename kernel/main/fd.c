@@ -1,7 +1,7 @@
 #include <freestanding/stdint.h>
 #include <main/fd.h>
 #include <main/string.h>
-#include <main/errno.h>
+#include <freestanding/errno.h>
 #include <main/scheduler.h>
 #include <io/pty.h>
 #include <io/sockets.h>

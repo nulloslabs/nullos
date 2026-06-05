@@ -8,7 +8,7 @@ endif
 include config.mk
 
 .DEFAULT_GOAL := all
-USERSPACE_PROGS := $(patsubst ../userspace/main/progs/%.c,../userspace/%,$(wildcard ../userspace/main/progs/*.c)) $(patsubst ../userspace/main/progs/%.S,../userspace/%,$(wildcard ../userspace/main/progs/*.S))
+USERSPACE_PROGS := $(patsubst ../userspace/main/progs/main/%.c,../userspace/%,$(wildcard ../userspace/main/progs/main/*.c)) $(patsubst ../userspace/main/progs/main/%.S,../userspace/%,$(wildcard ../userspace/main/progs/main/*.S))
 DEP := $(wildcard ../userspace/main/progs/*.c) $(wildcard ../userspace/main/progs/*.S) $(USERSPACE_PROGS) $(shell find main/ -type f 2>/dev/null) config.mk ../userspace/libc.so ../userspace/libc.a ../userspace/crt0.o ../userspace/ld.so
 
 all: rootfs
@@ -25,7 +25,7 @@ rootfs:
 			cp ../userspace/init main/init && \
 			cp ../userspace/libc.so ../userspace/libc.a ../userspace/crt0.o main/usr/lib && \
 			cp ../userspace/ld.so main/usr/lib/ld.so && \
-		cp -a ../userspace/include/ main/usr && \
+		cp -a ../userspace/include main/usr/ && \
 		cp $(filter-out ../userspace/init,$(USERSPACE_PROGS)) main/usr/bin && \
 		# Create config files && \
 		printf "\\\\s (\\\\r)\\n" > main/etc/issue && \

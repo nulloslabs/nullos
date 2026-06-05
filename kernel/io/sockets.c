@@ -1,5 +1,5 @@
 #include <io/sockets.h>
-#include <main/errno.h>
+#include <freestanding/errno.h>
 #include <main/spinlock.h>
 #include <main/string.h>
 #include <main/scheduler.h>

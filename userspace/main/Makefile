@@ -8,13 +8,13 @@ endif
 include ../config.mk
 
 all:
-	@$(MAKE) -C crt0
+	@$(MAKE) -C crt
 	@$(MAKE) -C ld
 	@$(MAKE) -C libc
 	@$(MAKE) -C progs
 
 clean:
-	@$(MAKE) -C crt0 clean
+	@$(MAKE) -C crt clean
 	@$(MAKE) -C ld clean
 	@$(MAKE) -C libc clean
 	@$(MAKE) -C progs clean

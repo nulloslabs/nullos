@@ -9,33 +9,39 @@ endif
 
 include ../../config.mk
 
-SRC = $(wildcard *.S) $(wildcard *.c)
+# Find the sources down in main/ to check up-to-date status
+SRC = $(wildcard main/*.c) $(wildcard main/*.S)
 OBJ = $(SRC:.c=.o)
-DEP = $(SRC:.c=.d)
+OBJ := $(OBJ:.S=.o)
 
--include $(DEP)
+# Extract just the file names (e.g., ld.o) for up-to-date reporting
+FILES = $(notdir $(OBJ))
 
 all: ld
 
-ld: $(OBJ)
+ld: Makefile ../../config.mk
+	@$(MAKE) -C main
 	@needs_build=0; \
-	if [ ! -f ../../ld.so ] || [ $(OBJ) -nt ../../ld.so ] || [ Makefile -nt ../../ld.so ] || [ ../../config.mk -nt ../../ld.so ]; then needs_build=1; fi; \
-	if [ $$needs_build -eq 1 ]; then \
-		printf "  %-7s %s\n" "LD" "$(SUBDIR)/ld.so" && \
-		$(LD) $(LDFLAGS) -shared -fPIC -nostdlib -e _start $(OBJ) -o ../../ld.so && \
-		printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/ld.so" && \
-		$(STRIP) $(STRIPFLAGS) ../../ld.so; \
+	if [ ! -f ../../ld.so ]; then \
+		needs_build=1; \
 	else \
+		for obj in $(OBJ); do \
+			if [ $$obj -nt ../../ld.so ] || [ Makefile -nt ../../ld.so ] || [ ../../config.mk -nt ../../ld.so ]; then \
+				needs_build=1; \
+				break; \
+			fi; \
+		done; \
+	fi; \
+	if [ $$needs_build -eq 0 ]; then \
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/ld.so is already up to date"; \
+	else \
+		printf "  %-7s %s\n" "LD" "$(SUBDIR)/ld.so"; \
+		$(LD) $(LDFLAGS) -shared -o ../../ld.so $(OBJ); \
 	fi
 
-%.o: %.c Makefile ../../config.mk
-	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/main/ld/$@"
-	@$(CC) $(CFLAGS) -c $< -o $@
-
 clean:
-	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/ld.so $(SUBDIR)/main/ld/*.o $(SUBDIR)/main/ld/*.d"
-	@rm -rf ../../ld.so $(OBJ) $(DEP)
+	@$(MAKE) -C main clean
+
 mrproper: clean
 
-.PHONY: all ld clean mrproper
+.PHONY: all ld_subdirs clean mrproper

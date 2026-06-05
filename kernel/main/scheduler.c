@@ -3,7 +3,7 @@
 #include <main/scheduler.h>
 #include <mm/mm.h>
 #include <mm/vmm.h>
-#include <main/errno.h>
+#include <freestanding/errno.h>
 #include <main/halt.h>
 #include <main/panic.h>
 #include <main/gdt.h>

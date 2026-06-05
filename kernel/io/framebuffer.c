@@ -4,7 +4,7 @@
 #include <main/limine_req.h>
 #include <io/fonts.h>
 #include <main/string.h>
-#include <main/errno.h>
+#include <freestanding/errno.h>
 
 uint64_t fb_read_index(int idx, void* buf, uint64_t count, uint64_t offset) {
     if (!fb_req.response || idx >= (int)fb_req.response->framebuffer_count) return (uint64_t)-ENODEV;
@@ -36,7 +36,6 @@ void put_pixel_fb(uint32_t x, uint32_t y, uint32_t color) {
 void putc_fb(char c, int x, int y, uint32_t fg, uint32_t bg) {
     if (!fb_req.response || fb_req.response->framebuffer_count < 1) return; // If there's no framebuffer don't even bother drawing.
     if (!current_font_w || !current_font_h) return; // If there's no font don't even bother drawing.
-    if ((unsigned char)c < 0x20) return; // If the character is not printable, don't even bother drawing.
 
     // Use the index for the offset calculation
     unsigned char *glyph = &current_font[(unsigned char)c * current_font_h];

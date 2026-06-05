@@ -7,7 +7,7 @@
 #include <main/string.h>
 #include <main/gzip.h>
 #include <mm/mm.h>
-#include <main/errno.h>
+#include <freestanding/errno.h>
 #include <main/scheduler.h>
 #include <main/limine_req.h>
 #include <limine/limine.h>

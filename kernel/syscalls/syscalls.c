@@ -2,7 +2,7 @@
 #include <syscalls/syscall_impl.h>
 #include <main/scheduler.h>
 #include <io/terminal.h>
-#include <main/errno.h>
+#include <freestanding/errno.h>
 #include <main/msr.h>
 
 extern void syscall_entry(void);
