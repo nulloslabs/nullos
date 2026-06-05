@@ -21,3 +21,7 @@ int fchmod(int fd, mode_t mode) {
 int fchmodat(int dirfd, const char *path, mode_t mode, int flags) {
     return (int)syscall(SYS_fchmodat, dirfd, path, mode, flags);
 }
+
+int mkdir(const char *path, mode_t mode) {
+    return (int)syscall(SYS_mkdir, path, mode);
+}

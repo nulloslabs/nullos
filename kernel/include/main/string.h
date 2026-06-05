@@ -19,3 +19,7 @@ char* strnstr(const char* haystack, const char* needle, size_t n);
 char* strtok(char* str, const char* delim);
 char* strchr(const char* s, int c);
 char* strrchr(const char* s, int c);
+int bcmp(const void *s1, const void *s2, size_t n);
+void bcopy(const void *src, void *dest, size_t n);
+void bzero(void *s, size_t n);
+int ffs(int i);

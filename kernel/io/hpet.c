@@ -39,6 +39,11 @@ uint64_t read_hpet_counter(void) {
     return *hpet_main_counter;
 }
 
+uint64_t hpet_elapsed_us(void) {
+    if (!hpet_base || hpet_period == 0) return 0;
+    return (read_hpet_counter() * hpet_period) / 1000000000ULL;
+}
+
 uint32_t get_hpet_freq_mhz(void) {
     if (!hpet_base || hpet_period == 0) return 0;
     // hpet_period is in femtoseconds, convert to MHz

@@ -18,6 +18,8 @@
 #define SYS_dup 32
 #define SYS_dup2 33
 #define SYS_nanosleep 35
+#define SYS_getitimer 36
+#define SYS_setitimer 38
 #define SYS_getpid 39
 #define SYS_socket 41
 #define SYS_connect 42
@@ -35,12 +37,17 @@
 #define SYS_wait4 61
 #define SYS_kill 62
 #define SYS_uname 63
+#define SYS_flock 73
 #define SYS_getdents 78
 #define SYS_getcwd 79
 #define SYS_chdir 80
 #define SYS_mkdir 83
 #define SYS_chmod 90
 #define SYS_fchmod 91
+#define SYS_gettimeofday 96
+#define SYS_getrlimit 97
+#define SYS_getrusage 98
+#define SYS_times 100
 #define SYS_getuid 102
 #define SYS_getgid 104
 #define SYS_setuid 105
@@ -50,7 +57,10 @@
 #define SYS_getppid 110
 #define SYS_seteuid 115
 #define SYS_setegid 116
+#define SYS_utime 132
 #define SYS_arch_prctl 158
+#define SYS_setrlimit 160
+#define SYS_settimeofday 164
 #define SYS_mount 165
 #define SYS_umount 166
 #define SYS_sethostname 170

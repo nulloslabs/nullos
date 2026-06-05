@@ -27,6 +27,7 @@
 #include <main/elf.h>
 #include <main/halt.h>
 #include <main/hostname.h>
+#include <main/timekeeping.h>
 #include <main/uname.h>
 #include <main/acpi.h>
 #include <main/msr.h>
@@ -57,6 +58,20 @@ typedef struct {
     uint16_t ws_ypixel;
 } winsize_t;
 
+struct timezone {
+    int tz_minuteswest;
+    int tz_dsttime;
+};
+
+#define TIME_T_MAX ((time_t)(((uint64_t)1 << ((sizeof(time_t) * 8) - 1)) - 1))
+
+typedef uint64_t rlim_t;
+
+typedef struct {
+    rlim_t rlim_cur;
+    rlim_t rlim_max;
+} rlimit_t;
+
 typedef struct {
     uint64_t d_ino;
     int64_t d_off;
@@ -64,6 +79,13 @@ typedef struct {
     uint8_t d_type;
     char d_name[256];
 } dirent_t;
+
+typedef struct {
+    clock_t tms_utime;
+    clock_t tms_stime;
+    clock_t tms_cutime;
+    clock_t tms_cstime;
+} tms_t;
 
 #define DT_UNKNOWN 0
 #define DT_DIR 4
@@ -78,6 +100,24 @@ typedef struct {
 #define RB_REBOOT 0x00
 #define RB_POWEROFF 0x01
 #define RB_HALT 0x02
+
+#define RLIM_INFINITY ((rlim_t)-1)
+#define RLIMIT_CPU 0
+#define RLIMIT_FSIZE 1
+#define RLIMIT_DATA 2
+#define RLIMIT_STACK 3
+#define RLIMIT_CORE 4
+#define RLIMIT_RSS 5
+#define RLIMIT_NOFILE 7
+#define RLIMIT_AS 9
+
+#define RUSAGE_SELF 0
+#define RUSAGE_CHILDREN -1
+
+#define LOCK_SH 1
+#define LOCK_EX 2
+#define LOCK_NB 4
+#define LOCK_UN 8
 
 #define SOL_SOCKET 1
 #define SO_REUSEADDR 2
@@ -1157,6 +1197,153 @@ void sys_nanosleep(syscall_frame_t *frame) {
     frame->rax = 0;
 }
 
+void sys_gettimeofday(syscall_frame_t *frame) {
+    struct timeval *tv = (struct timeval *)frame->rdi;
+    struct timezone *tz = (struct timezone *)frame->rsi;
+
+    if (tv) {
+        uint64_t usec = time_get_realtime_us();
+
+        struct timeval ktv;
+        ktv.tv_sec = (time_t)(usec / 1000000ULL);
+        ktv.tv_usec = (suseconds_t)(usec % 1000000ULL);
+        write_vmm(current_task_ptr->ctx, (uint64_t)tv, &ktv, sizeof(ktv));
+    }
+
+    if (tz) {
+        struct timezone ktz = {0};
+        write_vmm(current_task_ptr->ctx, (uint64_t)tz, &ktz, sizeof(ktz));
+    }
+
+    frame->rax = 0;
+}
+
+void sys_settimeofday(syscall_frame_t *frame) {
+    const struct timeval *tv = (const struct timeval *)frame->rdi;
+    const struct timezone *tz = (const struct timezone *)frame->rsi;
+
+    if (!current_task_ptr || current_task_ptr->euid != 0) {
+        frame->rax = (uint64_t)-EPERM;
+        return;
+    }
+
+    if (tz) {
+        struct timezone ktz;
+        read_vmm(current_task_ptr->ctx, &ktz, (uint64_t)tz, sizeof(ktz));
+        if (ktz.tz_minuteswest < -15 * 60 || ktz.tz_minuteswest > 15 * 60) {
+            frame->rax = (uint64_t)-EINVAL;
+            return;
+        }
+    }
+
+    if (!tv) {
+        frame->rax = 0;
+        return;
+    }
+
+    struct timeval ktv;
+    read_vmm(current_task_ptr->ctx, &ktv, (uint64_t)tv, sizeof(ktv));
+
+    if (ktv.tv_sec < 0 || ktv.tv_usec < 0 || ktv.tv_usec >= 1000000 ||
+        ktv.tv_sec > (TIME_T_MAX / 1000000)) {
+        frame->rax = (uint64_t)-EINVAL;
+        return;
+    }
+
+    uint64_t desired_us = ((uint64_t)ktv.tv_sec * 1000000ULL) + (uint64_t)ktv.tv_usec;
+    time_set_realtime_us(desired_us);
+
+    frame->rax = 0;
+}
+
+static int kernel_getrlimit(int resource, rlimit_t *lim) {
+    switch (resource) {
+        case RLIMIT_NOFILE:
+            lim->rlim_cur = FD_MAX;
+            lim->rlim_max = FD_MAX;
+            return 0;
+        case RLIMIT_CPU:
+        case RLIMIT_FSIZE:
+        case RLIMIT_DATA:
+        case RLIMIT_STACK:
+        case RLIMIT_CORE:
+        case RLIMIT_RSS:
+        case RLIMIT_AS:
+            lim->rlim_cur = RLIM_INFINITY;
+            lim->rlim_max = RLIM_INFINITY;
+            return 0;
+        default:
+            return -EINVAL;
+    }
+}
+
+void sys_getrlimit(syscall_frame_t *frame) {
+    int resource = (int)frame->rdi;
+    rlimit_t *rlim = (rlimit_t *)frame->rsi;
+
+    if (!rlim) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    rlimit_t lim;
+    int ret = kernel_getrlimit(resource, &lim);
+    if (ret < 0) { frame->rax = (uint64_t)ret; return; }
+
+    write_vmm(current_task_ptr->ctx, (uint64_t)rlim, &lim, sizeof(lim));
+    frame->rax = 0;
+}
+
+void sys_setrlimit(syscall_frame_t *frame) {
+    int resource = (int)frame->rdi;
+    rlimit_t *rlim = (rlimit_t *)frame->rsi;
+    rlimit_t current;
+
+    if (!rlim) { frame->rax = (uint64_t)-EINVAL; return; }
+    int ret = kernel_getrlimit(resource, &current);
+    if (ret < 0) { frame->rax = (uint64_t)ret; return; }
+
+    rlimit_t requested;
+    read_vmm(current_task_ptr->ctx, &requested, (uint64_t)rlim, sizeof(requested));
+    if (requested.rlim_cur != current.rlim_cur || requested.rlim_max != current.rlim_max) {
+        frame->rax = (uint64_t)-EPERM;
+        return;
+    }
+
+    frame->rax = 0;
+}
+
+void sys_getrusage(syscall_frame_t *frame) {
+    int who = (int)frame->rdi;
+    struct rusage *usage = (struct rusage *)frame->rsi;
+
+    if (!usage) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (who != RUSAGE_SELF && who != RUSAGE_CHILDREN) {
+        frame->rax = (uint64_t)-EINVAL;
+        return;
+    }
+
+    struct rusage ru = {0};
+    if (who == RUSAGE_SELF) {
+        uint64_t usec = hpet_elapsed_us();
+        ru.ru_stime.tv_sec = (time_t)(usec / 1000000ULL);
+        ru.ru_stime.tv_usec = (suseconds_t)(usec % 1000000ULL);
+    }
+
+    write_vmm(current_task_ptr->ctx, (uint64_t)usage, &ru, sizeof(ru));
+    frame->rax = 0;
+}
+
+void sys_times(syscall_frame_t *frame) {
+    tms_t *buf = (tms_t *)frame->rdi;
+    uint64_t ticks = hpet_elapsed_us() / 10000ULL;
+
+    if (buf) {
+        tms_t t = {0};
+        t.tms_stime = (clock_t)ticks;
+        write_vmm(current_task_ptr->ctx, (uint64_t)buf, &t, sizeof(t));
+    }
+
+    frame->rax = (uint64_t)ticks;
+}
+
 void sys_getpid(syscall_frame_t *frame) {
     frame->rax = (uint64_t)current_task_ptr->pid;
 }
@@ -1395,6 +1582,22 @@ void sys_uname(syscall_frame_t *frame) {
     get_hostname(info.nodename, sizeof(info.nodename));
 
     write_vmm(current_task_ptr->ctx, bufp, &info, sizeof(info));
+    frame->rax = 0;
+}
+
+void sys_flock(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    int operation = (int)frame->rsi;
+
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+
+    int op = operation & ~LOCK_NB;
+    if (op != LOCK_SH && op != LOCK_EX && op != LOCK_UN) {
+        frame->rax = (uint64_t)-EINVAL;
+        return;
+    }
+
     frame->rax = 0;
 }
 
@@ -1640,6 +1843,22 @@ void sys_setegid(syscall_frame_t *frame) {
     }
 
     frame->rax = (uint64_t)-EPERM;
+}
+
+void sys_utime(syscall_frame_t *frame) {
+    const char *path = (const char *)frame->rdi;
+    if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    char abs_path[256];
+    build_abs_path(path, abs_path, sizeof(abs_path));
+
+    rootfs_file_t file = read_rootfs(abs_path);
+    if (!file.data && !file.mode) {
+        frame->rax = (uint64_t)-ENOENT;
+        return;
+    }
+
+    frame->rax = 0;
 }
 
 void sys_arch_prctl(syscall_frame_t *frame) {

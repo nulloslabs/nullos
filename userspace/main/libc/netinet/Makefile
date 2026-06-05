@@ -7,6 +7,8 @@ endif
 
 include ../../../config.mk
 
+.DEFAULT_GOAL := all
+
 SRC = $(wildcard *.c) $(wildcard *.S)
 OBJ = $(SRC:.c=.o)
 OBJ := $(OBJ:.S=.o)

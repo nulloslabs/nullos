@@ -26,6 +26,12 @@ void syscall_dispatch(syscall_frame_t *frame) {
         case SYS_dup: sys_dup(frame); break;
         case SYS_dup2: sys_dup2(frame); break;
         case SYS_nanosleep: sys_nanosleep(frame); break;
+        case SYS_gettimeofday: sys_gettimeofday(frame); break;
+        case SYS_settimeofday: sys_settimeofday(frame); break;
+        case SYS_getrlimit: sys_getrlimit(frame); break;
+        case SYS_setrlimit: sys_setrlimit(frame); break;
+        case SYS_getrusage: sys_getrusage(frame); break;
+        case SYS_times: sys_times(frame); break;
         case SYS_getpid: sys_getpid(frame); break;
         case SYS_socket: sys_socket(frame); break;
         case SYS_connect: sys_connect(frame); break;
@@ -43,6 +49,7 @@ void syscall_dispatch(syscall_frame_t *frame) {
         case SYS_wait4: sys_wait4(frame); break;
         case SYS_kill: sys_kill(frame); break;
         case SYS_uname: sys_uname(frame); break;
+        case SYS_flock: sys_flock(frame); break;
         case SYS_getdents: sys_getdents(frame); break;
         case SYS_getcwd: sys_getcwd(frame); break;
         case SYS_chdir: sys_chdir(frame); break;
@@ -58,6 +65,7 @@ void syscall_dispatch(syscall_frame_t *frame) {
         case SYS_getppid: sys_getppid(frame); break;
         case SYS_seteuid: sys_seteuid(frame); break;
         case SYS_setegid: sys_setegid(frame); break;
+        case SYS_utime: sys_utime(frame); break;
         case SYS_arch_prctl: sys_arch_prctl(frame); break;
         case SYS_mount: sys_mount(frame); break;
         case SYS_umount: sys_umount(frame); break;
