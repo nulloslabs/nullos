@@ -236,3 +236,27 @@ int reboot(int how) {
 int64_t lseek(int fd, int64_t offset, int whence) {
     return (int64_t)syscall(SYS_lseek, fd, offset, whence);
 }
+
+ssize_t readlink(const char *path, char *buf, size_t bufsiz) {
+    return (ssize_t)syscall(SYS_readlink, path, buf, bufsiz);
+}
+
+int unlink(const char *path) {
+    return (int)syscall(SYS_unlink, path);
+}
+
+int symlink(const char *target, const char *linkpath) {
+    return (int)syscall(SYS_symlink, target, linkpath);
+}
+
+int chown(const char *path, uid_t owner, gid_t group) {
+    return (int)syscall(SYS_chown, path, owner, group);
+}
+
+int lchown(const char *path, uid_t owner, gid_t group) {
+    return (int)syscall(SYS_lchown, path, owner, group);
+}
+
+int unlinkat(int dirfd, const char *pathname, int flags) {
+    return (int)syscall(SYS_unlinkat, dirfd, pathname, flags);
+}

@@ -164,8 +164,7 @@ int regcomp(regex_t *preg, const char *regex, int cflags) {
     return 0;
 }
 
-int regexec(const regex_t *preg, const char *string, size_t nmatch,
-            regmatch_t pmatch[], int eflags) {
+int regexec(const regex_t *preg, const char *string, size_t nmatch, regmatch_t pmatch[], int eflags) {
     const char *re;
     (void)eflags;
 
@@ -198,8 +197,7 @@ int regexec(const regex_t *preg, const char *string, size_t nmatch,
     return REG_NOMATCH;
 }
 
-size_t regerror(int errcode, const regex_t *preg, char *errbuf,
-                size_t errbuf_size) {
+size_t regerror(int errcode, const regex_t *preg, char *errbuf, size_t errbuf_size) {
     const char *msg;
     (void)preg;
     switch (errcode) {

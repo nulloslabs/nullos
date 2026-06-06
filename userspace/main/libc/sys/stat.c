@@ -25,3 +25,19 @@ int fchmodat(int dirfd, const char *path, mode_t mode, int flags) {
 int mkdir(const char *path, mode_t mode) {
     return (int)syscall(SYS_mkdir, path, mode);
 }
+
+int lstat(const char *path, struct stat *buf) {
+    return (int)syscall(SYS_lstat, path, buf);
+}
+
+int fstatat(int dirfd, const char *pathname, struct stat *buf, int flags) {
+    return (int)syscall(SYS_fstatat, dirfd, pathname, buf, flags);
+}
+
+int mknod(const char *path, mode_t mode, dev_t dev) {
+    return (int)syscall(SYS_mknod, path, mode, dev);
+}
+
+mode_t umask(mode_t mask) {
+    return (mode_t)syscall(SYS_umask, mask);
+}

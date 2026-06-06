@@ -5,9 +5,9 @@ ifeq ($(filter --silent,$(MAKEFLAGS)),)
 MAKEFLAGS += --silent
 endif
 
-include ../../../config.mk
-
 .DEFAULT_GOAL := all
+
+include ../../../config.mk
 
 SRC = $(wildcard *.c) $(wildcard *.S)
 OBJ = $(SRC:.c=.o)

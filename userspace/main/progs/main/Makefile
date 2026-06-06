@@ -1,3 +1,4 @@
+# progs/main/Makefile - compiles object files
 ifeq ($(filter --no-print-directory,$(MAKEFLAGS)),)
 MAKEFLAGS += --no-print-directory
 endif
@@ -19,13 +20,17 @@ DEP = $(OBJ:.o=.d)
 all: $(OBJ)
 
 %.o: %.c ../../../config.mk
-	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/main/libc/main/$@"
+	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/main/progs/main/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+%.o: %.S ../../../config.mk
+	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/main/progs/main/$@"
+	@$(AS) $(AFLAGS) -c $< -o $@
+
 clean:
-	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/libc/main/*.o $(SUBDIR)/main/libc/main/*.d"
+	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/progs/main/*.o $(SUBDIR)/main/progs/main/*.d"
 	@rm -f *.o *.d
 
 mrproper: clean
 
-.PHONY: all clean mrproper
+.PHONY: clean mrproper

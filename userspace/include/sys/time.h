@@ -1,6 +1,7 @@
 #pragma once
 
 #include <sys/types.h>
+#include <time.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -43,8 +44,7 @@ struct itimerval {
 int gettimeofday(struct timeval *tv, struct timezone *tz);
 int settimeofday(const struct timeval *tv, const struct timezone *tz);
 int getitimer(int which, struct itimerval *curr_value);
-int setitimer(int which, const struct itimerval *new_value,
-              struct itimerval *old_value);
+int setitimer(int which, const struct itimerval *new_value, struct itimerval *old_value);
 
 #ifdef __cplusplus
 }

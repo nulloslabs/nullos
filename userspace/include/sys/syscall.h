@@ -48,6 +48,7 @@
 #define SYS_getrlimit 97
 #define SYS_getrusage 98
 #define SYS_times 100
+#define SYS_ptrace 101
 #define SYS_getuid 102
 #define SYS_getgid 104
 #define SYS_setuid 105
@@ -69,3 +70,14 @@
 #define SYS_fchmodat 268
 #define SYS_getsockopt 300
 #define SYS_setsockopt 301
+#define SYS_lstat 6
+#define SYS_readlink 89
+#define SYS_unlink 87
+#define SYS_symlink 88
+#define SYS_mknod 133
+#define SYS_chown 92
+#define SYS_lchown 94
+#define SYS_fstatat 262
+#define SYS_utimensat 280
+#define SYS_umask 95
+#define SYS_unlinkat 263

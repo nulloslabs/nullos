@@ -3,6 +3,7 @@
 #include <string.h>
 #include <strings.h>
 #include <errno.h>
+#include <stdlib.h>
 
 void *memcpy(void *dest, const void *src, size_t n) {
     uint8_t *d = (uint8_t *)dest;
@@ -46,6 +47,23 @@ int memcmp(const void *s1, const void *s2, size_t n) {
         if (p1[i] != p2[i]) return p1[i] - p2[i];
     }
     return 0;
+}
+
+void *memchr(const void *s, int c, size_t n) {
+    const unsigned char *p = s;
+    while (n--) {
+        if (*p == (unsigned char)c) return (void *)p;
+        p++;
+    }
+    return NULL;
+}
+
+void *memrchr(const void *s, int c, size_t n) {
+    const unsigned char *p = (const unsigned char *)s + n;
+    while (n--) {
+        if (*--p == (unsigned char)c) return (void *)p;
+    }
+    return NULL;
 }
 
 size_t strlen(const char *s) {
@@ -217,30 +235,51 @@ char* strrchr(const char* s, int c) {
     return last;
 }
 
-int bcmp(const void *s1, const void *s2, size_t n) {
-    return memcmp(s1, s2, n);
-}
-
-void bcopy(const void *src, void *dest, size_t n) {
-    memmove(dest, src, n);
-}
-
-void bzero(void *s, size_t n) {
-    memset(s, 0, n);
-}
-
-int ffs(int i) {
-    if (i == 0) {
-        return 0;
+char *strdup(const char *s) {
+    if (!s) return NULL;
+    size_t len = strlen(s) + 1;
+    char *new_s = malloc(len);
+    if (new_s) {
+        memcpy(new_s, s, len);
     }
+    return new_s;
+}
 
-    int bit = 1;
-    unsigned int value = (unsigned int)i;
-    while ((value & 1U) == 0) {
-        value >>= 1;
-        bit++;
+char *strndup(const char *s, size_t n) {
+    if (!s) return NULL;
+    size_t len = strnlen(s, n);
+    char *new_s = malloc(len + 1);
+    if (new_s) {
+        memcpy(new_s, s, len);
+        new_s[len] = '\0';
     }
-    return bit;
+    return new_s;
+}
+
+size_t strspn(const char *s, const char *accept) {
+    const char *p, *a;
+    for (p = s; *p; p++) {
+        for (a = accept; *a; a++)
+            if (*p == *a)
+                break;
+        if (!*a)
+            return p - s;
+    }
+    return p - s;
+}
+
+size_t strcspn(const char *s, const char *reject) {
+    const char *p, *r;
+    for (p = s; *p; p++)
+        for (r = reject; *r; r++)
+            if (*p == *r)
+                return p - s;
+    return p - s;
+}
+
+char *strpbrk(const char *s, const char *accept) {
+    s += strcspn(s, accept);
+    return *s ? (char *)s : NULL;
 }
 
 char *strerror(int errnum) {

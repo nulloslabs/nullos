@@ -6,6 +6,8 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/syscall.h>
+#include <stdlib.h>
+#include <fcntl.h>
 
 // Variables, structs etc. for functions
 static FILE _stdin  = { .fd = 0, .buf_len = 0, .mode = 0 };
@@ -50,6 +52,7 @@ int fflush(FILE *stream) {
     if (stream->buf_len > 0) {
         ssize_t written = write(stream->fd, stream->buf, stream->buf_len);
         if (written != stream->buf_len) {
+            stream->error = 1;
             return EOF;
         }
         stream->buf_len = 0;
@@ -63,7 +66,10 @@ int fputc(int c, FILE *stream) {
     unsigned char ch = (unsigned char)c;
 
     if (stream->mode == 0) {
-        if (write(stream->fd, &ch, 1) != 1) return EOF;
+        if (write(stream->fd, &ch, 1) != 1) {
+            stream->error = 1;
+            return EOF;
+        }
         return ch;
     }
 
@@ -74,6 +80,17 @@ int fputc(int c, FILE *stream) {
     }
 
     return ch;
+}
+
+int fgetc(FILE *stream) {
+    if (!stream) return EOF;
+
+    unsigned char ch;
+    ssize_t nread = read(stream->fd, &ch, 1);
+    if (nread == 1) return ch;
+    if (nread == 0) stream->eof = 1;
+    else stream->error = 1;
+    return EOF;
 }
 
 int putc(int c, FILE *stream) {
@@ -97,7 +114,45 @@ int puts(const char *s) {
     return fputc('\n', stdout);
 }
 
+FILE *fopen(const char *pathname, const char *mode) {
+    if (!pathname || !mode) {
+        errno = EINVAL;
+        return NULL;
+    }
+    int flags = 0;
+    if (mode[0] == 'r') {
+        flags = O_RDONLY;
+        if (mode[1] == '+' || (mode[1] == 'b' && mode[2] == '+')) flags = O_RDWR;
+    } else if (mode[0] == 'w') {
+        flags = O_WRONLY | O_CREAT | O_TRUNC;
+        if (mode[1] == '+' || (mode[1] == 'b' && mode[2] == '+')) flags = O_RDWR | O_CREAT | O_TRUNC;
+    } else if (mode[0] == 'a') {
+        flags = O_WRONLY | O_CREAT | O_APPEND;
+        if (mode[1] == '+' || (mode[1] == 'b' && mode[2] == '+')) flags = O_RDWR | O_CREAT | O_APPEND;
+    } else {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    int fd = open(pathname, flags, 0666);
+    if (fd < 0) return NULL;
+
+    FILE *f = malloc(sizeof(FILE));
+    if (!f) {
+        close(fd);
+        return NULL;
+    }
+    f->fd = fd;
+    f->buf_len = 0;
+    f->mode = ((flags & O_ACCMODE) == O_RDONLY) ? 0 : 1;
+    f->eof = 0;
+    f->error = 0;
+    return f;
+}
+
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    if (size == 0 || nmemb == 0) return 0;
+
     const char *p = (const char *)ptr;
     size_t total = size * nmemb;
     for (size_t i = 0; i < total; i++) {
@@ -107,11 +162,13 @@ size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
 }
 
 size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    if (size == 0 || nmemb == 0) return 0;
+
     char *p = (char *)ptr;
     size_t total = size * nmemb;
     for (size_t i = 0; i < total; i++) {
-        unsigned char c;
-        if (read(stream->fd, &c, 1) != 1) return i / size;
+        int c = fgetc(stream);
+        if (c == EOF) return i / size;
         p[i] = (char)c;
     }
     return nmemb;
@@ -119,18 +176,47 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
 
 int fseek(FILE *stream, long offset, int whence) {
     if (!stream) return -1;
-    return (int)syscall(SYS_lseek, stream->fd, offset, whence);
+    if (fflush(stream) == EOF) return -1;
+
+    int ret = (int)syscall(SYS_lseek, stream->fd, offset, whence);
+    if (ret == -1) {
+        stream->error = 1;
+        return -1;
+    }
+
+    stream->eof = 0;
+    return ret;
 }
 
 long ftell(FILE *stream) {
     if (!stream) return EOF;
-    return (long)syscall(SYS_lseek, stream->fd, 0, 1);
+    long ret = (long)syscall(SYS_lseek, stream->fd, 0, 1);
+    if (ret == -1) stream->error = 1;
+    return ret;
 }
 
 int fclose(FILE *stream) {
     if (!stream) return EOF;
     fflush(stream);
-    return (int)syscall(SYS_close, stream->fd);
+    int ret = (int)syscall(SYS_close, stream->fd);
+    if (stream != stdin && stream != stdout && stream != stderr) free(stream);
+    return ret;
+}
+
+void clearerr(FILE *stream) {
+    if (!stream) return;
+    stream->eof = 0;
+    stream->error = 0;
+}
+
+int feof(FILE *stream) {
+    if (!stream) return 0;
+    return stream->eof;
+}
+
+int ferror(FILE *stream) {
+    if (!stream) return 0;
+    return stream->error;
 }
 
 int vfprintf(FILE *stream, const char *fmt, va_list args) {
@@ -469,6 +555,43 @@ int sprintf(char *str, const char *fmt, ...) {
     return ret;
 }
 
+ssize_t getline(char **lineptr, size_t *n, FILE *stream) {
+    if (!lineptr || !n || !stream) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (*lineptr == NULL) {
+        *n = 128;
+        *lineptr = malloc(*n);
+        if (!*lineptr) return -1;
+    }
+    
+    size_t pos = 0;
+    int c;
+    while ((c = fgetc(stream)) != EOF) {
+        if (pos + 1 >= *n) {
+            size_t new_n = *n * 2;
+            char *new_ptr = realloc(*lineptr, new_n);
+            if (!new_ptr) {
+                errno = ENOMEM;
+                return -1;
+            }
+            *lineptr = new_ptr;
+            *n = new_n;
+        }
+        (*lineptr)[pos++] = (char)c;
+        if (c == '\n') break;
+    }
+    
+    if (pos == 0 && c == EOF) {
+        return -1;
+    }
+    
+    (*lineptr)[pos] = '\0';
+    return pos;
+}
+
 void perror(const char *s) {
-    fprintf(stderr, "%s: %s\n", s, strerror(errno));
+    if (s && *s) fprintf(stderr, "%s: %s\n", s, strerror(errno));
+    else fprintf(stderr, "%s\n", strerror(errno));
 }

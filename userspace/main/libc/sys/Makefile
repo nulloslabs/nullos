@@ -1,6 +1,13 @@
-include ../../../config.mk
+ifeq ($(filter --no-print-directory,$(MAKEFLAGS)),)
+MAKEFLAGS += --no-print-directory
+endif
+ifeq ($(filter --silent,$(MAKEFLAGS)),)
+MAKEFLAGS += --silent
+endif
 
 .DEFAULT_GOAL := all
+
+include ../../../config.mk
 
 SRC = $(wildcard *.c) $(wildcard *.S)
 OBJ = $(SRC:.c=.o)

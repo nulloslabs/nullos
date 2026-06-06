@@ -44,6 +44,12 @@ int gethostname(char *name, size_t size);
 int sethostname(const char *name, size_t size);
 int reboot(int how);
 int64_t lseek(int fd, int64_t offset, int whence);
+ssize_t readlink(const char *path, char *buf, size_t bufsiz);
+int unlink(const char *path);
+int symlink(const char *target, const char *linkpath);
+int chown(const char *path, uid_t owner, gid_t group);
+int lchown(const char *path, uid_t owner, gid_t group);
+int unlinkat(int dirfd, const char *pathname, int flags);
 
 #ifdef __cplusplus
 }

@@ -9,7 +9,7 @@ else
 	CC = x86_64-linux-gnu-gcc
 endif
 
-CFLAGS = -Wall -m64 -fno-stack-protector -fPIC -fno-builtin -nostdlib -nostdinc -nodefaultlibs -I$(shell pwd | sed 's|/main.*||')/include -L../../ -L. -MMD -MP -std=gnu99 -march=x86-64 -mtune=generic
+CFLAGS = -Wall -m64 -fno-stack-protector -fPIC -fno-builtin -nostdlib -nostdinc -nodefaultlibs -I$(shell pwd | sed 's|/main.*||')/include -L../../ -L. -MMD -MP -std=gnu99 -march=x86-64 -mtune=generic -g
 
 # No need for if checks here...
 AS = $(CC)

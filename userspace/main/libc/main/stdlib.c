@@ -267,3 +267,25 @@ double atof(const char *s) {
     if (*s == '.') { s++; while (*s >= '0' && *s <= '9') { result += (*s++ - '0') * frac; frac *= 0.1; } }
     return sign * result;
 }
+
+void *bsearch(const void *key, const void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *)) {
+    const char *array = (const char *)base;
+    size_t low = 0;
+    size_t high = nmemb;
+
+    while (low < high) {
+        size_t mid = low + (high - low) / 2;
+        const void *element = array + mid * size;
+        int cmp = compar(key, element);
+
+        if (cmp < 0) {
+            high = mid;
+        } else if (cmp > 0) {
+            low = mid + 1;
+        } else {
+            return (void *)element;
+        }
+    }
+
+    return NULL;
+}

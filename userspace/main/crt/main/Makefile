@@ -5,6 +5,8 @@ ifeq ($(filter --silent,$(MAKEFLAGS)),)
 MAKEFLAGS += --silent
 endif
 
+.DEFAULT_GOAL := all
+
 include ../../../config.mk
 
 SRC = $(wildcard *.c *.S)
