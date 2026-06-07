@@ -1,10 +1,6 @@
 #include <freestanding/stdint.h>
 #include <io/io.h>
 
-void io_wait(void) {
-    outb(0x80, 0);
-}
-
 void outb(uint16_t port, uint8_t val) {
     asm volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
 }
@@ -33,4 +29,8 @@ uint32_t inl(uint16_t port) {
     uint32_t ret;
     asm volatile("inl %1, %0" : "=a"(ret) : "Nd"(port));
     return ret;
+}
+
+void io_wait(void) {
+    outb(0x80, 0);
 }
