@@ -10,6 +10,7 @@
 #include <freestanding/wait.h>
 #include <freestanding/termios.h>
 #include <freestanding/sys/resource.h>
+#include <freestanding/limits.h>
 #include <main/limine_req.h>
 #include <syscalls/syscalls.h>
 #include <main/fd.h>
@@ -42,6 +43,7 @@ static int stdin_buf_pos = 0;
 static spinlock_t stdin_lock = SPINLOCK_INIT;
 
 #define MAX_MOUNTS 16
+
 typedef struct {
     char path[64];
     char filesystemtype[32];
@@ -62,8 +64,6 @@ struct timezone {
     int tz_minuteswest;
     int tz_dsttime;
 };
-
-#define TIME_T_MAX ((time_t)(((uint64_t)1 << ((sizeof(time_t) * 8) - 1)) - 1))
 
 typedef uint64_t rlim_t;
 
@@ -86,6 +86,8 @@ typedef struct {
     clock_t tms_cutime;
     clock_t tms_cstime;
 } tms_t;
+
+#define MAX_IO_COUNT (16 * 1024 * 1024)
 
 #define DT_UNKNOWN 0
 #define DT_DIR 4
@@ -350,8 +352,8 @@ void sys_read(syscall_frame_t *frame) {
             frame->rax = (uint64_t)-ENODEV; return;
         }
         
+        if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
         uint8_t *kbuf = malloc(count);
-        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
         uint64_t res = read_devfs(rel, kbuf, count, entry->offset);
         if ((int64_t)res >= 0) {
             write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, res);
@@ -364,6 +366,7 @@ void sys_read(syscall_frame_t *frame) {
 
     if (entry->type == FD_PTY_MASTER) {
         int idx = ptm_path_idx(entry->path);
+        if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
         uint8_t *kbuf = malloc(count);
         if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
         int got = read_pty_master(idx, (char *)kbuf, (int)count);
@@ -376,6 +379,7 @@ void sys_read(syscall_frame_t *frame) {
     }
 
     if (entry->type == FD_PIPE || entry->type == FD_SOCKET) {
+        if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
         uint8_t *kbuf = malloc(count);
         if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
         int64_t got = read_unix_handle((unix_handle_t *)entry->handle, kbuf, count, entry->flags);
@@ -484,9 +488,6 @@ void sys_write(syscall_frame_t *frame) {
     entry->offset += count;
     frame->rax = count;
 }
-
-extern void register_pts_device(int idx);
-extern void unregister_pts_device(int idx);
 
 void sys_open(syscall_frame_t *frame) {
     const char *path = (const char *)frame->rdi;
@@ -1503,7 +1504,7 @@ void sys_kill(syscall_frame_t *frame) {
     for (int i = 0; i < MAX_TASKS; i++) {
         if (tasks[i].state != TASK_DEAD && tasks[i].pid == pid) {
             // Permission check: root or same UID
-            if (!current_task_ptr && !current_task_ptr->euid == 0 && current_task_ptr->uid != tasks[i].uid) {
+            if (current_task_ptr->euid != 0 && current_task_ptr->uid != tasks[i].uid) {
                 frame->rax = (uint64_t)-EPERM;
                 return;
             }
