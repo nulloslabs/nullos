@@ -10,10 +10,26 @@
 #include <freestanding/sys/types.h>
 #include <main/spinlock.h>
 #include <syscalls/syscalls.h>
+#include <io/hpet.h>
 
 static loaded_so_t *loaded_libraries = NULL;
 static uint64_t next_so_base = 0x4000000000ULL;
 static spinlock_t elf_lock = SPINLOCK_INIT;
+
+// Simple entropy source using HPET counter
+static uint64_t aslr_entropy_counter = 0;
+
+static uint64_t aslr_random_offset(uint64_t max_pages) {
+    // Mix HPET counter with a simple counter for entropy
+    uint64_t hpet = read_hpet_counter();
+    aslr_entropy_counter += 0x9E3779B97F4A7C15ULL; // golden ratio constant
+    uint64_t mixed = hpet ^ aslr_entropy_counter;
+    // Simple xorshift
+    mixed ^= mixed << 13;
+    mixed ^= mixed >> 7;
+    mixed ^= mixed << 17;
+    return (mixed % max_pages) * PAGE_SIZE;
+}
 
 static const char *strip_relative(const char *soname) {
     while (soname[0] == '.' && soname[1] == '.') {
@@ -162,7 +178,7 @@ static int load_shared_library(const char *soname, vmm_context_t *ctx) {
     if (ehdr->magic != ELF_MAGIC || ehdr->type != ET_DYN) return -ENOEXEC;
 
     spin_lock_irqsave(&elf_lock, &irq);
-    uint64_t base_addr = next_so_base;
+    uint64_t base_addr = next_so_base + aslr_random_offset(0x10000); // random offset within 64MB range
     next_so_base += 0x10000000;
     spin_unlock_irqrestore(&elf_lock, irq);
 
@@ -385,7 +401,7 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
     uint64_t irq;
     spin_lock_irqsave(&elf_lock, &irq);
     loaded_libraries = NULL;
-    next_so_base = 0x4000000000ULL;
+    next_so_base = 0x4000000000ULL + aslr_random_offset(0x10000);
     spin_unlock_irqrestore(&elf_lock, irq);
 
     if (devfs_device_exists(path)) return -EACCES;
@@ -403,7 +419,8 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
     vmm_context_t *ctx = create_vmm_context();
     if (!ctx) return -ENOMEM;
 
-    uint64_t base_addr = (ehdr->type == ET_DYN) ? 0x100000000ULL : 0;
+    // ASLR: randomize PIE base address
+    uint64_t base_addr = (ehdr->type == ET_DYN) ? (0x100000000ULL + aslr_random_offset(0x40000)) : 0;
     elf64_dyn_t *dynamic = NULL;
     const char *interp_path = NULL;
 
@@ -435,7 +452,8 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
         if (ifile.data) {
             uint8_t *idata = (uint8_t *)ifile.data;
             elf64_ehdr_t *iehdr = (elf64_ehdr_t *)idata;
-            interp_base = 0x5000000000ULL;
+            // ASLR: randomize interpreter base
+            interp_base = 0x5000000000ULL + aslr_random_offset(0x40000);
             elf64_dyn_t *idynamic = NULL;
             load_elf_segments(ctx, idata, iehdr, interp_base, &idynamic);
             load_dependencies_and_relocate(ctx, idynamic, interp_base);
@@ -451,6 +469,7 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
     auxv[a++] = (elf64_auxv_t){AT_ENTRY, {.val = ehdr->entry + base_addr}};
     auxv[a++] = (elf64_auxv_t){AT_BASE, {.val = interp_base}};
     auxv[a++] = (elf64_auxv_t){AT_PAGESZ, {.val = 4096}};
+    auxv[a++] = (elf64_auxv_t){AT_RANDOM, {.val = aslr_random_offset(1)}};
     auxv[a++] = (elf64_auxv_t){AT_NULL, {.val = 0}};
 
     void *stack = vmalloc_user_ex(ctx, USER_STACK_SIZE);
@@ -487,7 +506,7 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     uint64_t irq;
     spin_lock_irqsave(&elf_lock, &irq);
     loaded_libraries = NULL;
-    next_so_base = 0x4000000000ULL;
+    next_so_base = 0x4000000000ULL + aslr_random_offset(0x10000);
     spin_unlock_irqrestore(&elf_lock, irq);
 
     if (devfs_device_exists(path))
@@ -507,7 +526,8 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     vmm_context_t *ctx = create_vmm_context();
     if (!ctx) return -ENOMEM;
 
-    uint64_t base_addr = (ehdr->type == ET_DYN) ? 0x100000000ULL : 0;
+    // ASLR: randomize PIE base address
+    uint64_t base_addr = (ehdr->type == ET_DYN) ? (0x100000000ULL + aslr_random_offset(0x40000)) : 0;
     elf64_dyn_t *dynamic = NULL;
     const char *interp_path = NULL;
 
@@ -539,7 +559,8 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
         if (ifile.data) {
             uint8_t *idata = (uint8_t *)ifile.data;
             elf64_ehdr_t *iehdr = (elf64_ehdr_t *)idata;
-            interp_base = 0x5000000000ULL;
+            // ASLR: randomize interpreter base
+            interp_base = 0x5000000000ULL + aslr_random_offset(0x40000);
             elf64_dyn_t *idynamic = NULL;
             load_elf_segments(ctx, idata, iehdr, interp_base, &idynamic);
             load_dependencies_and_relocate(ctx, idynamic, interp_base);
@@ -555,6 +576,7 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     auxv[a++] = (elf64_auxv_t){AT_ENTRY, {.val = ehdr->entry + base_addr}};
     auxv[a++] = (elf64_auxv_t){AT_BASE, {.val = interp_base}};
     auxv[a++] = (elf64_auxv_t){AT_PAGESZ, {.val = 4096}};
+    auxv[a++] = (elf64_auxv_t){AT_RANDOM, {.val = aslr_random_offset(1)}};
     auxv[a++] = (elf64_auxv_t){AT_NULL, {.val = 0}};
 
     void *stack = vmalloc_user_ex(ctx, USER_STACK_SIZE);

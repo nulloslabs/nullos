@@ -1,6 +1,7 @@
 #pragma once
 
 #include <freestanding/stdint.h>
+#include <freestanding/stdbool.h>
 
 /* Yes, I know this isn't consistent with the userspace sys/syscall.h but thats the LibC, not our problem :shrug: */
 
@@ -74,6 +75,17 @@
 #define SYS_fchmodat 268
 #define SYS_getsockopt 300
 #define SYS_setsockopt 301
+
+// User-space address boundary (x86_64 canonical boundary)
+#define USER_ADDR_MAX 0x0000800000000000ULL
+
+// Validate that [addr, addr+size) is entirely in user-space
+#define user_addr_ok(addr, size) \
+    ((uint64_t)(addr) < USER_ADDR_MAX && (uint64_t)(size) <= USER_ADDR_MAX - (uint64_t)(addr))
+
+// Validate that a user pointer is safe to dereference
+#define user_ptr_ok(ptr, size) \
+    user_addr_ok((uint64_t)(ptr), (uint64_t)(size))
 
 // Register frame passed to syscall_dispatch
 typedef struct {

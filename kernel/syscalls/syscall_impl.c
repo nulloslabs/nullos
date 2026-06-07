@@ -37,10 +37,23 @@
 #include <io/hpet.h>
 #include <io/sockets.h>
 
-static char stdin_buf[4096];
-static int stdin_buf_len = 0;
-static int stdin_buf_pos = 0;
+// Per-task stdin buffers (moved from global to task_t)
 static spinlock_t stdin_lock = SPINLOCK_INIT;
+
+// Safely copy a NUL-terminated string from user-space into a kernel buffer.
+// Returns 0 on success, -EFAULT if the pointer is invalid.
+static int copy_user_string(const char *user_str, char *kbuf, size_t kbuf_size) {
+    if (!user_str || !user_ptr_ok(user_str, 1)) return -EFAULT;
+    if (!kbuf || kbuf_size == 0) return -EFAULT;
+    for (size_t i = 0; i < kbuf_size - 1; i++) {
+        char c;
+        read_vmm(current_task_ptr->ctx, &c, (uint64_t)(user_str + i), 1);
+        kbuf[i] = c;
+        if (c == '\0') return 0;
+    }
+    kbuf[kbuf_size - 1] = '\0';
+    return 0;
+}
 
 #define MAX_MOUNTS 16
 
@@ -272,18 +285,25 @@ void sys_read(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     uint8_t *buf = (uint8_t *)frame->rsi;
     uint64_t count = frame->rdx;
-
+    
+    // Validate user buffer
+    if (count > 0 && !user_ptr_ok(buf, count)) { frame->rax = (uint64_t)-EFAULT; return; }
+    
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
-
+    
     if (fd == 0) {
+        // Use per-task stdin buffer
+        char *sbuf = current_task_ptr->stdin_buf;
+        int *sbuf_len = &current_task_ptr->stdin_buf_len;
+        int *sbuf_pos = &current_task_ptr->stdin_buf_pos;
         uint64_t irq;
         spin_lock_irqsave(&stdin_lock, &irq);
-        if (stdin_buf_pos >= stdin_buf_len) {
-            stdin_buf_len = 0;
-            stdin_buf_pos = 0;
+        if (*sbuf_pos >= *sbuf_len) {
+            *sbuf_len = 0;
+            *sbuf_pos = 0;
             spin_unlock_irqrestore(&stdin_lock, irq);
-
+    
             reset_term_line_start();
             while (1) {
                 current_task_ptr->state = TASK_READY;
@@ -291,37 +311,37 @@ void sys_read(syscall_frame_t *frame) {
                 char c = getc();
                 sched_lock = 1;
                 current_task_ptr->state = TASK_RUNNING;
-
+    
                 spin_lock_irqsave(&stdin_lock, &irq);
                 if (c == '\b' || c == 127) {
-                    if (stdin_buf_len > 0) {
-                        stdin_buf_len--;
+                    if (*sbuf_len > 0) {
+                        (*sbuf_len)--;
                         puts("\b \b");
                     }
                     spin_unlock_irqrestore(&stdin_lock, irq);
                     continue;
                 }
-
+    
                 if (c == '\n') {
                     putc(c);
-                    if (stdin_buf_len < (int)sizeof(stdin_buf)) {
-                        stdin_buf[stdin_buf_len++] = c;
+                    if (*sbuf_len < TASK_STDIN_BUF_SIZE) {
+                        sbuf[(*sbuf_len)++] = c;
                     }
                     spin_unlock_irqrestore(&stdin_lock, irq);
                     break;
                 }
-
-                if (stdin_buf_len < (int)sizeof(stdin_buf) - 1) {
+    
+                if (*sbuf_len < TASK_STDIN_BUF_SIZE - 1) {
                     putc(c);
-                    stdin_buf[stdin_buf_len++] = c;
+                    sbuf[(*sbuf_len)++] = c;
                 }
-                
+                    
                 spin_unlock_irqrestore(&stdin_lock, irq);
             }
             spin_lock_irqsave(&stdin_lock, &irq);
         }
-
-        uint64_t avail = (uint64_t)(stdin_buf_len - stdin_buf_pos);
+    
+        uint64_t avail = (uint64_t)(*sbuf_len - *sbuf_pos);
         uint64_t to_copy = (count < avail) ? count : avail;
         if (to_copy > 0) {
             char tmp[512];
@@ -329,10 +349,10 @@ void sys_read(syscall_frame_t *frame) {
             while (total_copied < to_copy) {
                 uint64_t chunk = to_copy - total_copied;
                 if (chunk > sizeof(tmp)) chunk = sizeof(tmp);
-                
-                memcpy(tmp, stdin_buf + stdin_buf_pos, chunk);
-                stdin_buf_pos += (int)chunk;
-                
+                    
+                memcpy(tmp, sbuf + *sbuf_pos, chunk);
+                *sbuf_pos += (int)chunk;
+                    
                 spin_unlock_irqrestore(&stdin_lock, irq);
                 write_vmm(current_task_ptr->ctx, (uint64_t)buf + total_copied, tmp, chunk);
                 total_copied += chunk;
@@ -341,7 +361,7 @@ void sys_read(syscall_frame_t *frame) {
         } else {
             spin_unlock_irqrestore(&stdin_lock, irq);
         }
-
+    
         frame->rax = to_copy;
         return;
     }
@@ -432,6 +452,7 @@ void sys_write(syscall_frame_t *frame) {
         if (!is_mounted_under(entry->path, "devfs", rel)) {
             frame->rax = (uint64_t)-ENODEV; return;
         }
+        if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
         uint8_t *kbuf = malloc(count);
         if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
         read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count);
@@ -444,6 +465,7 @@ void sys_write(syscall_frame_t *frame) {
 
     if (entry->type == FD_PTY_MASTER) {
         int idx = ptm_path_idx(entry->path);
+        if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
         uint8_t *kbuf = malloc(count);
         if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
         read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count);
@@ -454,6 +476,7 @@ void sys_write(syscall_frame_t *frame) {
     }
 
     if (entry->type == FD_PIPE || entry->type == FD_SOCKET) {
+        if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
         uint8_t *kbuf = malloc(count);
         if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
         read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count);
@@ -490,11 +513,15 @@ void sys_write(syscall_frame_t *frame) {
 }
 
 void sys_open(syscall_frame_t *frame) {
-    const char *path = (const char *)frame->rdi;
+    const char *user_path = (const char *)frame->rdi;
     uint32_t flags = (uint32_t)frame->rsi;
     mode_t mode = (mode_t)frame->rdx;
 
-    if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    char path[256];
+    int cr = copy_user_string(user_path, path, sizeof(path));
+    if (cr < 0) { frame->rax = (uint64_t)cr; return; }
 
     char abs_path[256];
     build_abs_path(path, abs_path, sizeof(abs_path));
@@ -558,10 +585,15 @@ void sys_close(syscall_frame_t *frame) {
 }
 
 void sys_stat(syscall_frame_t *frame) {
-    const char *path = (const char *)frame->rdi;
+    const char *user_path = (const char *)frame->rdi;
     struct stat *st = (struct stat *)frame->rsi;
 
-    if (!path || !st) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_path || !st) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_ptr_ok(st, sizeof(struct stat))) { frame->rax = (uint64_t)-EFAULT; return; }
+
+    char path[256];
+    int cr = copy_user_string(user_path, path, sizeof(path));
+    if (cr < 0) { frame->rax = (uint64_t)cr; return; }
 
     rootfs_file_t file = read_rootfs(path);
     if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
@@ -581,6 +613,7 @@ void sys_fstat(syscall_frame_t *frame) {
     struct stat *st = (struct stat *)frame->rsi;
 
     if (!st) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_ptr_ok(st, sizeof(struct stat))) { frame->rax = (uint64_t)-EFAULT; return; }
 
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
@@ -637,30 +670,66 @@ void sys_mmap(syscall_frame_t *frame) {
     size_t   length = (size_t)frame->rsi;
     int      prot   = (int)frame->rdx;
     int      flags  = (int)frame->r10;
-    // fd (r8) and offset (r9) ignored — anonymous only for now
+    int      fd     = (int)frame->r8;
+    uint64_t offset = frame->r9;
 
-    (void)addr; (void)flags;
+    // Validate addr if MAP_FIXED or hint provided
+    if (addr != 0 && !user_addr_ok(addr, length)) {
+        frame->rax = (uint64_t)-EINVAL;
+        return;
+    }
 
     if (length == 0) {
         frame->rax = (uint64_t)-EINVAL;
         return;
     }
-    if ((prot & 2) && (prot & 4)) {
+    if ((prot & PROT_WRITE) && (prot & PROT_EXEC)) {
         frame->rax = (uint64_t)-EACCES;
         return;
     }
 
     uint64_t num_pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
     uint64_t vmm_flags = VMM_USER;
-    if (prot & 2) vmm_flags |= VMM_WRITABLE;
-    if (!(prot & 4)) vmm_flags |= VMM_NX;
+    if (prot & PROT_WRITE) vmm_flags |= VMM_WRITABLE;
+    if (!(prot & PROT_EXEC)) vmm_flags |= VMM_NX;
 
+    // File-backed mapping
+    if (!(flags & MAP_ANONYMOUS) && fd >= 0) {
+        fd_entry_t *entry = get_current_fd(fd);
+        if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+
+        rootfs_file_t file = read_rootfs(entry->path);
+        if (!file.data && !file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
+
+        void *ptr = vmalloc_ex(current_task_ptr->ctx, num_pages * PAGE_SIZE, vmm_flags);
+        if (!ptr) { frame->rax = (uint64_t)-ENOMEM; return; }
+
+        // Copy file data into the mapping
+        uint64_t map_size = num_pages * PAGE_SIZE;
+        uint64_t file_avail = (file.size > offset) ? (file.size - offset) : 0;
+        uint64_t copy_len = (file_avail < map_size) ? file_avail : map_size;
+        if (copy_len > 0) {
+            write_vmm(current_task_ptr->ctx, (uint64_t)ptr,
+                      (uint8_t *)file.data + offset, copy_len);
+        }
+        // Zero the remaining bytes (BSS-like)
+        if (copy_len < map_size) {
+            memset_vmm(current_task_ptr->ctx, (uint64_t)ptr + copy_len,
+                       0, map_size - copy_len);
+        }
+        frame->rax = (uint64_t)ptr;
+        return;
+    }
+
+    // Anonymous mapping
     void *ptr = vmalloc_ex(current_task_ptr->ctx, num_pages * PAGE_SIZE, vmm_flags);
     if (!ptr) {
         frame->rax = (uint64_t)-ENOMEM;
         return;
     }
 
+    // Zero anonymous pages
+    memset_vmm(current_task_ptr->ctx, (uint64_t)ptr, 0, num_pages * PAGE_SIZE);
     frame->rax = (uint64_t)ptr;
 }
 
@@ -673,7 +742,12 @@ void sys_mprotect(syscall_frame_t *frame) {
         frame->rax = 0;
         return;
     }
-    if ((prot & 2) && (prot & 4)) {
+    // Ensure entire range is in user-space
+    if (!user_addr_ok(addr, length)) {
+        frame->rax = (uint64_t)-EINVAL;
+        return;
+    }
+    if ((prot & PROT_WRITE) && (prot & PROT_EXEC)) {
         frame->rax = (uint64_t)-EACCES;
         return;
     }
@@ -688,8 +762,8 @@ void sys_mprotect(syscall_frame_t *frame) {
             return;
         }
         uint64_t vmm_flags = VMM_USER;
-        if (prot & 2) vmm_flags |= VMM_WRITABLE;
-        if (!(prot & 4)) vmm_flags |= VMM_NX;
+        if (prot & PROT_WRITE) vmm_flags |= VMM_WRITABLE;
+        if (!(prot & PROT_EXEC)) vmm_flags |= VMM_NX;
         map_vmm(current_task_ptr->ctx, a, phys, vmm_flags);
     }
 
@@ -701,6 +775,11 @@ void sys_munmap(syscall_frame_t *frame) {
     size_t   length = (size_t)frame->rsi;
 
     if (length == 0) {
+        frame->rax = (uint64_t)-EINVAL;
+        return;
+    }
+    // Ensure entire range is in user-space
+    if (!user_addr_ok(addr, length)) {
         frame->rax = (uint64_t)-EINVAL;
         return;
     }
@@ -724,6 +803,17 @@ void sys_brk(syscall_frame_t *frame) {
         return;
     }
 
+    // Validate: new brk must be in user-space and above brk_start
+    if (!user_addr_ok(addr, 0)) {
+        frame->rax = current_task_ptr->brk;
+        return;
+    }
+    if (addr < current_task_ptr->brk_start) {
+        // Cannot shrink below initial heap start
+        frame->rax = current_task_ptr->brk;
+        return;
+    }
+
     // Align to page boundary
     uint64_t new_brk = (addr + 0xFFF) & ~0xFFFULL;
     uint64_t old_brk = (current_task_ptr->brk + 0xFFF) & ~0xFFFULL;
@@ -732,7 +822,13 @@ void sys_brk(syscall_frame_t *frame) {
         // Map new pages
         for (uint64_t a = old_brk; a < new_brk; a += 4096) {
             if (get_vmm_phys(current_task_ptr->ctx, a) == 0) {
-                map_vmm(current_task_ptr->ctx, a, (uint64_t)pmalloc(),
+                void *page = pmalloc();
+                if (!page) {
+                    // OOM - return current brk without updating
+                    frame->rax = current_task_ptr->brk;
+                    return;
+                }
+                map_vmm(current_task_ptr->ctx, a, (uint64_t)page,
                         VMM_USER | VMM_WRITABLE | VMM_NX);
                 memset_vmm(current_task_ptr->ctx, a, 0, 4096);
             }
@@ -851,10 +947,10 @@ void sys_ioctl(syscall_frame_t *frame) {
         return;
 
     case FIONREAD: {
-        // Report bytes available in stdin buffer; 0 for everything else
+        // Report bytes available in per-task stdin buffer; 0 for everything else
         uint64_t irq;
         spin_lock_irqsave(&stdin_lock, &irq);
-        int avail = (fd == 0) ? (stdin_buf_len - stdin_buf_pos) : 0;
+        int avail = (fd == 0) ? (current_task_ptr->stdin_buf_len - current_task_ptr->stdin_buf_pos) : 0;
         spin_unlock_irqrestore(&stdin_lock, irq);
         write_vmm(current_task_ptr->ctx, argp, &avail, sizeof(int));
         frame->rax = 0;
@@ -928,7 +1024,8 @@ void sys_fcntl(syscall_frame_t *frame) {
             frame->rax = (uint64_t)entry->flags;
             return;
         case F_SETFL:
-            entry->flags = (uint32_t)arg;
+            // Only allow setting safe flags
+            entry->flags = (entry->flags & ~F_SETFL_MASK) | ((uint32_t)arg & F_SETFL_MASK);
             frame->rax = 0;
             return;
         default:
@@ -945,6 +1042,7 @@ void sys_pipe(syscall_frame_t *frame) {
     int r;
 
     if (!pipefd) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_ptr_ok(pipefd, sizeof(int) * 2)) { frame->rax = (uint64_t)-EFAULT; return; }
     r = create_unix_pipe(&read_end, &write_end);
     if (r < 0) { frame->rax = (uint64_t)r; return; }
 
@@ -1015,6 +1113,7 @@ void sys_socketpair(syscall_frame_t *frame) {
     int r;
 
     if (!sv) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_ptr_ok(sv, sizeof(int) * 2)) { frame->rax = (uint64_t)-EFAULT; return; }
     r = create_unix_socketpair(domain, type, protocol, &a, &b);
     if (r < 0) { frame->rax = (uint64_t)r; return; }
 
@@ -1044,7 +1143,13 @@ void sys_bind(syscall_frame_t *frame) {
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
     if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
-    frame->rax = (uint64_t)bind_unix_socket((unix_handle_t *)entry->handle, addr, addrlen);
+    if (addrlen > 0 && !user_ptr_ok(addr, addrlen)) { frame->rax = (uint64_t)-EFAULT; return; }
+    // Copy sockaddr to kernel buffer for safe access
+    sockaddr_un_t kaddr;
+    memset(&kaddr, 0, sizeof(kaddr));
+    uint32_t copy_len = (addrlen < sizeof(kaddr)) ? addrlen : sizeof(kaddr);
+    read_vmm(current_task_ptr->ctx, &kaddr, (uint64_t)addr, copy_len);
+    frame->rax = (uint64_t)bind_unix_socket((unix_handle_t *)entry->handle, &kaddr, copy_len);
 }
 
 void sys_listen(syscall_frame_t *frame) {
@@ -1063,7 +1168,13 @@ void sys_connect(syscall_frame_t *frame) {
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
     if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
-    frame->rax = (uint64_t)connect_unix_socket((unix_handle_t *)entry->handle, addr, addrlen);
+    if (addrlen > 0 && !user_ptr_ok(addr, addrlen)) { frame->rax = (uint64_t)-EFAULT; return; }
+    // Copy sockaddr to kernel buffer for safe access
+    sockaddr_un_t kaddr;
+    memset(&kaddr, 0, sizeof(kaddr));
+    uint32_t copy_len = (addrlen < sizeof(kaddr)) ? addrlen : sizeof(kaddr);
+    read_vmm(current_task_ptr->ctx, &kaddr, (uint64_t)addr, copy_len);
+    frame->rax = (uint64_t)connect_unix_socket((unix_handle_t *)entry->handle, &kaddr, copy_len);
 }
 
 void sys_accept(syscall_frame_t *frame) {
@@ -1092,7 +1203,15 @@ void sys_sendto(syscall_frame_t *frame) {
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
     if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
-    frame->rax = (uint64_t)write_unix_handle((unix_handle_t *)entry->handle, buf, len, entry->flags);
+    if (len > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (len > 0 && !user_ptr_ok(buf, len)) { frame->rax = (uint64_t)-EFAULT; return; }
+    // Copy user data to kernel buffer before sending
+    uint8_t *kbuf = malloc(len);
+    if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
+    read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, len);
+    int64_t w = write_unix_handle((unix_handle_t *)entry->handle, kbuf, len, entry->flags);
+    free(kbuf);
+    frame->rax = (uint64_t)w;
 }
 
 void sys_recvfrom(syscall_frame_t *frame) {
@@ -1102,7 +1221,17 @@ void sys_recvfrom(syscall_frame_t *frame) {
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
     if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
-    frame->rax = (uint64_t)read_unix_handle((unix_handle_t *)entry->handle, buf, len, entry->flags);
+    if (len > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (len > 0 && !user_ptr_ok(buf, len)) { frame->rax = (uint64_t)-EFAULT; return; }
+    // Read into kernel buffer first, then copy to user
+    uint8_t *kbuf = malloc(len);
+    if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
+    int64_t got = read_unix_handle((unix_handle_t *)entry->handle, kbuf, len, entry->flags);
+    if (got > 0) {
+        write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, (size_t)got);
+    }
+    free(kbuf);
+    frame->rax = (uint64_t)got;
 }
 
 void sys_shutdown(syscall_frame_t *frame) {
@@ -1125,7 +1254,10 @@ void sys_getsockopt(syscall_frame_t *frame) {
 
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
     if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
-    if (level != SOL_SOCKET || !optval || !optlen) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (level != SOL_SOCKET) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_ptr_ok(optval, sizeof(int)) || !user_ptr_ok(optlen, sizeof(uint32_t))) {
+        frame->rax = (uint64_t)-EFAULT; return;
+    }
     if (optname == SO_ERROR) val = get_unix_socket_error((unix_handle_t *)entry->handle);
     else if (optname == SO_TYPE) val = get_unix_socket_type((unix_handle_t *)entry->handle);
     else { frame->rax = (uint64_t)-ENOPROTOOPT; return; }
@@ -1388,13 +1520,18 @@ void sys_fork(syscall_frame_t *frame) {
 }
 
 void sys_execve(syscall_frame_t *frame) {
-    const char *path = (const char *)frame->rdi;
+    const char *user_path = (const char *)frame->rdi;
     char **user_argv = (char **)frame->rsi;
     char **user_envp = (char **)frame->rdx;
 
-    if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
 
-    rootfs_file_t file = read_rootfs(path);
+    char path_buf[256];
+    if (copy_user_string(user_path, path_buf, sizeof(path_buf)) < 0) {
+        frame->rax = (uint64_t)-EFAULT; return;
+    }
+
+    rootfs_file_t file = read_rootfs(path_buf);
     if (file.mode && !can_access_rootfs(&file, 0, 0, 1)) {
         frame->rax = (uint64_t)-EACCES;
         return;
@@ -1406,7 +1543,7 @@ void sys_execve(syscall_frame_t *frame) {
     int argc = copy_user_strarray(user_argv, argv_ptrs, 63);
     int envc = copy_user_strarray(user_envp, envp_ptrs, 63);
 
-    int res = execve_elf(path, argv_ptrs, envp_ptrs, frame);
+    int res = execve_elf(path_buf, argv_ptrs, envp_ptrs, frame);
     if (res == 0) {
         current_task_ptr->fs_base = 0;
         current_task_ptr->gs_base = 0;
@@ -1609,6 +1746,7 @@ void sys_getdents(syscall_frame_t *frame) {
 
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+    if (!user_addr_ok(bufp, buflen)) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char dir_norm[256];
     strncpy(dir_norm, entry->path, sizeof(dir_norm) - 1);
@@ -1699,6 +1837,7 @@ void sys_getcwd(syscall_frame_t *frame) {
     uint64_t buflen = frame->rsi;
 
     if (!bufp || buflen == 0) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_addr_ok(bufp, buflen)) { frame->rax = (uint64_t)-EFAULT; return; }
 
     size_t cwd_len = strlen(current_task_ptr->cwd) + 1;
     if (cwd_len > buflen) { frame->rax = (uint64_t)-ERANGE; return; }
@@ -1708,11 +1847,16 @@ void sys_getcwd(syscall_frame_t *frame) {
 }
 
 void sys_chdir(syscall_frame_t *frame) {
-    const char *path = (const char *)frame->rdi;
-    if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
+    const char *user_path = (const char *)frame->rdi;
+    if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    char path_buf[256];
+    if (copy_user_string(user_path, path_buf, sizeof(path_buf)) < 0) {
+        frame->rax = (uint64_t)-EFAULT; return;
+    }
 
     char abs_path[256];
-    build_abs_path(path, abs_path, sizeof(abs_path));
+    build_abs_path(path_buf, abs_path, sizeof(abs_path));
 
     rootfs_file_t dir = read_rootfs(abs_path);
     if (!dir.data && !dir.mode) { frame->rax = (uint64_t)-ENOENT; return; }
@@ -1726,20 +1870,37 @@ void sys_chdir(syscall_frame_t *frame) {
 }
 
 void sys_mkdir(syscall_frame_t *frame) {
-    const char *path = (const char *)frame->rdi;
+    const char *user_path = (const char *)frame->rdi;
     mode_t mode = (mode_t)frame->rsi;
 
-    if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
 
-    frame->rax = (uint64_t)mkdir_rootfs(path, mode, current_task_ptr->euid, current_task_ptr->egid);
+    char path_buf[256];
+    if (copy_user_string(user_path, path_buf, sizeof(path_buf)) < 0) {
+        frame->rax = (uint64_t)-EFAULT; return;
+    }
+
+    frame->rax = (uint64_t)mkdir_rootfs(path_buf, mode, current_task_ptr->euid, current_task_ptr->egid);
 }
 
 void sys_chmod(syscall_frame_t *frame) {
-    const char *path = (const char *)frame->rdi;
+    const char *user_path = (const char *)frame->rdi;
     mode_t mode = (mode_t)frame->rsi;
-    if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
 
-    frame->rax = (uint64_t)chmod_rootfs(path, mode);
+    char path_buf[256];
+    if (copy_user_string(user_path, path_buf, sizeof(path_buf)) < 0) {
+        frame->rax = (uint64_t)-EFAULT; return;
+    }
+
+    // Permission check: only owner or root can chmod
+    rootfs_file_t file = read_rootfs(path_buf);
+    if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
+    if (current_task_ptr->euid != 0 && current_task_ptr->euid != file.uid) {
+        frame->rax = (uint64_t)-EPERM; return;
+    }
+
+    frame->rax = (uint64_t)chmod_rootfs(path_buf, mode);
 }
 
 void sys_fchmod(syscall_frame_t *frame) {
@@ -1847,11 +2008,16 @@ void sys_setegid(syscall_frame_t *frame) {
 }
 
 void sys_utime(syscall_frame_t *frame) {
-    const char *path = (const char *)frame->rdi;
-    if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
+    const char *user_path = (const char *)frame->rdi;
+    if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    char path_buf[256];
+    if (copy_user_string(user_path, path_buf, sizeof(path_buf)) < 0) {
+        frame->rax = (uint64_t)-EFAULT; return;
+    }
 
     char abs_path[256];
-    build_abs_path(path, abs_path, sizeof(abs_path));
+    build_abs_path(path_buf, abs_path, sizeof(abs_path));
 
     rootfs_file_t file = read_rootfs(abs_path);
     if (!file.data && !file.mode) {
@@ -1868,22 +2034,33 @@ void sys_arch_prctl(syscall_frame_t *frame) {
 
     switch (code) {
         case ARCH_SET_FS:
+            // Validate user-space address for FS base (TLS pointer)
+            if (addr != 0 && !user_addr_ok(addr, 1)) {
+                frame->rax = (uint64_t)-EPERM; return;
+            }
             current_task_ptr->fs_base = addr;
             write_msr(MSR_FS_BASE, addr);
             frame->rax = 0;
             return;
         case ARCH_GET_FS:
-            if (!addr) { frame->rax = (uint64_t)-EFAULT; return; }
+            if (!user_ptr_ok((void*)addr, sizeof(uint64_t))) {
+                frame->rax = (uint64_t)-EFAULT; return;
+            }
             write_vmm(current_task_ptr->ctx, addr, &current_task_ptr->fs_base, sizeof(uint64_t));
             frame->rax = 0;
             return;
         case ARCH_SET_GS:
+            if (addr != 0 && !user_addr_ok(addr, 1)) {
+                frame->rax = (uint64_t)-EPERM; return;
+            }
             current_task_ptr->gs_base = addr;
             write_msr(MSR_GS_BASE, addr);
             frame->rax = 0;
             return;
         case ARCH_GET_GS:
-            if (!addr) { frame->rax = (uint64_t)-EFAULT; return; }
+            if (!user_ptr_ok((void*)addr, sizeof(uint64_t))) {
+                frame->rax = (uint64_t)-EFAULT; return;
+            }
             write_vmm(current_task_ptr->ctx, addr, &current_task_ptr->gs_base, sizeof(uint64_t));
             frame->rax = 0;
             return;
@@ -1895,8 +2072,8 @@ void sys_arch_prctl(syscall_frame_t *frame) {
 
 void sys_mount(syscall_frame_t *frame) {
     const char *source = (const char *)frame->rdi;
-    const char *target = (const char *)frame->rsi;
-    const char *filesystemtype = (const char *)frame->rdx;
+    const char *user_target = (const char *)frame->rsi;
+    const char *user_fstype = (const char *)frame->rdx;
     unsigned long mountflags = (unsigned long)frame->r10;
     const void *data = (const void *)frame->r8;
 
@@ -1905,11 +2082,21 @@ void sys_mount(syscall_frame_t *frame) {
     bool priv = current_task_ptr && current_task_ptr->euid == 0;
     if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
 
-    if (!target || !filesystemtype || !*target || !*filesystemtype) {
+    if (!user_target || !user_fstype) {
         frame->rax = (uint64_t)-EINVAL; return;
     }
 
-    rootfs_file_t dir = read_rootfs(target);
+    char target_buf[64];
+    char fstype_buf[32];
+    if (copy_user_string(user_target, target_buf, sizeof(target_buf)) < 0 ||
+        copy_user_string(user_fstype, fstype_buf, sizeof(fstype_buf)) < 0) {
+        frame->rax = (uint64_t)-EFAULT; return;
+    }
+    if (!*target_buf || !*fstype_buf) {
+        frame->rax = (uint64_t)-EINVAL; return;
+    }
+
+    rootfs_file_t dir = read_rootfs(target_buf);
     if ((dir.mode & 0040000) == 0 && !dir.data) {
         frame->rax = (uint64_t)-ENOENT; return;
     }
@@ -1918,8 +2105,8 @@ void sys_mount(syscall_frame_t *frame) {
     spin_lock_irqsave(&vfs_lock, &irq);
     for (int i = 0; i < MAX_MOUNTS; i++) {
         if (!mounts[i].active) {
-            strncpy(mounts[i].path, target, 63); mounts[i].path[63] = '\0';
-            strncpy(mounts[i].filesystemtype, filesystemtype, 31); mounts[i].filesystemtype[31] = '\0';
+            strncpy(mounts[i].path, target_buf, 63); mounts[i].path[63] = '\0';
+            strncpy(mounts[i].filesystemtype, fstype_buf, 31); mounts[i].filesystemtype[31] = '\0';
             mounts[i].active = true;
             spin_unlock_irqrestore(&vfs_lock, irq);
             frame->rax = 0;
@@ -1931,18 +2118,23 @@ void sys_mount(syscall_frame_t *frame) {
 }
 
 void sys_umount(syscall_frame_t *frame) {
-    const char *target = (const char *)frame->rdi;
+    const char *user_target = (const char *)frame->rdi;
     (void)frame->rsi;
 
     bool priv = current_task_ptr && current_task_ptr->euid == 0;
     if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
 
-    if (!target) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_target) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    char target_buf[64];
+    if (copy_user_string(user_target, target_buf, sizeof(target_buf)) < 0) {
+        frame->rax = (uint64_t)-EFAULT; return;
+    }
 
     uint64_t irq;
     spin_lock_irqsave(&vfs_lock, &irq);
     for (int i = 0; i < MAX_MOUNTS; i++) {
-        if (mounts[i].active && strcmp(mounts[i].path, target) == 0) {
+        if (mounts[i].active && strcmp(mounts[i].path, target_buf) == 0) {
             mounts[i].active = false;
             spin_unlock_irqrestore(&vfs_lock, irq);
             frame->rax = 0;
@@ -1954,29 +2146,58 @@ void sys_umount(syscall_frame_t *frame) {
 }
 
 void sys_sethostname(syscall_frame_t *frame) {
-    const char *name = (const char *)frame->rdi;
+    const char *user_name = (const char *)frame->rdi;
     size_t len = (size_t)frame->rsi;
     bool priv = current_task_ptr && current_task_ptr->euid == 0;
     if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
-    frame->rax = set_hostname(name, len);
+    if (!user_name || len == 0 || len >= HOSTNAME_MAX_LEN) {
+        frame->rax = (uint64_t)-EINVAL; return;
+    }
+    if (!user_ptr_ok(user_name, len)) {
+        frame->rax = (uint64_t)-EFAULT; return;
+    }
+    // Copy hostname from user-space to kernel buffer
+    char name_buf[HOSTNAME_MAX_LEN];
+    read_vmm(current_task_ptr->ctx, name_buf, (uint64_t)user_name, len);
+    name_buf[len] = '\0';
+    frame->rax = set_hostname(name_buf, len);
 }
 
 void sys_gethostname(syscall_frame_t *frame) {
-    char *name = (char *)frame->rdi;
+    char *user_name = (char *)frame->rdi;
     size_t len = (size_t)frame->rsi;
-    frame->rax = get_hostname(name, len);
+    if (!user_name || len == 0) {
+        frame->rax = (uint64_t)-EINVAL; return;
+    }
+    if (!user_addr_ok((uint64_t)user_name, len)) {
+        frame->rax = (uint64_t)-EFAULT; return;
+    }
+    // get_hostname writes directly to a kernel buffer, then we copy to user
+    char name_buf[HOSTNAME_MAX_LEN];
+    int ret = get_hostname(name_buf, len < HOSTNAME_MAX_LEN ? len : HOSTNAME_MAX_LEN);
+    if (ret == 0) {
+        size_t copy_len = strlen(name_buf) + 1;
+        if (copy_len > len) copy_len = len;
+        write_vmm(current_task_ptr->ctx, (uint64_t)user_name, name_buf, copy_len);
+    }
+    frame->rax = (uint64_t)ret;
 }
 
 void sys_openat(syscall_frame_t *frame) {
     int dirfd = (int)frame->rdi;
-    const char *path = (const char *)frame->rsi;
+    const char *user_path = (const char *)frame->rsi;
     uint32_t flags = (uint32_t)frame->rdx;
     mode_t mode = (mode_t)frame->r10;
 
-    if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    char path_buf[256];
+    if (copy_user_string(user_path, path_buf, sizeof(path_buf)) < 0) {
+        frame->rax = (uint64_t)-EFAULT; return;
+    }
 
     char abs_path[256];
-    int res = build_abs_path_at(dirfd, path, abs_path, sizeof(abs_path));
+    int res = build_abs_path_at(dirfd, path_buf, abs_path, sizeof(abs_path));
     if (res < 0) { frame->rax = (uint64_t)res; return; }
 
     char rel_path[256];
@@ -2032,17 +2253,29 @@ void sys_openat(syscall_frame_t *frame) {
 
 void sys_fchmodat(syscall_frame_t *frame) {
     int dirfd = (int)frame->rdi;
-    const char *path = (const char *)frame->rsi;
+    const char *user_path = (const char *)frame->rsi;
     mode_t mode = (mode_t)frame->rdx;
     int flags = (int)frame->r10;
 
     (void)flags;
 
-    if (!path) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    char path_buf[256];
+    if (copy_user_string(user_path, path_buf, sizeof(path_buf)) < 0) {
+        frame->rax = (uint64_t)-EFAULT; return;
+    }
 
     char abs_path[256];
-    int res = build_abs_path_at(dirfd, path, abs_path, sizeof(abs_path));
+    int res = build_abs_path_at(dirfd, path_buf, abs_path, sizeof(abs_path));
     if (res < 0) { frame->rax = (uint64_t)res; return; }
+
+    // Permission check: only owner or root can chmod
+    rootfs_file_t file = read_rootfs(abs_path);
+    if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
+    if (current_task_ptr->euid != 0 && current_task_ptr->euid != file.uid) {
+        frame->rax = (uint64_t)-EPERM; return;
+    }
 
     frame->rax = (uint64_t)chmod_rootfs(abs_path, mode);
 }

@@ -277,6 +277,12 @@ vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
     vmm_context_t* child = create_vmm_context();
     if (!child) return NULL;
 
+    // Track allocated pages for rollback on failure
+    #define CLONE_MAX_PAGES 65536
+    static uint64_t rollback_phys[CLONE_MAX_PAGES];
+    static uint64_t rollback_virt[CLONE_MAX_PAGES];
+    int rollback_count = 0;
+
     // Traverse the parent's page tables and copy all user pages (indices 0-255)
     for (uint64_t pml4_i = 0; pml4_i < 256; pml4_i++) {
         if (!(parent->pml4[pml4_i] & VMM_PRESENT)) continue;
@@ -284,36 +290,39 @@ vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
 
         for (uint64_t pdpt_i = 0; pdpt_i < 512; pdpt_i++) {
             if (!(pdpt[pdpt_i] & VMM_PRESENT)) continue;
-            // Assuming no 1GB pages in user space
             uint64_t* pd = (uint64_t*)phys_to_virt(pdpt[pdpt_i] & ~0xFFFULL);
 
             for (uint64_t pd_i = 0; pd_i < 512; pd_i++) {
                 if (!(pd[pd_i] & VMM_PRESENT)) continue;
-                // Assuming no 2MB pages in user space mapping (vmm_map only makes 4K pages)
                 uint64_t* pt = (uint64_t*)phys_to_virt(pd[pd_i] & ~0xFFFULL);
 
                 for (uint64_t pt_i = 0; pt_i < 512; pt_i++) {
                     uint64_t entry = pt[pt_i];
                     if (!(entry & VMM_PRESENT)) continue;
-                    if (!(entry & VMM_USER)) continue; // Only copy user pages
+                    if (!(entry & VMM_USER)) continue;
 
-                    // Calculate the original virtual address
                     uint64_t virt = (pml4_i << 39) | (pdpt_i << 30) | (pd_i << 21) | (pt_i << 12);
 
-                    // Allocate a new physical page for the child
                     void* new_phys = pmalloc();
                     if (!new_phys) {
-                        // In a real OS, we should rollback and free everything. 
-                        // For now, just return what we have or crash.
+                        // Rollback: free all allocated pages and destroy child context
+                        for (int r = 0; r < rollback_count; r++) {
+                            unmap_vmm(child, rollback_virt[r]);
+                            pfree((void*)rollback_phys[r]);
+                        }
+                        free(child);
                         return NULL;
                     }
 
-                    // Copy the 4KB data from the parent's physical page to the new one
+                    if (rollback_count < CLONE_MAX_PAGES) {
+                        rollback_phys[rollback_count] = (uint64_t)new_phys;
+                        rollback_virt[rollback_count] = virt;
+                        rollback_count++;
+                    }
+
                     uint64_t old_phys = entry & 0x000ffffffffff000ULL;
                     memcpy(phys_to_virt((uint64_t)new_phys), phys_to_virt(old_phys), PAGE_SIZE);
 
-                    // Map it in the child context exactly identically
-                    // vmm_map will automatically allocate the required intermediate tables
                     uint64_t flags = entry & (0xFFFULL | VMM_NX);
                     map_vmm(child, virt, (uint64_t)new_phys, flags & ~VMM_PRESENT);
                 }
@@ -321,6 +330,7 @@ vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
         }
     }
 
+    #undef CLONE_MAX_PAGES
     return child;
 }
 
@@ -333,29 +343,36 @@ void* vmalloc_ex(vmm_context_t* ctx, size_t size, uint64_t flags) {
     uint64_t flags_irq;
     spin_lock_irqsave(&vmm_lock, &flags_irq);
     
-    // Check if another vmalloc on another core moved the cursor while we waited
     uint64_t *cursor = (flags & VMM_USER) ? &vuser_cursor : &vmalloc_cursor;
     void* start_addr = (void*)*cursor;
-    
-    // We reserve the virtual address space immediately so it's thread-safe
     *cursor += (num_pages * PAGE_SIZE);
     
     spin_unlock_irqrestore(&vmm_lock, flags_irq);
 
     void* first_phys = NULL;
     uint64_t curr_addr = (uint64_t)start_addr;
+    uint64_t mapped_count = 0;
 
     for (uint64_t i = 0; i < num_pages; i++) {
         void* phys = pmalloc();
-        if (!phys) return NULL; 
+        if (!phys) {
+            // Rollback: unmap and free all previously allocated pages
+            uint64_t rollback_addr = (uint64_t)start_addr;
+            for (uint64_t j = 0; j < mapped_count; j++) {
+                uint64_t rphys = get_vmm_phys(ctx, rollback_addr);
+                if (rphys) pfree((void*)rphys);
+                unmap_vmm(ctx, rollback_addr);
+                rollback_addr += PAGE_SIZE;
+            }
+            return NULL;
+        }
         if (i == 0) first_phys = phys;
 
         map_vmm(ctx, curr_addr, (uint64_t)phys, flags | VMM_PRESENT);
         curr_addr += PAGE_SIZE;
+        mapped_count++;
     }
 
-    // Heed the warning: 'start_addr' is a virtual address in 'ctx', which might 
-    // not be the current address space. Use HHDM to write the header directly.
     vmalloc_header_t* header = (vmalloc_header_t*)phys_to_virt((uint64_t)first_phys);
     header->page_count = num_pages;
 

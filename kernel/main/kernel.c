@@ -38,7 +38,7 @@
 #include <io/pty.h>
 // Lets never do that again.
 
-void kmain(void) {
+void kmain(uint64_t load_offset) {
     cli();
     clrscr();
     init_default_font();

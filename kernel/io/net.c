@@ -25,12 +25,13 @@ uint16_t net_checksum(const void *data, size_t len) {
 }
 
 // Transport pseudo-header checksum (TCP and UDP)
+// Uses heap allocation to avoid VLA stack overflow
 static uint16_t transport_checksum(uint32_t src_ip, uint32_t dst_ip,
                                     uint8_t proto,
                                     const void *hdr, uint16_t total_len) {
-    // Allocate pseudo header + transport header + data on stack
-    // max segment size is bounded so this is safe
-    uint8_t pseudo[12 + total_len];
+    size_t buf_size = 12 + total_len;
+    uint8_t *pseudo = (uint8_t *)malloc(buf_size);
+    if (!pseudo) return 0; // OOM: return 0 checksum (best effort)
     memcpy(pseudo + 0, &src_ip, 4);
     memcpy(pseudo + 4, &dst_ip, 4);
     pseudo[8]  = 0;
@@ -38,7 +39,9 @@ static uint16_t transport_checksum(uint32_t src_ip, uint32_t dst_ip,
     uint16_t tlen_be = htons(total_len);
     memcpy(pseudo + 10, &tlen_be, 2);
     memcpy(pseudo + 12, hdr, total_len);
-    return net_checksum(pseudo, sizeof(pseudo));
+    uint16_t cksum = net_checksum(pseudo, buf_size);
+    free(pseudo);
+    return cksum;
 }
 
 
@@ -231,7 +234,9 @@ void udp_rx(const uint8_t *frame, uint16_t len) {
     const ipv4_hdr_t *ip = (const ipv4_hdr_t *)(frame + 14);
     if (ip->protocol != IP_PROTO_UDP) return;
     const udp_hdr_t *udp = (const udp_hdr_t *)(frame + 14 + (ip->ihl_ver & 0xF) * 4);
-    uint16_t data_len = ntohs(udp->length) - sizeof(udp_hdr_t);
+    uint16_t udp_total = ntohs(udp->length);
+    if (udp_total < sizeof(udp_hdr_t)) return; // Malformed: length too small
+    uint16_t data_len = udp_total - sizeof(udp_hdr_t);
     const uint8_t *payload = (const uint8_t *)(udp + 1);
     
     uint64_t irq;
@@ -527,7 +532,8 @@ tcp_socket_t *tcp_connect(uint32_t remote_ip, uint16_t remote_port) {
     sock->remote_ip   = remote_ip;
     sock->remote_port = remote_port;
     sock->local_port  = tcp_alloc_port();
-    sock->local_seq   = 0xA1B2C3D4;  // initial sequence number
+    sock->local_seq   = (uint32_t)(read_hpet_counter() ^ (read_hpet_counter() >> 17)); // random ISN
+    if (sock->local_seq == 0) sock->local_seq = 1;
     sock->state       = TCP_SYN_SENT;
     sock->remote_window = 1024;
 

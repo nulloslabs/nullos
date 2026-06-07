@@ -276,16 +276,13 @@ static void get_norm_path(const char *path, char *out_norm, size_t out_size) {
     normalize_path(resolved_path, out_norm, out_size);
 }
 
-rootfs_file_t read_rootfs(const char *path) {
-    static int depth = 0;
-
+static rootfs_file_t read_rootfs_internal(const char *path, int depth) {
     char norm[256];
     get_norm_path(path, norm, sizeof(norm));
 
     rootfs_file_t result = { .data = NULL, .size = 0, .mode = 0, .uid = 0, .gid = 0 };
 
     if (depth >= 8) return result;
-    depth++;
 
     // 1. Check overlay
     for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
@@ -295,14 +292,12 @@ rootfs_file_t read_rootfs(const char *path) {
             result.mode = modified_files[i].mode;
             result.uid = modified_files[i].uid;
             result.gid = modified_files[i].gid;
-            depth--;
             return result;
         }
     }
 
     // 2. Check TAR archive (exact match + trailing slash tolerance)
     if (tar_archive_start == NULL) {
-        depth--;
         return result;
     }
 
@@ -330,8 +325,7 @@ rootfs_file_t read_rootfs(const char *path) {
                 
                 char resolved_abs[256];
                 resolve_link_target(current_abs, target, resolved_abs, sizeof(resolved_abs));
-                depth--;
-                return read_rootfs(resolved_abs);
+                return read_rootfs_internal(resolved_abs, depth + 1);
             }
             if (type == '0' || type == '\0' || type == '5') {
                 result.size = size;
@@ -339,15 +333,17 @@ rootfs_file_t read_rootfs(const char *path) {
                 result.mode = (type == '5') ? (mode | 0040000) : mode;
                 result.uid = uid;
                 result.gid = gid;
-                depth--;
                 return result;
             }
         }
         ptr += 512 + (size + 511) / 512 * 512; // Add padding
     }
 
-    depth--;
     return result;
+}
+
+rootfs_file_t read_rootfs(const char *path) {
+    return read_rootfs_internal(path, 0);
 }
 
 int write_rootfs(const char *path, const void *data, uint64_t size, uint32_t mode, uid_t uid, gid_t gid) {

@@ -9,6 +9,7 @@
 #define MAX_TASKS 64
 #define USER_STACK_SIZE (4 * 1024 * 1024)
 #define KERNEL_STACK_SIZE 32768
+#define TASK_STDIN_BUF_SIZE 256
 
 typedef struct {
     pid_t pid;
@@ -31,6 +32,10 @@ typedef struct {
     int exit_status;
     uint64_t fs_base;
     uint64_t gs_base;
+    // Per-task stdin buffer (fixes shared stdin vulnerability)
+    char stdin_buf[TASK_STDIN_BUF_SIZE];
+    int stdin_buf_len;
+    int stdin_buf_pos;
 } __attribute__((aligned(16))) task_t;
 
 #define TASK_DEAD 0

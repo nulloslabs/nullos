@@ -129,6 +129,7 @@ typedef struct {
 #define AT_BASE   7
 #define AT_FLAGS  8
 #define AT_ENTRY  9
+#define AT_RANDOM 25
 
 typedef struct {
     uint64_t type;
