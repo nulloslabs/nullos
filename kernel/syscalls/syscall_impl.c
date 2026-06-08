@@ -307,9 +307,10 @@ void sys_read(syscall_frame_t *frame) {
             reset_term_line_start();
             while (1) {
                 current_task_ptr->state = TASK_READY;
-                sched_lock = 0;
+                spin_unlock(&sched_lock);
                 char c = getc();
-                sched_lock = 1;
+                spin_lock(&sched_lock);
+
                 current_task_ptr->state = TASK_RUNNING;
     
                 spin_lock_irqsave(&stdin_lock, &irq);
@@ -1618,9 +1619,9 @@ void sys_wait4(syscall_frame_t *frame) {
         // skips context switching when sched_lock != 0. So we must
         // temporarily drop the lock before yielding.
         current_task_ptr->state = TASK_READY;
-        sched_lock = 0;
+        spin_unlock(&sched_lock);
         asm volatile("int $32");
-        sched_lock = 1;
+        spin_lock(&sched_lock);
     }
 }
 

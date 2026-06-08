@@ -48,13 +48,13 @@ void kmain(uint64_t load_offset) {
     init_idt();
     remap_pic();
     init_mm();
+    init_pmm();
+    init_vmm();
     init_rootfs();
     init_devfs();
     init_ttys();
     init_ptys();
     show_cursor(true);
-    init_pmm();
-    init_vmm();
     init_acpi();
     parse_madt();
     detect_apic();

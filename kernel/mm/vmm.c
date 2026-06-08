@@ -445,13 +445,7 @@ void vfree(void* ptr) {
     uint64_t virt = (uintptr_t)header;
 
     for (uint64_t i = 0; i < header->page_count; i++) {
-        // Get the physical address
-        uint64_t phys = get_vmm_phys(&kernel_context, virt + (i * PAGE_SIZE));
-        
-        // Free the physical page
-        if (phys) {
-            pfree((void*)phys);
-        }
+        unmap_vmm(&kernel_context, virt + (i * PAGE_SIZE));
     }
 }
 

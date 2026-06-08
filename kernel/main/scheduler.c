@@ -16,8 +16,10 @@
 task_t tasks[MAX_TASKS];
 int current_task = 0;
 task_t* current_task_ptr = &tasks[0];
-volatile int sched_lock = 0;
 static spinlock_t task_lock = SPINLOCK_INIT;
+
+// Let's keep this public and not private, other functions change it.
+spinlock_t sched_lock = SPINLOCK_INIT;
 
 static void idle_task(void) { idle(); }
 
@@ -266,7 +268,8 @@ void exit_task(int status) {
         panic("init process exited");
     }
 
-    sched_lock = 0;
+    spin_unlock(&sched_lock);
+    sti();
     asm volatile("int $32");
 
     idle();

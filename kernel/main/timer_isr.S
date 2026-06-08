@@ -3,10 +3,11 @@
 
 .extern schedule
 .extern current_task_ptr
-.extern sched_lock
 .extern current_apic_mode
 .extern lapic_base
 .extern poll_usb_hcds
+// The spinlock for the scheduler is just a uint32_t
+.extern sched_lock
 
 isr32:
     // save registers
@@ -43,17 +44,16 @@ isr32:
     mov ds, ax
     mov es, ax
 
-    // poll USB
-    push rsp
-    push [rsp]
-    and rsp, -16
-    call poll_usb_hcds
-    mov rsp, [rsp + 8]
-
     // scheduler
     mov eax, [rip + sched_lock]
     test eax, eax
     jnz .skip_switch
+
+    // poll USB (only if we are allowed to switch/preempt)
+    mov rbx, rsp
+    and rsp, -16
+    call poll_usb_hcds
+    mov rsp, rbx
 
     mov rbx, [rip + current_task_ptr]
     mov [rbx + 24], rsp

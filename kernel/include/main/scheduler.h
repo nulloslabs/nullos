@@ -3,6 +3,7 @@
 #include <freestanding/stdint.h>
 #include <freestanding/sys/types.h>
 #include <main/fd.h>
+#include <main/spinlock.h>
 #include <mm/vmm.h>
 #include <syscalls/syscalls.h>
 
@@ -32,7 +33,7 @@ typedef struct {
     int exit_status;
     uint64_t fs_base;
     uint64_t gs_base;
-    // Per-task stdin buffer (fixes shared stdin vulnerability)
+    // Per-task stdin buffer (for security)
     char stdin_buf[TASK_STDIN_BUF_SIZE];
     int stdin_buf_len;
     int stdin_buf_pos;
@@ -47,7 +48,7 @@ typedef struct {
 extern task_t tasks[MAX_TASKS];
 extern int current_task;
 extern task_t* current_task_ptr;
-extern volatile int sched_lock;
+extern spinlock_t sched_lock;
 
 void init_scheduler(void);
 pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_t initial_rsp);

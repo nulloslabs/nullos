@@ -33,11 +33,18 @@ syscall_entry:
     mov rbx, rsp
     and rsp, -16
     
-    mov dword ptr [rip + sched_lock], 1
+.Llock_loop:
+    lock bts dword ptr [rip + sched_lock], 0
+    jnc .Llock_done
+    pause
+    jmp .Llock_loop
+.Llock_done:
+    
     sti
     call syscall_dispatch
     cli
-    mov dword ptr [rip + sched_lock], 0
+    
+    lock btr dword ptr [rip + sched_lock], 0
     
     mov rsp, rbx           // restore RSP for pops
 

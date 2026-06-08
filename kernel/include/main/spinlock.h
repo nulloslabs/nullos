@@ -2,9 +2,9 @@
 
 #include <freestanding/stdint.h>
 
-typedef volatile uint32_t spinlock_t;
-
 #define SPINLOCK_INIT 0
+
+typedef volatile uint32_t spinlock_t;
 
 void spin_lock(spinlock_t *lock);
 void spin_unlock(spinlock_t *lock);
