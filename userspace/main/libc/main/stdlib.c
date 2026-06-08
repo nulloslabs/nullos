@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <limits.h>
+#include <signal.h>
 #include <sys/mman.h>
 
 #define ALIGN 16
@@ -60,6 +61,11 @@ __attribute__((noreturn)) void exit(int status) {
     fflush(NULL); // Flush file descriptors
     _Exit(status);
     __builtin_unreachable();
+}
+
+__attribute__((noreturn)) void abort(void) {
+    raise(SIGABRT);
+    _exit(128 + SIGABRT);
 }
 
 long strtol(const char *s, char **endptr, int base) {

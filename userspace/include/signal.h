@@ -21,6 +21,7 @@ extern "C" {
 #define SIGTSTP 20
 
 int kill(pid_t pid, int sig);
+int raise(int sig);
 
 #ifdef __cplusplus
 }

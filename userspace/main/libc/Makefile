@@ -9,8 +9,8 @@ endif
 
 include ../../config.mk
 
-SUBDIRS = main sys netinet
-ALL_OBJ = $(wildcard */*.o)
+SUBDIRS = main netinet ssp sys
+OBJ = $(wildcard */*.o)
 
 all: $(SUBDIRS) libc
 
