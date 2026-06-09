@@ -1,6 +1,7 @@
 #include <freestanding/stdint.h>
 #include <freestanding/stddef.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/cpuid.h>
 #include <main/string.h>
 #include <main/machine_info.h>
 #include <io/hpet.h>
@@ -15,18 +16,12 @@ static uint64_t round_up_ram(uint64_t x) {
     }
 }
 
-static void cpuid(uint32_t leaf, uint32_t subleaf, uint32_t *eax, uint32_t *ebx, uint32_t *ecx, uint32_t *edx) {
-    asm volatile("cpuid"
-        : "=a"(*eax), "=b"(*ebx), "=c"(*ecx), "=d"(*edx)
-        : "a"(leaf), "c"(subleaf));
-}
-
 const char* get_cpu_name(void) {
     static char buf[49] = {0};
     if (buf[0]) return buf;
     uint32_t eax, ebx, ecx, edx;
     for (int i = 0; i < 3; i++) {
-        cpuid(0x80000002 + i, 0, &eax, &ebx, &ecx, &edx);
+        __cpuid(0x80000002 + i, eax, ebx, ecx, edx);
         memcpy(buf + i * 16 + 0,  &eax, 4);
         memcpy(buf + i * 16 + 4,  &ebx, 4);
         memcpy(buf + i * 16 + 8,  &ecx, 4);
@@ -40,7 +35,7 @@ const char* get_cpu_vendor(void) {
     static char buf[13] = {0};
     if (buf[0]) return buf;
     uint32_t eax, ebx, ecx, edx;
-    cpuid(0, 0, &eax, &ebx, &ecx, &edx);
+    __cpuid(0, eax, ebx, ecx, edx);
     memcpy(buf + 0, &ebx, 4);
     memcpy(buf + 4, &edx, 4);
     memcpy(buf + 8, &ecx, 4);
@@ -52,10 +47,9 @@ uint32_t get_cpu_family(void) {
     static uint32_t cached = 0;
     if (cached) return cached;
     uint32_t eax, ebx, ecx, edx;
-    cpuid(1, 0, &eax, &ebx, &ecx, &edx);
+    __cpuid(1, eax, ebx, ecx, edx);
     uint32_t family = (eax >> 8) & 0xF;
-    if (family == 0xF)
-        family += (eax >> 20) & 0xFF;
+    if (family == 0xF) family += (eax >> 20) & 0xFF;
     cached = family;
     return cached;
 }
@@ -64,11 +58,10 @@ uint32_t get_cpu_model(void) {
     static uint32_t cached = 0;
     if (cached) return cached;
     uint32_t eax, ebx, ecx, edx;
-    cpuid(1, 0, &eax, &ebx, &ecx, &edx);
+    __cpuid(1, eax, ebx, ecx, edx);
     uint32_t model  = (eax >> 4) & 0xF;
     uint32_t family = (eax >> 8) & 0xF;
-    if (family == 0x6 || family == 0xF)
-        model |= ((eax >> 16) & 0xF) << 4;
+    if (family == 0x6 || family == 0xF) model |= ((eax >> 16) & 0xF) << 4;
     cached = model;
     return cached;
 }
@@ -77,7 +70,7 @@ uint32_t get_cpu_stepping(void) {
     static uint32_t cached = 0;
     if (cached) return cached;
     uint32_t eax, ebx, ecx, edx;
-    cpuid(1, 0, &eax, &ebx, &ecx, &edx);
+    __cpuid(1, eax, ebx, ecx, edx);
     cached = eax & 0xF;
     return cached;
 }
@@ -86,9 +79,9 @@ uint32_t get_cpu_cores(void) {
     static uint32_t cached = 0;
     if (cached) return cached;
     uint32_t eax, ebx, ecx, edx;
-    cpuid(0xB, 1, &eax, &ebx, &ecx, &edx);
+    __cpuid_count(0xB, 1, eax, ebx, ecx, edx);
     if (ebx != 0) { cached = ebx & 0xFFFF; return cached; }
-    cpuid(1, 0, &eax, &ebx, &ecx, &edx);
+    __cpuid(1, eax, ebx, ecx, edx);
     cached = (ebx >> 16) & 0xFF;
     return cached;
 }
@@ -97,9 +90,9 @@ uint32_t get_cpu_threads(void) {
     static uint32_t cached = 0;
     if (cached) return cached;
     uint32_t eax, ebx, ecx, edx;
-    cpuid(0xB, 0, &eax, &ebx, &ecx, &edx);
+    __cpuid(0xB, eax, ebx, ecx, edx);
     if (ebx != 0) { cached = ebx & 0xFFFF; return cached; }
-    cpuid(1, 0, &eax, &ebx, &ecx, &edx);
+    __cpuid(1, eax, ebx, ecx, edx);
     cached = (ebx >> 16) & 0xFF;
     return cached;
 }
@@ -113,11 +106,11 @@ uint32_t get_cpu_freq(void) {
     for (int i = 0; i < 5; i++) {
         uint64_t start = read_hpet_counter();
         uint64_t tsc_start;
-        asm volatile("rdtsc" : "=A"(tsc_start));
+        __asm__ volatile("rdtsc" : "=A"(tsc_start));
         uint64_t ticks = (uint64_t)freq_mhz * 70000;
         while (read_hpet_counter() - start < ticks);
         uint64_t tsc_end;
-        asm volatile("rdtsc" : "=A"(tsc_end));
+        __asm__ volatile("rdtsc" : "=A"(tsc_end));
         samples[i] = (uint32_t)((tsc_end - tsc_start) / 70000);
     }
     uint64_t sum = 0;
@@ -131,11 +124,11 @@ bool cpu_has_feature(cpu_feature_t feature) {
     static bool initialized = false;
     if (!initialized) {
         uint32_t eax, ebx, ecx, edx;
-        cpuid(1, 0, &eax, &ebx, &ecx1, &edx1);
-        cpuid(7, 0, &eax, &ebx7, &ecx, &edx);
-        cpuid(0x80000000, 0, &eax, &ebx, &ecx, &edx);
+        __cpuid(1, eax, ebx, ecx1, edx1);
+        __cpuid(7, eax, ebx7, ecx, edx);
+        __cpuid(0x80000000, eax, ebx, ecx, edx);
         if (eax >= 0x80000001) {
-            cpuid(0x80000001, 0, &eax, &ebx, &ecx, &edx_ext1);
+            __cpuid(0x80000001, eax, ebx, ecx, edx_ext1);
         }
         initialized = true;
     }

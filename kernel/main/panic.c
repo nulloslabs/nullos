@@ -11,7 +11,7 @@ __attribute__((noreturn)) void panic(const char *reason) {
     cli();
     uint64_t rip = (uint64_t)__builtin_return_address(0);
     uint64_t rsp;
-    asm volatile("mov %%rsp, %0" : "=r"(rsp));
+    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
     printf("kernel panic: %s\n", reason);
     printf("\nregisters:\n");
     printf(" rip: %p\n", rip);
@@ -29,7 +29,13 @@ __attribute__((noreturn)) void exception_panic(uint64_t vector, uint64_t rip, ui
         case 7: reason = "an instruction tried to access a device that was not available"; break;
         case 8: reason = "a double fault occurred"; break;
         case 13: reason = "a general protection fault occurred"; break;
-        case 14: reason = "a page fault occurred"; break;
+        case 14: {
+            uint64_t cr2;
+            __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+            printf("faulting address (CR2): %p\n", cr2);
+            reason = "a page fault occurred";
+            break;
+        }
         case 30: reason = "a security exception occurred"; break;
         case 512: reason = "a reserved exception was called (how the fuck do you mess up that bad)"; break;
         default: reason = "an unknown exception occurred"; break;

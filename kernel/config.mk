@@ -9,7 +9,7 @@ else
 	CC = x86_64-linux-gnu-gcc
 endif
 
-CFLAGS = -Wall -m64 -I../include/ -ffreestanding -nostdlib -nostdinc -fno-builtin -nodefaultlibs -nostartfiles -fno-stack-protector -fno-pic -fno-pie -no-pie -fno-lto -fno-stack-check -mno-red-zone -mcmodel=kernel -mno-red-zone -mcmodel=kernel -mno-80387 -mno-mmx -mabi=sysv -MMD -MP -std=gnu99 -mfpmath=sse -march=x86-64 -mtune=generic
+CFLAGS = -Wall -m64 -I../include/ -ffreestanding -nostdlib -nostdinc -fno-builtin -nodefaultlibs -nostartfiles -fno-stack-protector -fno-pic -fno-pie -no-pie -fno-lto -fno-stack-check -mno-red-zone -mcmodel=kernel -mno-red-zone -mcmodel=kernel -mno-80387 -mno-mmx -mabi=sysv -MMD -MP -std=c99 -mfpmath=sse -march=x86-64 -mtune=generic
 
 # No need for if checks here...
 AS = $(CC)

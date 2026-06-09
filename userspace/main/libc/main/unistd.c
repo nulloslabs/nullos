@@ -43,10 +43,10 @@ int64_t syscall(int64_t num, ...) {
     va_end(args);
     int64_t ret;
 
-    register int64_t r10 asm("r10") = a4;
-    register int64_t r8 asm("r8") = a5;
-    register int64_t r9 asm("r9") = a6;
-    asm volatile (
+    register int64_t r10 __asm__ ("r10") = a4;
+    register int64_t r8 __asm__ ("r8") = a5;
+    register int64_t r9 __asm__ ("r9") = a6;
+    __asm__ volatile (
         "syscall"
         : "=a"(ret)
         : "a"(num),

@@ -64,7 +64,7 @@ static void poll_ac97(void) {
 
         // --- THE CRITICAL FIX ---
         // 1. Tell the compiler/CPU to flush memory to RAM
-        asm volatile("mfence" ::: "memory");
+        __asm__ volatile("mfence" ::: "memory");
 
         // 2. Update LVI to be ahead of where we are, but not "behind" us.
         // Set LVI to the index we just refilled.

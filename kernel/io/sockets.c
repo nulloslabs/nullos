@@ -11,7 +11,7 @@ static unix_binding_t bindings[UNIX_MAX_BINDINGS];
 static void yield_cpu(void) {
     current_task_ptr->state = TASK_READY;
     spin_unlock(&sched_lock);
-    asm volatile("int $32");
+    __asm__ volatile("int $32");
     spin_lock(&sched_lock);
     current_task_ptr->state = TASK_RUNNING;
 }

@@ -17,7 +17,7 @@ void sleep(uint64_t ms) {
     uint64_t ticks_to_wait = (ms * 1000000000ULL) / (hpet_period / 1000);
     uint64_t start_tick = *hpet_main_counter;
     while ((*hpet_main_counter - start_tick) < ticks_to_wait) {
-        asm volatile("pause");
+        __asm__ volatile("pause");
     }
 }
 
@@ -29,7 +29,7 @@ void sleep_us(uint64_t us) {
     uint64_t ticks_to_wait = (us * 1000000000ULL) / hpet_period;
     uint64_t start_tick = *hpet_main_counter;
     while ((*hpet_main_counter - start_tick) < ticks_to_wait) {
-        asm volatile("pause");
+        __asm__ volatile("pause");
     }
 }
 
@@ -59,7 +59,7 @@ void stop_hpet(void) {
     if (*hpet_config & 1) {
         *hpet_config &= ~1ULL;
         // Compiler barrier (juuuust in case)
-        asm volatile ("" : : : "memory");
+        __asm__ volatile ("" : : : "memory");
     }
 }
 

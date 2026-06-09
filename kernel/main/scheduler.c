@@ -270,7 +270,7 @@ void exit_task(int status) {
 
     spin_unlock(&sched_lock);
     sti();
-    asm volatile("int $32");
+    __asm__ volatile("int $32");
 
     idle();
 }

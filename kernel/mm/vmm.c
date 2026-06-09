@@ -90,7 +90,7 @@ void set_vmm_user(vmm_context_t* ctx, uint64_t virt) {
     pt[pt_idx] |= VMM_USER;
 
 flush:
-    asm volatile("invlpg (%0)" : : "r"(virt) : "memory");
+    __asm__ volatile("invlpg (%0)" : : "r"(virt) : "memory");
 }
 
 bool map_vmm(vmm_context_t* ctx, uint64_t virt, uint64_t phys, uint64_t flags) {
@@ -112,7 +112,7 @@ bool map_vmm(vmm_context_t* ctx, uint64_t virt, uint64_t phys, uint64_t flags) {
     pt[pt_idx] = phys | flags | VMM_PRESENT;
     
     // Invalidate the TLB for this address
-    asm volatile("invlpg (%0)" : : "r"(virt) : "memory");
+    __asm__ volatile("invlpg (%0)" : : "r"(virt) : "memory");
     
     spin_unlock_irqrestore(&vmm_lock, flags_irq);
     return true;
@@ -143,7 +143,7 @@ void unmap_vmm(vmm_context_t* ctx, uint64_t virt) {
 
     // Clear the entry and flush TLB
     pt[pt_idx] = 0;
-    asm volatile("invlpg (%0)" : : "r"(virt) : "memory");
+    __asm__ volatile("invlpg (%0)" : : "r"(virt) : "memory");
 
 out:
     spin_unlock_irqrestore(&vmm_lock, flags_irq);
@@ -238,7 +238,7 @@ void memset_vmm(vmm_context_t* ctx, uint64_t virt_dest, int val, size_t size) {
 void switch_vmm_context(vmm_context_t* ctx) {
     // Get physical address of the PML4 (remove the HHDM offset)
     uint64_t phys_pml4 = (uint64_t)ctx->pml4 - hhdm_req.response->offset;
-    asm volatile("mov %0, %%cr3" : : "r"(phys_pml4) : "memory");
+    __asm__ volatile("mov %0, %%cr3" : : "r"(phys_pml4) : "memory");
 }
 
 vmm_context_t* create_vmm_context(void) {
@@ -379,6 +379,10 @@ void* vmalloc_ex(vmm_context_t* ctx, size_t size, uint64_t flags) {
     return (void*)((uintptr_t)start_addr + sizeof(vmalloc_header_t));
 }
 
+void* vmalloc_user_ex(vmm_context_t* ctx, size_t size) {
+    return vmalloc_ex(ctx, size, VMM_WRITABLE | VMM_USER | VMM_NX);
+}
+
 void* vmap_mmio(uint64_t phys, size_t num_pages) {
     if (num_pages == 0) return NULL;
     
@@ -402,8 +406,28 @@ void* vmap_mmio(uint64_t phys, size_t num_pages) {
     return (void*)((uintptr_t)start_addr + (phys & 0xFFFULL)); // Return aligned + offset
 }
 
-void* vmalloc_user_ex(vmm_context_t* ctx, size_t size) {
-    return vmalloc_ex(ctx, size, VMM_WRITABLE | VMM_USER | VMM_NX);
+void* vmap_user_at(vmm_context_t* ctx, uint64_t virt, size_t size, uint64_t flags) {
+    if (size == 0) return NULL;
+    uint64_t num_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint64_t curr_addr = virt & ~0xFFFULL;
+
+    for (uint64_t i = 0; i < num_pages; i++) {
+        // If already mapped, we can either skip or remap.
+        // For mmap over existing, we should probably unmap first or just remap.
+        // Let's just map.
+        if (get_vmm_phys(ctx, curr_addr) == 0) {
+            void* phys = pmalloc();
+            if (!phys) return NULL; // Should probably rollback
+            map_vmm(ctx, curr_addr, (uint64_t)phys, flags | VMM_PRESENT | VMM_USER);
+            memset(phys_to_virt((uint64_t)phys), 0, PAGE_SIZE);
+        } else {
+            // Already mapped. Just update flags.
+            uint64_t phys = get_vmm_phys(ctx, curr_addr);
+            map_vmm(ctx, curr_addr, phys, flags | VMM_PRESENT | VMM_USER);
+        }
+        curr_addr += PAGE_SIZE;
+    }
+    return (void*)virt;
 }
 
 void* vmalloc(size_t size) {
@@ -459,7 +483,7 @@ void init_vmm(void) {
     write_msr(MSR_EFER, efer | MSR_EFER_NXE);
 
     uint64_t current_cr3;
-    asm volatile("mov %%cr3, %0" : "=r"(current_cr3));
+    __asm__ volatile("mov %%cr3, %0" : "=r"(current_cr3));
     
     // Use Limine's existing page tables as kernel_context
     kernel_context.pml4 = (uint64_t*)phys_to_virt(current_cr3);

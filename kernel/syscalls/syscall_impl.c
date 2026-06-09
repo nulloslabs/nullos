@@ -674,18 +674,14 @@ void sys_mmap(syscall_frame_t *frame) {
     int      fd     = (int)frame->r8;
     uint64_t offset = frame->r9;
 
-    // Validate addr if MAP_FIXED or hint provided
-    if (addr != 0 && !user_addr_ok(addr, length)) {
-        frame->rax = (uint64_t)-EINVAL;
-        return;
-    }
-
     if (length == 0) {
         frame->rax = (uint64_t)-EINVAL;
         return;
     }
-    if ((prot & PROT_WRITE) && (prot & PROT_EXEC)) {
-        frame->rax = (uint64_t)-EACCES;
+
+    // Validate addr if MAP_FIXED or hint provided
+    if (addr != 0 && !user_addr_ok(addr, length)) {
+        frame->rax = (uint64_t)-EINVAL;
         return;
     }
 
@@ -694,43 +690,45 @@ void sys_mmap(syscall_frame_t *frame) {
     if (prot & PROT_WRITE) vmm_flags |= VMM_WRITABLE;
     if (!(prot & PROT_EXEC)) vmm_flags |= VMM_NX;
 
-    // File-backed mapping
-    if (!(flags & MAP_ANONYMOUS) && fd >= 0) {
-        fd_entry_t *entry = get_current_fd(fd);
-        if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
-
-        rootfs_file_t file = read_rootfs(entry->path);
-        if (!file.data && !file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
-
-        void *ptr = vmalloc_ex(current_task_ptr->ctx, num_pages * PAGE_SIZE, vmm_flags);
-        if (!ptr) { frame->rax = (uint64_t)-ENOMEM; return; }
-
-        // Copy file data into the mapping
-        uint64_t map_size = num_pages * PAGE_SIZE;
-        uint64_t file_avail = (file.size > offset) ? (file.size - offset) : 0;
-        uint64_t copy_len = (file_avail < map_size) ? file_avail : map_size;
-        if (copy_len > 0) {
-            write_vmm(current_task_ptr->ctx, (uint64_t)ptr,
-                      (uint8_t *)file.data + offset, copy_len);
-        }
-        // Zero the remaining bytes (BSS-like)
-        if (copy_len < map_size) {
-            memset_vmm(current_task_ptr->ctx, (uint64_t)ptr + copy_len,
-                       0, map_size - copy_len);
-        }
-        frame->rax = (uint64_t)ptr;
-        return;
+    void *ptr = NULL;
+    if (flags & MAP_FIXED) {
+        ptr = vmap_user_at(current_task_ptr->ctx, addr, num_pages * PAGE_SIZE, vmm_flags);
+    } else if (addr != 0) {
+        // Hint: try to map at addr, if fails, fallback to auto
+        ptr = vmap_user_at(current_task_ptr->ctx, addr, num_pages * PAGE_SIZE, vmm_flags);
+        if (!ptr) ptr = vmalloc_ex(current_task_ptr->ctx, num_pages * PAGE_SIZE, vmm_flags);
+    } else {
+        ptr = vmalloc_ex(current_task_ptr->ctx, num_pages * PAGE_SIZE, vmm_flags);
     }
 
-    // Anonymous mapping
-    void *ptr = vmalloc_ex(current_task_ptr->ctx, num_pages * PAGE_SIZE, vmm_flags);
     if (!ptr) {
         frame->rax = (uint64_t)-ENOMEM;
         return;
     }
 
-    // Zero anonymous pages
-    memset_vmm(current_task_ptr->ctx, (uint64_t)ptr, 0, num_pages * PAGE_SIZE);
+    // File-backed mapping: copy data if not anonymous
+    if (!(flags & MAP_ANONYMOUS) && fd >= 0) {
+        fd_entry_t *entry = get_current_fd(fd);
+        if (!entry) {
+            // Should probably munmap here if we were strict
+            frame->rax = (uint64_t)-EBADF;
+            return;
+        }
+
+        rootfs_file_t file = read_rootfs(entry->path);
+        if (file.data) {
+            uint64_t map_size = num_pages * PAGE_SIZE;
+            uint64_t file_avail = (file.size > offset) ? (file.size - offset) : 0;
+            uint64_t copy_len = (file_avail < map_size) ? file_avail : map_size;
+            if (copy_len > 0) {
+                write_vmm(current_task_ptr->ctx, (uint64_t)ptr,
+                          (uint8_t *)file.data + offset, copy_len);
+            }
+            // Zero the remaining bytes (BSS-like) is already handled by vmap_user_at/vmalloc_ex
+            // which zeroed the newly allocated pages.
+        }
+    }
+
     frame->rax = (uint64_t)ptr;
 }
 
@@ -1620,7 +1618,7 @@ void sys_wait4(syscall_frame_t *frame) {
         // temporarily drop the lock before yielding.
         current_task_ptr->state = TASK_READY;
         spin_unlock(&sched_lock);
-        asm volatile("int $32");
+        __asm__ volatile("int $32");
         spin_lock(&sched_lock);
     }
 }
@@ -1663,7 +1661,7 @@ void sys_kill(syscall_frame_t *frame) {
                     if (tasks[i].state == TASK_RUNNING || tasks[i].state == TASK_READY) {
                         tasks[i].state = TASK_STOPPED;
                         if (pid == current_task_ptr->pid) {
-                            asm volatile("int $32");
+                            __asm__ volatile("int $32");
                         }
                     }
                     break;

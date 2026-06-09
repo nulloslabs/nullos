@@ -138,15 +138,7 @@ typedef struct {
     } un;
 } __attribute__((packed)) elf64_auxv_t;
 
-// Loaded Shared Object metadata
-typedef struct loaded_so {
-    char name[128];
-    uint64_t base;
-    elf64_dyn_t *dynamic;
-    elf64_sym_t *symtab;
-    char *strtab;
-    struct loaded_so *next;
-} loaded_so_t;
+
 
 pid_t execute_elf(const char *path, char **argv, char **envp);
 int execve_elf(const char *path, char **argv, char **envp, void* raw_frame);

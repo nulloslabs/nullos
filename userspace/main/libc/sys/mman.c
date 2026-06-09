@@ -4,10 +4,10 @@
 
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, long offset) {
     int64_t ret;
-    register int64_t r10 asm("r10") = (int64_t)flags;
-    register int64_t r8  asm("r8")  = (int64_t)fd;
-    register int64_t r9  asm("r9")  = (int64_t)offset;
-    asm volatile (
+    register int64_t r10 __asm__ ("r10") = (int64_t)flags;
+    register int64_t r8  __asm__ ("r8")  = (int64_t)fd;
+    register int64_t r9  __asm__ ("r9")  = (int64_t)offset;
+    __asm__ volatile (
         "syscall"
         : "=a"(ret)
         : "a"((int64_t)SYS_mmap),
@@ -22,7 +22,7 @@ void *mmap(void *addr, size_t length, int prot, int flags, int fd, long offset) 
 
 int mprotect(void *addr, size_t length, int prot) {
     int64_t ret;
-    asm volatile (
+    __asm__ volatile (
         "syscall"
         : "=a"(ret)
         : "a"((int64_t)SYS_mprotect),
@@ -36,7 +36,7 @@ int mprotect(void *addr, size_t length, int prot) {
 
 int munmap(void *addr, size_t length) {
     int64_t ret;
-    asm volatile (
+    __asm__ volatile (
         "syscall"
         : "=a"(ret)
         : "a"((int64_t)SYS_munmap),

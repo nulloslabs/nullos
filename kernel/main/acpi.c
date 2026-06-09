@@ -1043,7 +1043,7 @@ void reboot(void) {
     // Is there a Reset register?
     if (fadt && fadt->header.revision >= 2 && fadt->reset_reg.address) {
         write_acpi(&fadt->reset_reg, fadt->reset_value);
-        for (volatile int d = 0; d < 100000; d++) asm volatile("nop");
+        for (volatile int d = 0; d < 100000; d++) __asm__ volatile("nop");
     }
     // Seems like there isn't one, let's fallback to the old 80s keyboard reset.
     while (inb(0x64) & 0x02);

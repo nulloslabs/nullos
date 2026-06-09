@@ -5,11 +5,11 @@
 volatile int system_halted = 0;
 
 void cli(void) {
-    asm volatile("cli" : : : "memory");
+    __asm__ volatile("cli" : : : "memory");
 }
 
 void sti(void) {
-    asm volatile("sti" : : : "memory");
+    __asm__ volatile("sti" : : : "memory");
 }
 
 static void halt_other_cpus(void) {
@@ -28,19 +28,19 @@ __attribute__((noreturn)) void halt(void) {
     if (!__sync_lock_test_and_set(&system_halted, 1))
         halt_other_cpus();
 
-    asm volatile("cli" : : : "memory");
-    for (;;) asm volatile("hlt" : : : "memory");
+    __asm__ volatile("cli" : : : "memory");
+    for (;;) __asm__ volatile("hlt" : : : "memory");
 }
 
 __attribute__((noreturn)) void idle(void) {
-    for (;;) asm volatile("hlt" : : : "memory");
+    for (;;) __asm__ volatile("hlt" : : : "memory");
 }
 
 void pause(void) {
-    asm volatile("pause" : : : "memory");
+    __asm__ volatile("pause" : : : "memory");
 }
 
 // Wait for interrupt
 void wfi(void) {
-    asm volatile("sti; pause; hlt" : : : "memory");
+    __asm__ volatile("sti; pause; hlt" : : : "memory");
 }

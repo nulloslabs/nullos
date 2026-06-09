@@ -15,7 +15,7 @@ void init_sse(void) {
     }
 
     // Clear EM bit and set MP bit in CR0
-    asm volatile(
+    __asm__ volatile(
         "mov %%cr0, %%rax\n"
         "and $~(1<<2), %%rax\n"  // clear EM
         "or  $(1<<1), %%rax\n"   // set MP
@@ -23,7 +23,7 @@ void init_sse(void) {
         ::: "rax"
     );
     // Set OSFXSR and OSXMMEXCPT bits in CR4
-    asm volatile(
+    __asm__ volatile(
         "mov %%cr4, %%rax\n"
         "or $(1<<9), %%rax\n"    // OSFXSR
         "or $(1<<10), %%rax\n"   // OSXMMEXCPT

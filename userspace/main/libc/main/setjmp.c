@@ -1,7 +1,7 @@
 #include <setjmp.h>
 
 __attribute__((naked)) int setjmp(jmp_buf env) {
-    asm volatile (
+    __asm__ volatile (
         "movq %rbx, (%rdi)\n\t"
         "movq %rbp, 8(%rdi)\n\t"
         "movq %r12, 16(%rdi)\n\t"
@@ -18,7 +18,7 @@ __attribute__((naked)) int setjmp(jmp_buf env) {
 }
 
 __attribute__((naked, noreturn)) void longjmp(jmp_buf env, int val) {
-    asm volatile (
+    __asm__ volatile (
         "movq %rsi, %rax\n\t"
         "testq %rax, %rax\n\t"
         "jnz 1f\n\t"
