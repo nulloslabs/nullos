@@ -22,6 +22,10 @@ all: $(OBJ)
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/main/libc/main/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+%.o: %.S ../../../config.mk
+	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/main/libc/main/$@"
+	@$(AS) $(AFLAGS) -c $< -o $@
+
 clean:
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/libc/main/*.o $(SUBDIR)/main/libc/main/*.d"
 	@rm -f *.o *.d

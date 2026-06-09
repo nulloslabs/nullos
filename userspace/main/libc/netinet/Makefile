@@ -22,6 +22,10 @@ all: $(OBJ)
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/main/libc/netinet/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+%.o: %.S ../../../config.mk
+	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/main/libc/netinet/$@"
+	@$(AS) $(AFLAGS) -c $< -o $@
+
 clean:
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/libc/netinet/*.o $(SUBDIR)/main/libc/netinet/*.d"
 	@rm -f *.o *.d
