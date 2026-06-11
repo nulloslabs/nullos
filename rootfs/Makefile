@@ -35,7 +35,7 @@ rootfs:
 		printf 'user:$$5$$user$$7126fcc656a61c971522f6f3f949e483c654490630046a1a8963604e91f74ba0:19863:0:99999:7:::\n' >> main/etc/shadow && \
 		chmod 644 main/etc/passwd main/etc/group && \
 		chmod 600 main/etc/shadow && \
-		printf "Welcome to NullOS!\\n\\nAn OS that respects your privacy, is fast, lightweight and secure.\\n" > main/etc/motd && \
+		printf "Welcome to NullOS!\\n\\nAn OS that respects your privacy, is fast and secure.\\n" > main/etc/motd && \
 		$(TAR) $(TARFLAGS) -f rootfs.tar.gz -C main .; \
 	else \
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/rootfs.tar.gz is already up to date"; \
