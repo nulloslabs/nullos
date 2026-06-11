@@ -1532,7 +1532,7 @@ void sys_execve(syscall_frame_t *frame) {
 
     rootfs_file_t file = read_rootfs(path_buf);
     if (file.mode && !can_access_rootfs(&file, 0, 0, 1)) {
-        frame->rax = (uint64_t)-EACCES;
+        frame->rax = (uint64_t)-EPERM;
         return;
     }
 

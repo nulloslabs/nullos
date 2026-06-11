@@ -9,13 +9,13 @@ include config.mk
 
 .DEFAULT_GOAL := all
 USERSPACE_PROGS := $(patsubst ../userspace/main/progs/main/%.c,../userspace/%,$(wildcard ../userspace/main/progs/main/*.c)) $(patsubst ../userspace/main/progs/main/%.S,../userspace/%,$(wildcard ../userspace/main/progs/main/*.S))
-DEP := $(wildcard ../userspace/main/progs/*.c) $(wildcard ../userspace/main/progs/*.S) $(USERSPACE_PROGS) $(shell find main/ -type f 2>/dev/null) config.mk ../userspace/libc.so ../userspace/libc.a ../userspace/crt0.o ../userspace/ld.so
+DEP := $(wildcard ../userspace/main/progs/*.c) $(wildcard ../userspace/main/progs/*.S) $(USERSPACE_PROGS) $(shell find main/ 2>/dev/null) config.mk ../userspace/libc.so ../userspace/libc.a ../userspace/crt0.o ../userspace/ld.so
 
 all: rootfs
 
 rootfs:
 	@$(MAKE) -C ../userspace
-	@if [ ! -f rootfs.tar.gz ] || [ Makefile -nt rootfs.tar.gz ] || [ config.mk -nt rootfs.tar.gz ] || $(foreach dep,$(DEP),[ $(dep) -nt rootfs.tar.gz ] ||) false; then \
+	@if [ ! -f rootfs.tar.gz ] || [ ! -d main ] || [ Makefile -nt rootfs.tar.gz ] || [ config.mk -nt rootfs.tar.gz ] || $(foreach dep,$(DEP),[ $(dep) -nt rootfs.tar.gz ] ||) false; then \
 		printf "  %-7s %s\n" "TAR" "$(SUBDIR)/rootfs.tar.gz" && \
 		# Create folders && \
 			mkdir -p main/dev main/etc main/usr/bin main/usr/sbin main/usr/lib main/usr/include && \
