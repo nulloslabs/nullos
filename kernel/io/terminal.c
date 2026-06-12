@@ -1,12 +1,12 @@
 #include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
 #include <freestanding/stdarg.h>
-#include <io/framebuffer.h>
 #include <main/string.h>
-#include <io/fonts.h>
-#include <io/serial.h>
 #include <main/limine_req.h>
 #include <main/spinlock.h>
+#include <io/framebuffer.h>
+#include <io/fonts.h>
+#include <io/serial.h>
 #include <io/terminal.h>
 
 // Back buffer for fast scrolling (double-buffering)
@@ -410,12 +410,10 @@ static void putc_unlocked(char c) {
     }
 
     serial_putc(COM1, c);
-    if (!current_font_w || !current_font_h) { // If there's no font don't even bother drawing.
-        return;
-    }
-    if (!fb_req.response || fb_req.response->framebuffer_count < 1) { // If there's no framebuffer don't even bother drawing.
-        return;
-    }
+
+    if (!current_font_w || !current_font_h) return;
+    if (!fb_req.response || fb_req.response->framebuffer_count < 1) return;
+
     struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
 
     // Initialize back buffer if not already done (inline)
