@@ -4,9 +4,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-int nanosleep(const struct timespec *req, struct timespec *rem) {
-    return (int)syscall(SYS_nanosleep, req, rem);
-}
+int nanosleep(const struct timespec *req, struct timespec *rem) { return (int)syscall(SYS_nanosleep, req, rem); }
 
 int usleep(unsigned int usec) {
     struct timespec ts;
@@ -15,20 +13,13 @@ int usleep(unsigned int usec) {
     return nanosleep(&ts, NULL);
 }
 
-int gettimeofday(struct timeval *tv, struct timezone *tz) {
-    return (int)syscall(SYS_gettimeofday, tv, tz);
-}
+int gettimeofday(struct timeval *tv, struct timezone *tz) { return (int)syscall(SYS_gettimeofday, tv, tz); }
 
-int settimeofday(const struct timeval *tv, const struct timezone *tz) {
-    return (int)syscall(SYS_settimeofday, tv, tz);
-}
+int settimeofday(const struct timeval *tv, const struct timezone *tz) { return (int)syscall(SYS_settimeofday, tv, tz); }
 
 int getitimer(int which, struct itimerval *curr_value) {
     (void)which;
-    if (!curr_value) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!curr_value) { errno = EINVAL; return -1; }
     curr_value->it_interval.tv_sec = 0;
     curr_value->it_interval.tv_usec = 0;
     curr_value->it_value.tv_sec = 0;

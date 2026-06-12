@@ -53,10 +53,7 @@ static uint64_t (* const pts_writes[NUM_PTYS])(const void*, uint64_t, uint64_t) 
     write_pts8, write_pts9, write_pts10, write_pts11, write_pts12, write_pts13, write_pts14, write_pts15
 };
 
-pty_t *get_pty(int idx) {
-    if (idx < 0 || idx >= NUM_PTYS) return NULL;
-    return &ptys[idx];
-}
+pty_t *get_pty(int idx) { if (idx < 0 || idx >= NUM_PTYS) return NULL; return &ptys[idx]; }
 
 int alloc_pty(void) {
     uint64_t irq;
@@ -114,10 +111,7 @@ void release_pty_master(int idx) {
     bool destroy = false;
     uint64_t irq;
     spin_lock_irqsave(&pty_lock, &irq);
-    if (ptys[idx].allocated && ptys[idx].master_refs > 0) {
-        ptys[idx].master_refs--;
-        destroy = (ptys[idx].master_refs == 0 && ptys[idx].slave_refs == 0);
-    }
+    if (ptys[idx].allocated && ptys[idx].master_refs > 0) { ptys[idx].master_refs--; destroy = (ptys[idx].master_refs == 0 && ptys[idx].slave_refs == 0); }
     spin_unlock_irqrestore(&pty_lock, irq);
 
     if (destroy)
@@ -129,14 +123,8 @@ int open_pty_slave(int idx) {
 
     uint64_t irq;
     spin_lock_irqsave(&pty_lock, &irq);
-    if (!ptys[idx].allocated || ptys[idx].master_refs == 0) {
-        spin_unlock_irqrestore(&pty_lock, irq);
-        return -EIO;
-    }
-    if (ptys[idx].locked) {
-        spin_unlock_irqrestore(&pty_lock, irq);
-        return -EIO;
-    }
+    if (!ptys[idx].allocated || ptys[idx].master_refs == 0) { spin_unlock_irqrestore(&pty_lock, irq); return -EIO; }
+    if (ptys[idx].locked) { spin_unlock_irqrestore(&pty_lock, irq); return -EIO; }
     ptys[idx].slave_refs++;
     spin_unlock_irqrestore(&pty_lock, irq);
     return 0;
@@ -156,10 +144,7 @@ void release_pty_slave(int idx) {
     bool destroy = false;
     uint64_t irq;
     spin_lock_irqsave(&pty_lock, &irq);
-    if (ptys[idx].slave_refs > 0) {
-        ptys[idx].slave_refs--;
-        destroy = (ptys[idx].master_refs == 0 && ptys[idx].slave_refs == 0);
-    }
+    if (ptys[idx].slave_refs > 0) { ptys[idx].slave_refs--; destroy = (ptys[idx].master_refs == 0 && ptys[idx].slave_refs == 0); }
     spin_unlock_irqrestore(&pty_lock, irq);
 
     if (destroy)
@@ -176,10 +161,7 @@ int pty_slave_path_idx(const char *path) {
     if (*p < '0' || *p > '9') return -1;
 
     int idx = 0;
-    while (*p >= '0' && *p <= '9') {
-        idx = idx * 10 + (*p - '0');
-        p++;
-    }
+    while (*p >= '0' && *p <= '9') { idx = idx * 10 + (*p - '0'); p++; }
     if (*p != '\0' || idx >= NUM_PTYS) return -1;
     return idx;
 }
@@ -190,10 +172,7 @@ int read_pty_master(int idx, char *buf, int len) {
     int got = 0;
     while (got == 0) {
         uint64_t irq; spin_lock_irqsave(&pty_lock, &irq);
-        if (!p->allocated || p->slave_refs == 0) {
-            spin_unlock_irqrestore(&pty_lock, irq);
-            return -EIO;
-        }
+        if (!p->allocated || p->slave_refs == 0) { spin_unlock_irqrestore(&pty_lock, irq); return -EIO; }
         got = read_tty_ring(&p->s2m, buf, len);
         spin_unlock_irqrestore(&pty_lock, irq);
     }
@@ -204,10 +183,7 @@ int write_pty_master(int idx, const char *buf, int len) {
     pty_t *p = get_pty(idx);
     if (!p) return -1;
     uint64_t irq; spin_lock_irqsave(&pty_lock, &irq);
-    if (!p->allocated) {
-        spin_unlock_irqrestore(&pty_lock, irq);
-        return -1;
-    }
+    if (!p->allocated) { spin_unlock_irqrestore(&pty_lock, irq); return -1; }
     int w = write_tty_ring(&p->m2s, buf, len);
     spin_unlock_irqrestore(&pty_lock, irq);
     return w;

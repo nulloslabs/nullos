@@ -29,7 +29,4 @@ void disable_pic(void) {
     printf("pic: disabled pic\n");
 }
 
-void eoi_pic(void) {
-    outb(0x20, 0x20);
-    outb(0xA0, 0x20);
-}
+void eoi_pic(void) { outb(0x20, 0x20); outb(0xA0, 0x20); }

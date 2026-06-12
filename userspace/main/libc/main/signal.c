@@ -3,10 +3,6 @@
 #include <unistd.h>
 #include <sys/syscall.h>
 
-int kill(pid_t pid, int sig) {
-    return (int)syscall(SYS_kill, pid, sig);
-}
+int kill(pid_t pid, int sig) { return (int)syscall(SYS_kill, pid, sig); }
 
-int raise(int sig) {
-    return kill(getpid(), sig);
-}
+int raise(int sig) { return kill(getpid(), sig); }

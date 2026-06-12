@@ -71,16 +71,10 @@ static int lookup(int by_name, const char *name, gid_t gid,
 }
 
 int getgrnam_r(const char *name, struct group *grp, char *buf, size_t buflen,
-               struct group **result) {
-    if (!name || !grp || !buf || !result) return EINVAL;
-    return lookup(1, name, 0, grp, buf, buflen, result);
-}
+               struct group **result) { if (!name || !grp || !buf || !result) return EINVAL; return lookup(1, name, 0, grp, buf, buflen, result); }
 
 int getgrgid_r(gid_t gid, struct group *grp, char *buf, size_t buflen,
-               struct group **result) {
-    if (!grp || !buf || !result) return EINVAL;
-    return lookup(0, NULL, gid, grp, buf, buflen, result);
-}
+               struct group **result) { if (!grp || !buf || !result) return EINVAL; return lookup(0, NULL, gid, grp, buf, buflen, result); }
 
 struct group *getgrnam(const char *name) {
     struct group *res;
@@ -94,21 +88,13 @@ struct group *getgrgid(gid_t gid) {
     return res;
 }
 
-void setgrent(void) {
-    if (gr_fd >= 0) close(gr_fd);
-    gr_fd = open("/etc/group", O_RDONLY);
-}
+void setgrent(void) { if (gr_fd >= 0) close(gr_fd); gr_fd = open("/etc/group", O_RDONLY); }
 
-void endgrent(void) {
-    if (gr_fd >= 0) close(gr_fd);
-    gr_fd = -1;
-}
+void endgrent(void) { if (gr_fd >= 0) close(gr_fd); gr_fd = -1; }
 
 struct group *getgrent(void) {
     if (gr_fd < 0) setgrent();
     if (gr_fd < 0) return NULL;
-    while (read_line(gr_fd, gr_buf, sizeof(gr_buf))) {
-        if (parse_group(gr_buf, &gr_static, gr_members, 64)) return &gr_static;
-    }
+    while (read_line(gr_fd, gr_buf, sizeof(gr_buf))) { if (parse_group(gr_buf, &gr_static, gr_members, 64)) return &gr_static; }
     return NULL;
 }

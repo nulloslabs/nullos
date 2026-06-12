@@ -41,9 +41,7 @@ void vsyslog(int priority, const char *format, va_list ap) {
             snprintf(line, sizeof(line), "<%d>%s[%d]: %s\n", priority, log_ident, getpid(), msg);
         else
             snprintf(line, sizeof(line), "<%d>%s: %s\n", priority, log_ident, msg);
-    } else {
-        snprintf(line, sizeof(line), "<%d>%s\n", priority, msg);
-    }
+    } else { snprintf(line, sizeof(line), "<%d>%s\n", priority, msg); }
     write(2, line, strlen(line));
 }
 

@@ -12,10 +12,7 @@ struct memory_header *free_list_start = NULL;
 uint64_t hhdm_offset = 0;
 static spinlock_t mm_lock = SPINLOCK_INIT;
 
-static int in_pool(void* ptr) {
-    return ptr >= (void*)free_list_start &&
-           ptr <  (void*)((uint8_t*)free_list_start + 16 * 1024 * 1024);
-}
+static int in_pool(void* ptr) { return ptr >= (void*)free_list_start && ptr <  (void*)((uint8_t*)free_list_start + 16 * 1024 * 1024); }
 
 void* malloc(size_t size) {
     if (size == 0) size = 1;
@@ -58,29 +55,20 @@ void* realloc(void* ptr, size_t size) {
     spin_lock_irqsave(&mm_lock, &flags);
 
     struct memory_header *header = (struct memory_header*)ptr - 1;
-    if (header->size >= size) {
-        spin_unlock_irqrestore(&mm_lock, flags);
-        return ptr;
-    }
+    if (header->size >= size) { spin_unlock_irqrestore(&mm_lock, flags); return ptr; }
 
     size_t old_size = header->size;
     spin_unlock_irqrestore(&mm_lock, flags);
 
     void *new_ptr = malloc(size);
-    if (new_ptr) {
-        memcpy(new_ptr, ptr, old_size);
-        free(ptr);
-    }
+    if (new_ptr) { memcpy(new_ptr, ptr, old_size); free(ptr); }
     return new_ptr;
 }
 
 void free(void* ptr) {
     if (!ptr) return;
 
-    if (!in_pool(ptr)) {
-        vfree(ptr);
-        return;
-    }
+    if (!in_pool(ptr)) { vfree(ptr); return; }
 
     uint64_t flags;
     spin_lock_irqsave(&mm_lock, &flags);

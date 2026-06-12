@@ -52,9 +52,7 @@ void idt_set_descriptor(uint8_t vector, void* isr, uint8_t flags) {
     descriptor->reserved = 0;
 }
 
-void load_idt_for_cpu(void) {
-    __asm__ volatile("lidt %0" : : "m"(idtr));
-}
+void load_idt_for_cpu(void) { __asm__ volatile("lidt %0" : : "m"(idtr)); }
 
 void init_idt(void) {
     idtr.base = (uint64_t)&idt[0];
@@ -63,9 +61,7 @@ void init_idt(void) {
     // Fill ALL vectors with the spurious handler first so no IDT entry
     // is ever "not present" — prevents #GP on unexpected hardware IRQs.
     // 0x8E = Present (0x80) | DPL 0 (0x00) | Interrupt Gate (0x0E)
-    for (int i = 0; i < 256; i++) {
-        idt_set_descriptor(i, isrspr, 0x8E);
-    }
+    for (int i = 0; i < 256; i++) { idt_set_descriptor(i, isrspr, 0x8E); }
 
     // Now overwrite specific vectors with their real handlers.
     // 0xEE = Present (0x80) | DPL 3 (0x60) | Interrupt Gate (0x0E)
@@ -78,9 +74,7 @@ void init_idt(void) {
     idt[8].ist = 1; // Use IST1 (dedicated double-fault stack)
     idt_set_descriptor(13, isr13, 0xEE);
     idt_set_descriptor(14, isr14, 0xEE);
-    for (int i = 22; i < 27; i++) {
-        idt_set_descriptor(i, isrrsv, 0xEE);
-    }
+    for (int i = 22; i < 27; i++) { idt_set_descriptor(i, isrrsv, 0xEE); }
     idt_set_descriptor(30, isr30, 0xEE);
     idt_set_descriptor(31, isrrsv, 0xEE);
     idt_set_descriptor(32, isr32, 0xEE);

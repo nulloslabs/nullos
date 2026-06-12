@@ -5,16 +5,11 @@
 #include <io/terminal.h>
 
 const char *get_boot_args(void) {
-    if (cmdline_req.response == NULL || cmdline_req.response->executable_file == NULL) {
-        return NULL;
-    }
+    if (cmdline_req.response == NULL || cmdline_req.response->executable_file == NULL) return NULL;
 
     char *args = cmdline_req.response->executable_file->string;
-    if (!args || (uintptr_t)args < 0xffff000000000000ULL)
-        return NULL;
-    else if (args && *args) {
-        return args;
-    }
+    if (!args || (uintptr_t)args < 0xffff000000000000ULL) return NULL;
+    else if (args && *args) { return args; }
     return NULL;
 }
 
@@ -26,9 +21,7 @@ const char* get_arg_value(const char* args, const char* key) {
 
     while (s) {
         // Check if the key matches AND is either at start or after a space
-        if ((s == args || *(s - 1) == ' ') && strncmp(s, key, key_len) == 0 && s[key_len] == '=') {
-            return s + key_len + 1; // Return the value after the '='
-        }
+        if ((s == args || *(s - 1) == ' ') && strncmp(s, key, key_len) == 0 && s[key_len] == '=') return s + key_len + 1; // Return the value after the '='
         
         // Move to the next space to check the next argument
         s = strchr(s, ' ');
@@ -39,9 +32,6 @@ const char* get_arg_value(const char* args, const char* key) {
 
 void parse_boot_args(void) {
     const char *args = get_boot_args();
-    if (!args) {
-        printf("boot arguments: parsed boot arguments\n");
-        return;
-    }
+    if (!args) { printf("boot arguments: parsed boot arguments\n"); return; }
     printf("boot arguments: parsed boot arguments\n");
 }

@@ -7,3 +7,8 @@ struct timespec {
     time_t tv_sec;
     long tv_nsec;
 };
+
+struct timezone {
+    int tz_minuteswest;
+    int tz_dsttime;
+};

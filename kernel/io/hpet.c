@@ -10,27 +10,19 @@ static uintptr_t hpet_base = 0;
 static uint32_t hpet_period = 0;
 
 void sleep(uint64_t ms) {
-    if (!hpet_base || hpet_period == 0) {
-        panic("hpet isn't available");
-    }
+    if (!hpet_base || hpet_period == 0) { panic("hpet isn't available"); }
     volatile uint64_t* hpet_main_counter = (volatile uint64_t*)(hpet_base + 0xF0);
     uint64_t ticks_to_wait = (ms * 1000000000ULL) / (hpet_period / 1000);
     uint64_t start_tick = *hpet_main_counter;
-    while ((*hpet_main_counter - start_tick) < ticks_to_wait) {
-        __asm__ volatile("pause");
-    }
+    while ((*hpet_main_counter - start_tick) < ticks_to_wait) { __asm__ volatile("pause"); }
 }
 
 void sleep_us(uint64_t us) {
-    if (!hpet_base || hpet_period == 0) {
-        panic("hpet isn't available");
-    }
+    if (!hpet_base || hpet_period == 0) { panic("hpet isn't available"); }
     volatile uint64_t* hpet_main_counter = (volatile uint64_t*)(hpet_base + 0xF0);
     uint64_t ticks_to_wait = (us * 1000000000ULL) / hpet_period;
     uint64_t start_tick = *hpet_main_counter;
-    while ((*hpet_main_counter - start_tick) < ticks_to_wait) {
-        __asm__ volatile("pause");
-    }
+    while ((*hpet_main_counter - start_tick) < ticks_to_wait) { __asm__ volatile("pause"); }
 }
 
 uint64_t read_hpet_counter(void) {
@@ -39,10 +31,7 @@ uint64_t read_hpet_counter(void) {
     return *hpet_main_counter;
 }
 
-uint64_t hpet_elapsed_us(void) {
-    if (!hpet_base || hpet_period == 0) return 0;
-    return (read_hpet_counter() * hpet_period) / 1000000000ULL;
-}
+uint64_t hpet_elapsed_us(void) { if (!hpet_base || hpet_period == 0) return 0; return (read_hpet_counter() * hpet_period) / 1000000000ULL; }
 
 uint32_t get_hpet_freq_mhz(void) {
     if (!hpet_base || hpet_period == 0) return 0;

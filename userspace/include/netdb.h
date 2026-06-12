@@ -33,6 +33,10 @@ extern "C" {
 #define NI_MAXHOST 1025
 #define NI_MAXSERV 32
 
+#define h_addr h_addr_list[0]
+
+extern int h_errno;
+
 struct hostent {
     char *h_name;
     char **h_aliases;
@@ -40,8 +44,6 @@ struct hostent {
     int h_length;
     char **h_addr_list;
 };
-
-#define h_addr h_addr_list[0]
 
 struct addrinfo {
     int ai_flags;
@@ -54,12 +56,9 @@ struct addrinfo {
     struct addrinfo *ai_next;
 };
 
-extern int h_errno;
-
 struct hostent *gethostbyname(const char *name);
 struct hostent *gethostbyaddr(const void *addr, socklen_t len, int type);
-int getaddrinfo(const char *node, const char *service,
-                const struct addrinfo *hints, struct addrinfo **res);
+int getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res);
 void freeaddrinfo(struct addrinfo *res);
 const char *gai_strerror(int errcode);
 

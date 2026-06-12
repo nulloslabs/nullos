@@ -4,9 +4,7 @@
 #include <stdlib.h>
 #include <sys/syscall.h>
 
-int getdents(int fd, struct dirent *buf, int count) {
-    return (int)syscall(SYS_getdents, fd, buf, count);
-}
+int getdents(int fd, struct dirent *buf, int count) { return (int)syscall(SYS_getdents, fd, buf, count); }
 
 DIR *fdopendir(int fd) {
     if (fd < 0) return NULL;
@@ -25,10 +23,7 @@ DIR *opendir(const char *name) {
     if (fd < 0) return NULL;
 
     DIR *dir = fdopendir(fd);
-    if (!dir) {
-        close(fd);
-        return NULL;
-    }
+    if (!dir) { close(fd); return NULL; }
 
     return dir;
 }

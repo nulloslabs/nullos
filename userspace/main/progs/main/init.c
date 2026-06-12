@@ -13,20 +13,14 @@ static void print_usage(void) {
 
 int main(int argc, char **argv) {
     if (argc > 1) {
-        if (strcmp(argv[1], "--help") == 0) {
-            print_usage();
-            return 0;
-        }
+        if (strcmp(argv[1], "--help") == 0) { print_usage(); return 0; }
 
         fprintf(stderr, "init: unknown argument: %s\n", argv[1]);
         return 1;
     }
 
     printf("\033[2J\033[H");
-    if (mount("devfs", "/dev", "devfs", 0, NULL) < 0) {
-        perror("init: mount() failed");
-        return 1;
-    }
+    if (mount("devfs", "/dev", "devfs", 0, NULL) < 0) { perror("init: mount() failed"); return 1; }
 
     char *login_argv[] = { "/usr/bin/login", NULL }; // 
     char *login_envp[] = { NULL };
@@ -41,10 +35,7 @@ int main(int argc, char **argv) {
         } else if (pid > 0) {
             // Parent: wait for login to exit then restart it
             wait(NULL);
-        } else {
-            perror("init: fork() failed");
-            return 1;
-        }
+        } else { perror("init: fork() failed"); return 1; }
     }
 
     /* >be me

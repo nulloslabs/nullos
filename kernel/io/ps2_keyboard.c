@@ -15,18 +15,12 @@ void handle_ps2_scancode(uint8_t sc) {
         ps2_repeat_key = 0;
         ps2_repeat_timer = 0;
         uint32_t next = (key_head + 1) & 127;
-        if (next != key_tail) {
-            key_buffer[key_head] = sc;
-            key_head = next;
-        }
+        if (next != key_tail) { key_buffer[key_head] = sc; key_head = next; }
     } else {
         ps2_key_held[sc] = true;
         ps2_repeat_key = sc;
         ps2_repeat_timer = 0;
         uint32_t next = (key_head + 1) & 127;
-        if (next != key_tail) {
-            key_buffer[key_head] = sc;
-            key_head = next;
-        }
+        if (next != key_tail) { key_buffer[key_head] = sc; key_head = next; }
     }
 }

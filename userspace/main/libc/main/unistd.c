@@ -260,3 +260,7 @@ int lchown(const char *path, uid_t owner, gid_t group) {
 int unlinkat(int dirfd, const char *pathname, int flags) {
     return (int)syscall(SYS_unlinkat, dirfd, pathname, flags);
 }
+
+int symlinkat(const char *target, int newdirfd, const char *linkpath) {
+    return (int)syscall(SYS_symlinkat, target, newdirfd, linkpath);
+}

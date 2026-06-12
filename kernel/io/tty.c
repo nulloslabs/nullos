@@ -5,9 +5,7 @@
 static tty_t ttys[NUM_TTYS];
 static spinlock_t tty_lock = SPINLOCK_INIT;
 
-int get_tty_ring_count(tty_ring_t *r) {
-    return (int)((r->head - r->tail + TTY_BUF_SIZE) % TTY_BUF_SIZE);
-}
+int get_tty_ring_count(tty_ring_t *r) { return (int)((r->head - r->tail + TTY_BUF_SIZE) % TTY_BUF_SIZE); }
 
 int write_tty_ring(tty_ring_t *r, const char *buf, int len) {
     int written = 0;
@@ -22,17 +20,11 @@ int write_tty_ring(tty_ring_t *r, const char *buf, int len) {
 
 int read_tty_ring(tty_ring_t *r, char *buf, int len) {
     int read = 0;
-    while (read < len && r->tail != r->head) {
-        buf[read++] = r->buf[r->tail];
-        r->tail = (r->tail + 1) % TTY_BUF_SIZE;
-    }
+    while (read < len && r->tail != r->head) { buf[read++] = r->buf[r->tail]; r->tail = (r->tail + 1) % TTY_BUF_SIZE; }
     return read;
 }
 
-tty_t *get_tty(int idx) {
-    if (idx < 0 || idx >= NUM_TTYS) return NULL;
-    return &ttys[idx];
-}
+tty_t *get_tty(int idx) { if (idx < 0 || idx >= NUM_TTYS) return NULL; return &ttys[idx]; }
 
 spinlock_t *get_tty_lock(void) { return &tty_lock; }
 

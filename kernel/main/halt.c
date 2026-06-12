@@ -4,13 +4,9 @@
 
 volatile int system_halted = 0;
 
-void cli(void) {
-    __asm__ volatile("cli" : : : "memory");
-}
+void cli(void) { __asm__ volatile("cli" : : : "memory"); }
 
-void sti(void) {
-    __asm__ volatile("sti" : : : "memory");
-}
+void sti(void) { __asm__ volatile("sti" : : : "memory"); }
 
 static void halt_other_cpus(void) {
     if (current_apic_mode == APIC_NONE || cpu_count <= 1)
@@ -32,15 +28,9 @@ __attribute__((noreturn)) void halt(void) {
     for (;;) __asm__ volatile("hlt" : : : "memory");
 }
 
-__attribute__((noreturn)) void idle(void) {
-    for (;;) __asm__ volatile("hlt" : : : "memory");
-}
+__attribute__((noreturn)) void idle(void) { for (;;) __asm__ volatile("hlt" : : : "memory"); }
 
-void pause(void) {
-    __asm__ volatile("pause" : : : "memory");
-}
+void pause(void) { __asm__ volatile("pause" : : : "memory"); }
 
 // Wait for interrupt
-void wfi(void) {
-    __asm__ volatile("sti; pause; hlt" : : : "memory");
-}
+void wfi(void) { __asm__ volatile("sti; pause; hlt" : : : "memory"); }

@@ -30,10 +30,7 @@ char *dirname(char *path) {
     char *last = strrchr(path, '/');
     if (!last) return dot;
     while (last > path && *last == '/') last--;
-    if (last == path && *last == '/') {
-        path[1] = '\0';
-        return path;
-    }
+    if (last == path && *last == '/') { path[1] = '\0'; return path; }
     last[1] = '\0';
     return path;
 }

@@ -16,9 +16,7 @@ int get_hostname(char *name, size_t len) {
     spin_lock_irqsave(&hostname_lock, &irq);
 
     size_t i;
-    for (i = 0; i < (len - 1) && current_hostname[i] != '\0'; i++) {
-        name[i] = current_hostname[i];
-    }
+    for (i = 0; i < (len - 1) && current_hostname[i] != '\0'; i++) { name[i] = current_hostname[i]; }
     
     name[i] = '\0';
 
@@ -35,9 +33,7 @@ int set_hostname(const char *name, size_t len) {
     spin_lock_irqsave(&hostname_lock, &irq);
 
     size_t i;
-    for (i = 0; i < len && name[i] != '\0'; i++) {
-        current_hostname[i] = name[i];
-    }
+    for (i = 0; i < len && name[i] != '\0'; i++) { current_hostname[i] = name[i]; }
     
     current_hostname[i] = '\0';
 

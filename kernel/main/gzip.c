@@ -4,10 +4,7 @@
 #include <main/gzip.h>
 
 static uint32_t tgz_get_bits(tgz_stream *s, int bits) {
-    while (s->bit_cnt < bits) {
-        s->bit_buf |= ((uint32_t)(*s->in++)) << s->bit_cnt;
-        s->bit_cnt += 8;
-    }
+    while (s->bit_cnt < bits) { s->bit_buf |= ((uint32_t)(*s->in++)) << s->bit_cnt; s->bit_cnt += 8; }
     uint32_t val = s->bit_buf & ((1 << bits) - 1);
     s->bit_buf >>= bits;
     s->bit_cnt -= bits;
@@ -22,9 +19,7 @@ static void tgz_build_tree(tgz_huffman *tree, const uint8_t *lens, int n) {
     int offsets_map[TGZ_MAX_BITS + 1];
     memset(offsets_map, 0, sizeof(offsets_map));
 
-    for (int i = 0; i < n; i++) {
-        if (lens[i] != 0) tree->symbols[lens[i]][offsets_map[lens[i]]++] = (uint16_t)i;
-    }
+    for (int i = 0; i < n; i++) { if (lens[i] != 0) tree->symbols[lens[i]][offsets_map[lens[i]]++] = (uint16_t)i; }
 }
 
 static int tgz_decode_symbol(tgz_stream *s, tgz_huffman *tree) {
@@ -92,13 +87,7 @@ static int tgz_inflate(tgz_stream *s) {
                         int copy_len = tgz_get_bits(s, 2) + 3;
                         uint8_t prev = lens[n-1];
                         while (copy_len--) lens[n++] = prev;
-                    } else if (sym == 17) {
-                        int copy_len = tgz_get_bits(s, 3) + 3;
-                        while (copy_len--) lens[n++] = 0;
-                    } else if (sym == 18) {
-                        int copy_len = tgz_get_bits(s, 7) + 11;
-                        while (copy_len--) lens[n++] = 0;
-                    }
+                    } else if (sym == 17) { int copy_len = tgz_get_bits(s, 3) + 3; while (copy_len--) lens[n++] = 0; } else if (sym == 18) { int copy_len = tgz_get_bits(s, 7) + 11; while (copy_len--) lens[n++] = 0; }
                 }
                 tgz_build_tree(&lit_tree, lens, hlit);
                 tgz_build_tree(&dist_tree, lens + hlit, hdist);

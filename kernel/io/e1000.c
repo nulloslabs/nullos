@@ -22,13 +22,9 @@ static uint16_t tx_cur = 0;
 static bool e1000_ready = false;
 static spinlock_t e1000_lock = SPINLOCK_INIT;
 
-static void write_mmio32(uint32_t reg, uint32_t val) {
-    *(volatile uint32_t *)(e1000_mmio + reg) = val;
-}
+static void write_mmio32(uint32_t reg, uint32_t val) { *(volatile uint32_t *)(e1000_mmio + reg) = val; }
 
-static uint32_t read_mmio32(uint32_t reg) {
-    return *(volatile uint32_t *)(e1000_mmio + reg);
-}
+static uint32_t read_mmio32(uint32_t reg) { return *(volatile uint32_t *)(e1000_mmio + reg); }
 
 // Detect EEPROM and read MAC
 static bool detect_eeprom(void) {
@@ -44,9 +40,7 @@ static uint16_t read_eeprom(uint8_t addr) {
     return (uint16_t)((temp >> 16) & 0xFFFF);
 }
 
-void get_e1000_mac(uint8_t mac[6]) {
-    memcpy(mac, mac_addr, 6);
-}
+void get_e1000_mac(uint8_t mac[6]) { memcpy(mac, mac_addr, 6); }
 
 bool send_e1000(const void *data, uint16_t len) {
     if (!e1000_ready) return false;
@@ -100,10 +94,7 @@ static void poll_e1000(void) {
             spin_lock_irqsave(&e1000_lock, &irq);
 
             // Re-read after locking just to be sure
-            if (!(rx_descs[rx_cur].status & 0x1)) {
-                spin_unlock_irqrestore(&e1000_lock, irq);
-                break;
-            }
+            if (!(rx_descs[rx_cur].status & 0x1)) { spin_unlock_irqrestore(&e1000_lock, irq); break; }
 
             uint8_t *buf = rx_buf[rx_cur];
             uint16_t size = rx_descs[rx_cur].length;

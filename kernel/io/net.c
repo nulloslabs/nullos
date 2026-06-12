@@ -8,10 +8,7 @@
 
 static inline uint16_t htons(uint16_t x) { return (uint16_t)((x >> 8) | (x << 8)); }
 static inline uint16_t ntohs(uint16_t x) { return htons(x); }
-static inline uint32_t htonl(uint32_t x) {
-    return ((x & 0xFF000000) >> 24) | ((x & 0x00FF0000) >> 8)
-         | ((x & 0x0000FF00) << 8)  | ((x & 0x000000FF) << 24);
-}
+static inline uint32_t htonl(uint32_t x) { return ((x & 0xFF000000) >> 24) | ((x & 0x00FF0000) >> 8) | ((x & 0x0000FF00) << 8)  | ((x & 0x000000FF) << 24); }
 static inline uint32_t ntohl(uint32_t x) { return htonl(x); }
 
 
@@ -53,9 +50,7 @@ net_device_t *net_current_device = NULL;
 void net_register_device(net_device_t *dev) {
     uint64_t irq;
     spin_lock_irqsave(&net_lock, &irq);
-    if (!net_current_device) {
-        net_current_device = dev;
-    }
+    if (!net_current_device) { net_current_device = dev; }
     spin_unlock_irqrestore(&net_lock, irq);
 }
 
@@ -141,13 +136,7 @@ bool resolve_arp(uint32_t ip, uint8_t mac_out[6]) {
     spin_unlock_irqrestore(&net_lock, irq);
     // Continue below unlocked so we don't block
     send_arp_request(ip);
-    for (uint32_t i = 0; i < 1000000; i++) {
-        if (arp_cache_valid && arp_cached_ip == ip) {
-            memcpy(mac_out, arp_cached_mac, 6);
-            return true;
-        }
-        io_wait();
-    }
+    for (uint32_t i = 0; i < 1000000; i++) { if (arp_cache_valid && arp_cached_ip == ip) { memcpy(mac_out, arp_cached_mac, 6); return true; } io_wait(); }
     printf("arp: failed to resolve %d.%d.%d.%d\n",
         ip&0xFF,(ip>>8)&0xFF,(ip>>16)&0xFF,(ip>>24)&0xFF);
     return false;
@@ -342,10 +331,7 @@ uint32_t dns_resolve(const char *hostname) {
     dns_resolved_ip = 0;
     udp_callback    = dns_udp_rx;
 
-    if (!udp_send(NET_DNS_IP, DNS_SRC_PORT, DNS_PORT, buf, (uint16_t)off)) {
-        udp_callback = NULL;
-        return 0;
-    }
+    if (!udp_send(NET_DNS_IP, DNS_SRC_PORT, DNS_PORT, buf, (uint16_t)off)) { udp_callback = NULL; return 0; }
 
     for (int i = 0; i < 3000; i++) {
         if (dns_got_reply) {
@@ -442,10 +428,7 @@ void tcp_rx(const uint8_t *frame, uint16_t len) {
         if (!tcp_sockets[i]) continue;
         if (tcp_sockets[i]->local_port  == dst_port &&
             tcp_sockets[i]->remote_port == ntohs(tcp->src_port) &&
-            tcp_sockets[i]->remote_ip   == src_ip) {
-            sock = tcp_sockets[i];
-            break;
-        }
+            tcp_sockets[i]->remote_ip   == src_ip) { sock = tcp_sockets[i]; break; }
     }
     spin_unlock_irqrestore(&net_lock, irq);
     if (!sock) return;
@@ -464,16 +447,11 @@ void tcp_rx(const uint8_t *frame, uint16_t len) {
             sock->state      = TCP_ESTABLISHED;
             // Send ACK
             tcp_send_segment(sock, TCP_ACK, NULL, 0);
-        } else if (flags & TCP_RST) {
-            sock->state = TCP_CLOSED;
-        }
+        } else if (flags & TCP_RST) { sock->state = TCP_CLOSED; }
         break;
 
     case TCP_ESTABLISHED:
-        if (flags & TCP_RST) {
-            sock->state = TCP_CLOSED;
-            break;
-        }
+        if (flags & TCP_RST) { sock->state = TCP_CLOSED; break; }
         // Update remote window
         sock->remote_window = ntohs(tcp->window);
 
@@ -493,9 +471,7 @@ void tcp_rx(const uint8_t *frame, uint16_t len) {
         break;
 
     case TCP_FIN_WAIT1:
-        if (flags & TCP_ACK) {
-            sock->state = TCP_FIN_WAIT2;
-        }
+        if (flags & TCP_ACK) { sock->state = TCP_FIN_WAIT2; }
         if (flags & TCP_FIN) {
             sock->remote_seq++;
             sock->rx_fin = true;
@@ -514,9 +490,7 @@ void tcp_rx(const uint8_t *frame, uint16_t len) {
         break;
 
     case TCP_LAST_ACK:
-        if (flags & TCP_ACK) {
-            sock->state = TCP_CLOSED;
-        }
+        if (flags & TCP_ACK) { sock->state = TCP_CLOSED; }
         break;
 
     default:
@@ -540,9 +514,7 @@ tcp_socket_t *tcp_connect(uint32_t remote_ip, uint16_t remote_port) {
     // Register socket
     uint64_t irq;
     spin_lock_irqsave(&net_lock, &irq);
-    for (int i = 0; i < TCP_MAX_SOCKETS; i++) {
-        if (!tcp_sockets[i]) { tcp_sockets[i] = sock; break; }
-    }
+    for (int i = 0; i < TCP_MAX_SOCKETS; i++) { if (!tcp_sockets[i]) { tcp_sockets[i] = sock; break; } }
     spin_unlock_irqrestore(&net_lock, irq);
 
     // Send SYN
@@ -623,18 +595,12 @@ void tcp_close(tcp_socket_t *sock) {
         tcp_send_segment(sock, TCP_FIN | TCP_ACK, NULL, 0);
         sock->local_seq++;
         // Wait for FIN+ACK
-        for (int i = 0; i < 3000; i++) {
-            if (sock->state == TCP_TIME_WAIT || sock->state == TCP_CLOSED) break;
-            sleep(1);
-        }
+        for (int i = 0; i < 3000; i++) { if (sock->state == TCP_TIME_WAIT || sock->state == TCP_CLOSED) break; sleep(1); }
     } else if (sock->state == TCP_CLOSE_WAIT) {
         sock->state = TCP_LAST_ACK;
         tcp_send_segment(sock, TCP_FIN | TCP_ACK, NULL, 0);
         sock->local_seq++;
-        for (int i = 0; i < 3000; i++) {
-            if (sock->state == TCP_CLOSED) break;
-            sleep(1);
-        }
+        for (int i = 0; i < 3000; i++) { if (sock->state == TCP_CLOSED) break; sleep(1); }
     }
     sock->state = TCP_CLOSED;
 }
@@ -643,21 +609,14 @@ void tcp_free(tcp_socket_t *sock) {
     if (!sock) return;
     uint64_t irq;
     spin_lock_irqsave(&net_lock, &irq);
-    for (int i = 0; i < TCP_MAX_SOCKETS; i++) {
-        if (tcp_sockets[i] == sock) { tcp_sockets[i] = NULL; break; }
-    }
+    for (int i = 0; i < TCP_MAX_SOCKETS; i++) { if (tcp_sockets[i] == sock) { tcp_sockets[i] = NULL; break; } }
     spin_unlock_irqrestore(&net_lock, irq);
     free(sock);
 }
 
-void tcp_poll(tcp_socket_t *sock) {
-    (void)sock;
-    io_wait();
-}
+void tcp_poll(tcp_socket_t *sock) { (void)sock; io_wait(); }
 
-bool tcp_is_connected(tcp_socket_t *sock) {
-    return sock && sock->state == TCP_ESTABLISHED;
-}
+bool tcp_is_connected(tcp_socket_t *sock) { return sock && sock->state == TCP_ESTABLISHED; }
 
 
 void net_rx(const uint8_t *frame, uint16_t len) {

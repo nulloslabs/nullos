@@ -62,16 +62,10 @@ static int lookup(int by_name, const char *name, uid_t uid,
 }
 
 int getpwnam_r(const char *name, struct passwd *pwd, char *buf, size_t buflen,
-               struct passwd **result) {
-    if (!name || !pwd || !buf || !result) return EINVAL;
-    return lookup(1, name, 0, pwd, buf, buflen, result);
-}
+               struct passwd **result) { if (!name || !pwd || !buf || !result) return EINVAL; return lookup(1, name, 0, pwd, buf, buflen, result); }
 
 int getpwuid_r(uid_t uid, struct passwd *pwd, char *buf, size_t buflen,
-               struct passwd **result) {
-    if (!pwd || !buf || !result) return EINVAL;
-    return lookup(0, NULL, uid, pwd, buf, buflen, result);
-}
+               struct passwd **result) { if (!pwd || !buf || !result) return EINVAL; return lookup(0, NULL, uid, pwd, buf, buflen, result); }
 
 struct passwd *getpwnam(const char *name) {
     struct passwd *res;
@@ -85,21 +79,13 @@ struct passwd *getpwuid(uid_t uid) {
     return res;
 }
 
-void setpwent(void) {
-    if (pw_fd >= 0) close(pw_fd);
-    pw_fd = open("/etc/passwd", O_RDONLY);
-}
+void setpwent(void) { if (pw_fd >= 0) close(pw_fd); pw_fd = open("/etc/passwd", O_RDONLY); }
 
-void endpwent(void) {
-    if (pw_fd >= 0) close(pw_fd);
-    pw_fd = -1;
-}
+void endpwent(void) { if (pw_fd >= 0) close(pw_fd); pw_fd = -1; }
 
 struct passwd *getpwent(void) {
     if (pw_fd < 0) setpwent();
     if (pw_fd < 0) return NULL;
-    while (read_line(pw_fd, pw_buf, sizeof(pw_buf))) {
-        if (parse_passwd(pw_buf, &pw_static)) return &pw_static;
-    }
+    while (read_line(pw_fd, pw_buf, sizeof(pw_buf))) { if (parse_passwd(pw_buf, &pw_static)) return &pw_static; }
     return NULL;
 }

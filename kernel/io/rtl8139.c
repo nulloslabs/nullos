@@ -27,10 +27,7 @@ static void receive_rtl8139(uint64_t *irq) {
         uint16_t status = *(uint16_t *)(buf + 0);
         uint16_t pkt_len = *(uint16_t *)(buf + 2);
 
-        if (!(status & 0x01) || pkt_len < 14 || pkt_len > 1518) {
-            rtl_write16(RTL_CAPR, rtl_read16(RTL_CBR) - 16);
-            break;
-        }
+        if (!(status & 0x01) || pkt_len < 14 || pkt_len > 1518) { rtl_write16(RTL_CAPR, rtl_read16(RTL_CBR) - 16); break; }
 
         uint8_t *pkt = buf + 4;
 
@@ -52,16 +49,11 @@ static void poll_rtl8139(void) {
     spin_lock_irqsave(&rtl_lock, &irq);
 
     uint16_t isr = rtl_read16(RTL_ISR);
-    if (!isr) {
-        spin_unlock_irqrestore(&rtl_lock, irq);
-        return;
-    }
+    if (!isr) { spin_unlock_irqrestore(&rtl_lock, irq); return; }
 
     rtl_write16(RTL_ISR, isr);
 
-    if (isr & RTL_INT_ROK) {
-        receive_rtl8139(&irq);
-    }
+    if (isr & RTL_INT_ROK) { receive_rtl8139(&irq); }
     if (isr & RTL_INT_RXOVW) {
         // RX overflow...
         rtl8139.rx_offset = 0;
@@ -94,17 +86,12 @@ bool send_rtl8139(const void *data, uint16_t len) {
         io_wait();
         spin_lock_irqsave(&rtl_lock, &irq);
     }
-    if (timeout <= 0) {
-        spin_unlock_irqrestore(&rtl_lock, irq);
-        return false;
-    }
+    if (timeout <= 0) { spin_unlock_irqrestore(&rtl_lock, irq); return false; }
 
     uint16_t send_len = len < 60 ? 60 : len;
 
     memcpy(rtl8139.tx_buf[slot], data, len);
-    if (len < 60) {
-        memset((uint8_t*)rtl8139.tx_buf[slot] + len, 0, 60 - len);
-    }
+    if (len < 60) { memset((uint8_t*)rtl8139.tx_buf[slot] + len, 0, 60 - len); }
 
     rtl_write32(tsad_regs[slot], (uint32_t)virt_to_phys(rtl8139.tx_buf[slot]));
     rtl_write32(tsd_regs[slot], send_len & 0x1FFF);
@@ -115,9 +102,7 @@ bool send_rtl8139(const void *data, uint16_t len) {
     return true;
 }
 
-void get_rtl8139_mac(uint8_t mac[6]) {
-    memcpy(mac, rtl8139.mac, 6);
-}
+void get_rtl8139_mac(uint8_t mac[6]) { memcpy(mac, rtl8139.mac, 6); }
 
 void init_rtl8139(pci_device_t *dev) {
     if (!dev) return;

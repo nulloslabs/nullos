@@ -54,6 +54,7 @@ int symlink(const char *target, const char *linkpath);
 int chown(const char *path, uid_t owner, gid_t group);
 int lchown(const char *path, uid_t owner, gid_t group);
 int unlinkat(int dirfd, const char *pathname, int flags);
+int symlinkat(const char *target, int newdirfd, const char *linkpath);
 
 #ifdef __cplusplus
 }

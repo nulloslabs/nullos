@@ -18,31 +18,12 @@ static uint8_t *tar_archive_start = NULL;
 static uint8_t *tar_decompressed = NULL;
 static modified_file_t modified_files[MAX_MODIFIED_FILES];
 
-static void get_absolute_path(const char *in, char *out_abs, size_t out_size) {
-    if (in[0] == '/') {
-        strncpy(out_abs, in, out_size - 1);
-    } else {
-        if (current_task_ptr) {
-            strncpy(out_abs, current_task_ptr->cwd, out_size - 1);
-            if (strcmp(out_abs, "/") != 0)
-                strncat(out_abs, "/", out_size - strlen(out_abs) - 1);
-        } else {
-            strcpy(out_abs, "/");
-        }
-        strncat(out_abs, in, out_size - strlen(out_abs) - 1);
-    }
-    out_abs[out_size - 1] = '\0';
-}
-
 static void collapse_slashes(const char *in, char *out, size_t out_size) {
     size_t j = 0;
     bool last_was_slash = false;
 
     for (size_t i = 0; in[i] && j + 1 < out_size; i++) {
-        if (in[i] == '/') {
-            if (last_was_slash) continue;
-            last_was_slash = true;
-        } else {
+        if (in[i] == '/') { if (last_was_slash) continue; last_was_slash = true; } else {
             last_was_slash = false;
         }
 
@@ -78,10 +59,7 @@ static void normalize_abs_components(const char *in_abs, char *out_abs, size_t o
         if (strcmp(start, ".") == 0) {
             continue;
         }
-        if (strcmp(start, "..") == 0) {
-            if (depth > 0) depth--;
-            continue;
-        }
+        if (strcmp(start, "..") == 0) { if (depth > 0) depth--; continue; }
         if (depth < 64) parts[depth++] = start;
     }
 
@@ -118,10 +96,7 @@ static void resolve_link_target(const char *base_path_abs, const char *link_targ
     out_abs[out_size - 1] = '\0';
 
     char *last_slash = strrchr(out_abs, '/');
-    if (last_slash) {
-        last_slash[1] = '\0';
-        strncat(out_abs, link_target, out_size - strlen(out_abs) - 1);
-    } else {
+    if (last_slash) { last_slash[1] = '\0'; strncat(out_abs, link_target, out_size - strlen(out_abs) - 1); } else {
         strncpy(out_abs, link_target, out_size - 1);
         out_abs[out_size - 1] = '\0';
     }
@@ -276,74 +251,135 @@ static void get_norm_path(const char *path, char *out_norm, size_t out_size) {
     normalize_path(resolved_path, out_norm, out_size);
 }
 
-static rootfs_file_t read_rootfs_internal(const char *path, int depth) {
-    char norm[256];
-    get_norm_path(path, norm, sizeof(norm));
+void get_absolute_path(const char *in, char *out_abs, size_t out_size) {
+    if (in[0] == '/') { strncpy(out_abs, in, out_size - 1); } else {
+        if (current_task_ptr) {
+            strncpy(out_abs, current_task_ptr->cwd, out_size - 1);
+            if (strcmp(out_abs, "/") != 0) strncat(out_abs, "/", out_size - strlen(out_abs) - 1);
+        } else { strcpy(out_abs, "/"); }
+        strncat(out_abs, in, out_size - strlen(out_abs) - 1);
+    }
+    out_abs[out_size - 1] = '\0';
+}
+
+rootfs_file_t read_rootfs(const char *path) {
+    char current_path[256];
+    strncpy(current_path, path, sizeof(current_path) - 1);
+    current_path[sizeof(current_path) - 1] = '\0';
 
     rootfs_file_t result = { .data = NULL, .size = 0, .mode = 0, .uid = 0, .gid = 0 };
 
-    if (depth >= 8) return result;
+    for (int depth = 0; depth < 8; depth++) {
+        char norm[256];
+        get_norm_path(current_path, norm, sizeof(norm));
 
-    // 1. Check overlay
-    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
-        if (modified_files[i].is_active && strcmp(modified_files[i].path, norm) == 0) {
-            result.data = modified_files[i].data;
-            result.size = modified_files[i].size;
-            result.mode = modified_files[i].mode;
-            result.uid = modified_files[i].uid;
-            result.gid = modified_files[i].gid;
-            return result;
-        }
-    }
-
-    // 2. Check TAR archive (exact match + trailing slash tolerance)
-    if (tar_archive_start == NULL) {
-        return result;
-    }
-
-    uint8_t *ptr = tar_archive_start;
-    while (1) {
-        struct tar_header *h = (struct tar_header *)ptr;
-        if (h->name[0] == '\0') break;
-
-        uint64_t size = parse_octal(h->size);
-        uint32_t mode = (uint32_t)parse_octal(h->mode);
-        uid_t uid = (uid_t)parse_octal(h->uid);
-        gid_t gid = (gid_t)parse_octal(h->gid);
-        char type = h->typeflag[0];
-
-        bool matches = tar_name_matches(h->name, norm);
-        if (matches) {
-            if (type == '1' || type == '2') {
-                char target[101];
-                strncpy(target, h->linkname, 100);
-                target[100] = '\0';
-                
-                // Get absolute path of current file to resolve target relative to it
-                char current_abs[256];
-                get_absolute_path(path, current_abs, sizeof(current_abs));
-                
-                char resolved_abs[256];
-                resolve_link_target(current_abs, target, resolved_abs, sizeof(resolved_abs));
-                return read_rootfs_internal(resolved_abs, depth + 1);
-            }
-            if (type == '0' || type == '\0' || type == '5') {
-                result.size = size;
-                result.data = ptr + 512;
-                result.mode = (type == '5') ? (mode | 0040000) : mode;
-                result.uid = uid;
-                result.gid = gid;
+        // 1. Check overlay
+        bool found_link = false;
+        for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+            if (modified_files[i].is_active && strcmp(modified_files[i].path, norm) == 0) {
+                if ((modified_files[i].mode & 0xF000) == 0xA000) {
+                    char current_abs[256];
+                    get_absolute_path(current_path, current_abs, sizeof(current_abs));
+                    resolve_link_target(current_abs, (char*)modified_files[i].data, current_path, sizeof(current_path));
+                    found_link = true;
+                    break;
+                }
+                result.data = modified_files[i].data;
+                result.size = modified_files[i].size;
+                result.mode = modified_files[i].mode;
+                result.uid = modified_files[i].uid;
+                result.gid = modified_files[i].gid;
                 return result;
             }
         }
-        ptr += 512 + (size + 511) / 512 * 512; // Add padding
+        if (found_link) continue;
+
+        // 2. Check TAR archive
+        if (tar_archive_start != NULL) {
+            uint8_t *ptr = tar_archive_start;
+            while (1) {
+                struct tar_header *h = (struct tar_header *)ptr;
+                if (h->name[0] == '\0') break;
+
+                uint64_t size = parse_octal(h->size);
+                if (tar_name_matches(h->name, norm)) {
+                    char type = h->typeflag[0];
+                    if (type == '1' || type == '2') {
+                        char target[101];
+                        strncpy(target, h->linkname, 100);
+                        target[100] = '\0';
+                        char current_abs[256];
+                        get_absolute_path(current_path, current_abs, sizeof(current_abs));
+                        resolve_link_target(current_abs, target, current_path, sizeof(current_path));
+                        found_link = true;
+                        break;
+                    }
+                    if (type == '0' || type == '\0' || type == '5') {
+                        result.size = size;
+                        result.data = ptr + 512;
+                        result.mode = (type == '5') ? ((uint32_t)parse_octal(h->mode) | 0040000) : (uint32_t)parse_octal(h->mode);
+                        result.uid = (uid_t)parse_octal(h->uid);
+                        result.gid = (gid_t)parse_octal(h->gid);
+                        return result;
+                    }
+                }
+                ptr += 512 + (size + 511) / 512 * 512;
+            }
+        }
+        if (!found_link) break;
     }
 
     return result;
 }
 
-rootfs_file_t read_rootfs(const char *path) {
-    return read_rootfs_internal(path, 0);
+rootfs_file_t stat_rootfs(const char *path) {
+    char norm[256];
+    // same as get_norm_path but WITHOUT resolve_path_symlinks
+    char abs_path[256];
+    get_absolute_path(path, abs_path, sizeof(abs_path));
+    char clean_path[256];
+    collapse_slashes(abs_path, clean_path, sizeof(clean_path));
+    char normalized_path[256];
+    normalize_abs_components(clean_path, normalized_path, sizeof(normalized_path));
+    normalize_path(normalized_path, norm, sizeof(norm));
+
+    // check overlay first
+    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+        if (modified_files[i].is_active && strcmp(modified_files[i].path, norm) == 0) {
+            rootfs_file_t result = {
+                .data = modified_files[i].data,
+                .size = modified_files[i].size,
+                .mode = modified_files[i].mode,
+                .uid  = modified_files[i].uid,
+                .gid  = modified_files[i].gid,
+            };
+            return result;
+        }
+    }
+
+    // check TAR, return symlink as-is without following
+    if (tar_archive_start) {
+        uint8_t *ptr = tar_archive_start;
+        while (1) {
+            struct tar_header *h = (struct tar_header *)ptr;
+            if (h->name[0] == '\0') break;
+            uint64_t size = parse_octal(h->size);
+            if (tar_name_matches(h->name, norm)) {
+                rootfs_file_t result = {
+                    .data = ptr + 512,
+                    .size = size,
+                    .mode = (uint32_t)parse_octal(h->mode),
+                    .uid  = (uid_t)parse_octal(h->uid),
+                    .gid  = (gid_t)parse_octal(h->gid),
+                };
+                return result;
+            }
+            ptr += 512 + (size + 511) / 512 * 512;
+        }
+    }
+
+    rootfs_file_t empty = {0};
+    return empty;
 }
 
 int write_rootfs(const char *path, const void *data, uint64_t size, uint32_t mode, uid_t uid, gid_t gid) {
@@ -383,6 +419,62 @@ int mkdir_rootfs(const char *path, mode_t mode, uid_t uid, gid_t gid) {
     return 0;
 }
 
+int rmdir_rootfs(const char *path) {
+    char norm[256];
+    get_norm_path(path, norm, sizeof(norm));
+
+    // check it exists and is a directory
+    rootfs_file_t file = stat_rootfs(path);
+    if (!file.mode) return -ENOENT;
+    if ((file.mode & 0xF000) != 0x4000) return -ENOTDIR;
+
+    // check it's empty — scan modified_files for any children
+    size_t norm_len = strlen(norm);
+    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+        if (!modified_files[i].is_active) continue;
+        if (strcmp(modified_files[i].path, norm) == 0) continue; // itself
+        if (strncmp(modified_files[i].path, norm, norm_len) == 0 &&
+            modified_files[i].path[norm_len] == '/') return -ENOTEMPTY;
+    }
+
+    // check TAR for any children
+    if (tar_archive_start) {
+        uint8_t *ptr = tar_archive_start;
+        while (1) {
+            struct tar_header *h = (struct tar_header *)ptr;
+            if (h->name[0] == '\0') break;
+            uint64_t size = parse_octal(h->size);
+            if (strncmp(h->name, norm, norm_len) == 0 &&
+                h->name[norm_len] == '/' &&
+                strlen(h->name) > norm_len + 1) return -ENOTEMPTY;
+            ptr += 512 + (size + 511) / 512 * 512;
+        }
+    }
+
+    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+        if (modified_files[i].is_active && strcmp(modified_files[i].path, norm) == 0) {
+            if (modified_files[i].data) free(modified_files[i].data);
+            modified_files[i].is_active = false;
+            return 0;
+        }
+    }
+
+    return -ENOENT;
+}
+
+int symlink_rootfs(const char *target, const char *path, uid_t uid, gid_t gid) {
+    char norm[256];
+    get_norm_path(path, norm, sizeof(norm));
+
+    size_t len = strlen(target);
+    char *copy = malloc(len + 1);
+    if (!copy) return -ENOMEM;
+    strcpy(copy, target);
+
+    add_modified_file(norm, copy, len, 0xA000 | 0777, uid, gid); // S_IFLNK
+    return 0;
+}
+
 int chmod_rootfs(const char *path, mode_t mode) {
     char norm[256];
     get_norm_path(path, norm, sizeof(norm));
@@ -419,10 +511,7 @@ int get_rootfs_entry(int index, directory_entry_t *entry) {
 
             // Strip trailing slash for directories
             size_t nlen = strlen(name_part);
-            if (nlen > 1 && name_part[nlen - 1] == '/') {
-                strncpy(entry->name, name_part, nlen - 1);
-                entry->name[nlen - 1] = '\0';
-            } else {
+            if (nlen > 1 && name_part[nlen - 1] == '/') { strncpy(entry->name, name_part, nlen - 1); entry->name[nlen - 1] = '\0'; } else {
                 strncpy(entry->name, name_part, sizeof(entry->name) - 1);
                 entry->name[sizeof(entry->name) - 1] = '\0';
             }
@@ -451,16 +540,10 @@ void init_rootfs(void) {
         uint32_t orig_size = *(uint32_t *)(gz_data + gz_size - 4);
 
         uint8_t *decompressed = malloc(orig_size);
-        if (!decompressed) {
-            panic("memory allocation failed");
-            return;
-        }
+        if (!decompressed) { panic("memory allocation failed"); return; }
 
         int result = ungzip(gz_data, decompressed);
-        if (result < 0) {
-            free(decompressed);
-            return;
-        }
+        if (result < 0) { free(decompressed); return; }
 
         tar_archive_start = decompressed;
         tar_decompressed = decompressed;

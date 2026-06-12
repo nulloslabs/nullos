@@ -21,9 +21,7 @@ int openat(int dirfd, const char *path, int flags, ...) {
     return syscall(SYS_openat, dirfd, path, flags, mode);
 }
 
-int creat(const char *path, mode_t mode) {
-    return open(path, O_WRONLY | O_CREAT | O_TRUNC, mode);
-}
+int creat(const char *path, mode_t mode) { return open(path, O_WRONLY | O_CREAT | O_TRUNC, mode); }
 
 int fcntl(int fd, int cmd, ...) {
     va_list args;

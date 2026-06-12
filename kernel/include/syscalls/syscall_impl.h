@@ -51,6 +51,9 @@ void sys_getdents(syscall_frame_t *frame);
 void sys_getcwd(syscall_frame_t *frame);
 void sys_chdir(syscall_frame_t *frame);
 void sys_mkdir(syscall_frame_t *frame);
+void sys_rmdir(syscall_frame_t *frame);
+void sys_unlink(syscall_frame_t *frame);
+void sys_symlink(syscall_frame_t *frame);
 void sys_chmod(syscall_frame_t *frame);
 void sys_fchmod(syscall_frame_t *frame);
 void sys_getuid(syscall_frame_t *frame);
@@ -69,6 +72,8 @@ void sys_umount(syscall_frame_t *frame);
 void sys_sethostname(syscall_frame_t *frame);
 void sys_gethostname(syscall_frame_t *frame);
 void sys_openat(syscall_frame_t *frame);
+void sys_unlinkat(syscall_frame_t *frame);
+void sys_symlinkat(syscall_frame_t *frame);
 void sys_fchmodat(syscall_frame_t *frame);
 
 // Some public helpers

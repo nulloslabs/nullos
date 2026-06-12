@@ -2,24 +2,15 @@
 #include <fnmatch.h>
 #include <string.h>
 
-static int chr_eq(int a, int b, int flags) {
-    if (flags & FNM_CASEFOLD) return tolower(a) == tolower(b);
-    return a == b;
-}
+static int chr_eq(int a, int b, int flags) { if (flags & FNM_CASEFOLD) return tolower(a) == tolower(b); return a == b; }
 
 static int rangematch(const char **pat, int c, int flags) {
     const char *p = *pat;
     int negate = 0, ok = 0;
 
-    if (*p == '!' || *p == '^') {
-        negate = 1;
-        p++;
-    }
+    if (*p == '!' || *p == '^') { negate = 1; p++; }
 
-    if (*p == ']') {
-        if (chr_eq(*p, c, flags)) ok = 1;
-        p++;
-    }
+    if (*p == ']') { if (chr_eq(*p, c, flags)) ok = 1; p++; }
 
     while (*p && *p != ']') {
         int start = *p++;
@@ -35,9 +26,7 @@ static int rangematch(const char **pat, int c, int flags) {
                 c = tolower(c);
             }
             if (start <= c && c <= end) ok = 1;
-        } else if (chr_eq(start, c, flags)) {
-            ok = 1;
-        }
+        } else if (chr_eq(start, c, flags)) { ok = 1; }
     }
 
     if (*p == ']') p++;
@@ -64,14 +53,8 @@ static int match(const char *pat, const char *str, const char *start, int flags)
                 while (*pat == '*') pat++;
                 if ((flags & FNM_PERIOD) && sc == '.' &&
                     (str == start || ((flags & FNM_PATHNAME) && str[-1] == '/'))) return 0;
-                if (*pat == '\0') {
-                    if (!(flags & FNM_PATHNAME)) return 1;
-                    return (flags & FNM_LEADING_DIR) || !*str || !strchr(str, '/');
-                }
-                for (; *str; str++) {
-                    if ((flags & FNM_PATHNAME) && *str == '/') break;
-                    if (match(pat, str, start, flags)) return 1;
-                }
+                if (*pat == '\0') { if (!(flags & FNM_PATHNAME)) return 1; return (flags & FNM_LEADING_DIR) || !*str || !strchr(str, '/'); }
+                for (; *str; str++) { if ((flags & FNM_PATHNAME) && *str == '/') break; if (match(pat, str, start, flags)) return 1; }
                 return match(pat, str, start, flags);
             case '[':
                 if (sc == '\0') return 0;
@@ -94,6 +77,4 @@ static int match(const char *pat, const char *str, const char *start, int flags)
     }
 }
 
-int fnmatch(const char *pattern, const char *string, int flags) {
-    return match(pattern, string, string, flags) ? 0 : FNM_NOMATCH;
-}
+int fnmatch(const char *pattern, const char *string, int flags) { return match(pattern, string, string, flags) ? 0 : FNM_NOMATCH; }

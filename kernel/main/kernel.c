@@ -70,10 +70,7 @@ void kmain(uint64_t load_offset) {
     init_pci_drivers();
     init_syscalls();
 
-    if (current_apic_mode != APIC_NONE) {
-        init_mp();
-        init_apic_timer(250);
-    }
+    if (current_apic_mode != APIC_NONE) { init_mp(); init_apic_timer(250); }
 
     void* kernel_stack = malloc(32768);
     set_tss_kernel_stack((void*)((uint64_t)kernel_stack + 32768));

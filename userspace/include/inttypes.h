@@ -8,12 +8,14 @@
 extern "C" {
 #endif
 
-#if defined(__x86_64__)
+#if defined(__i386__)
+#define __PRI64 "ll"
+#define __PRIMAX "ll"
+#elif defined(__x86_64__)
 #define __PRI64 "l"
 #define __PRIMAX "l"
 #else
-#define __PRI64 "ll"
-#define __PRIMAX "ll"
+#error "Unsupported architecture for inttypes.h."
 #endif
 
 #define PRId8 "d"

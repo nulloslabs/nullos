@@ -15,33 +15,24 @@ static uint64_t vuser_cursor   = 0x0000700000000000;
 static spinlock_t vmm_lock = SPINLOCK_INIT;
 
 // Helper: Get virtual address of a physical page using HHDM
-void* phys_to_virt(uint64_t phys) {
-    return (void*)(phys + hhdm_req.response->offset);
-}
+void* phys_to_virt(uint64_t phys) { return (void*)(phys + hhdm_req.response->offset); }
 
 uint64_t virt_to_phys(void* virt) {
     uintptr_t addr = (uintptr_t)virt;
     
     // Check if it's in the kernel executable range
-    if (addr >= 0xffffffff80000000) {
-        if (eaddr_req.response) {
-            return addr - eaddr_req.response->virtual_base + eaddr_req.response->physical_base;
-        }
+    if (addr >= 0xffffffff80000000) { if (eaddr_req.response) { return addr - eaddr_req.response->virtual_base + eaddr_req.response->physical_base; }
     }
     
     // Check if it's in the vmalloc range (e.g. malloc buffers pushing into controllers)
-    if (addr >= 0xffffc00000000000 && addr < 0xffffffff80000000) {
-        return get_vmm_phys(&kernel_context, addr);
-    }
+    if (addr >= 0xffffc00000000000 && addr < 0xffffffff80000000) { return get_vmm_phys(&kernel_context, addr); }
     
     // HHDM (Higher Half Direct Map) range
     return addr - hhdm_req.response->offset;
 }
 
 static uint64_t* get_vmm_next_level(uint64_t* current_level, uint64_t index, bool allocate, uint64_t flags) {
-    if (!current_level) {
-        return NULL;
-    }
+    if (!current_level) { return NULL; }
     if (current_level[index] & VMM_PRESENT) {
         // Propagate permission bits (User, Writable) to existing intermediate entries
         current_level[index] |= (flags & (VMM_WRITABLE | VMM_USER));
@@ -137,9 +128,7 @@ void unmap_vmm(vmm_context_t* ctx, uint64_t virt) {
     // Get the physical address so we can free it in the PMM
     // Mask out flag bits: low 12 (page flags) and bit 63 (NX)
     uint64_t phys = pt[pt_idx] & 0x000ffffffffff000ULL;
-    if (phys) {
-        pfree((void*)phys);
-    }
+    if (phys) { pfree((void*)phys); }
 
     // Clear the entry and flush TLB
     pt[pt_idx] = 0;
@@ -248,10 +237,7 @@ vmm_context_t* create_vmm_context(void) {
 
     // allocate physical page for PML4
     void* pml4_raw = pmalloc();
-    if (!pml4_raw) {
-        free(ctx);
-        return NULL;
-    }
+    if (!pml4_raw) { free(ctx); return NULL; }
     uint64_t pml4_phys = (uint64_t)pml4_raw;
 
     // get virtual address
@@ -261,18 +247,14 @@ vmm_context_t* create_vmm_context(void) {
     memset(ctx->pml4, 0, PAGE_SIZE);
 
     // copy kernel mappings (top 256 entries)
-    for (int i = 256; i < 512; i++) {
-        ctx->pml4[i] = kernel_context.pml4[i];
-    }
+    for (int i = 256; i < 512; i++) { ctx->pml4[i] = kernel_context.pml4[i]; }
 
     return ctx;
 }
 
 vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
     if (!parent) return NULL;
-    if (!parent->pml4) {
-        return NULL;
-    }
+    if (!parent->pml4) { return NULL; }
 
     vmm_context_t* child = create_vmm_context();
     if (!child) return NULL;
@@ -306,10 +288,7 @@ vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
                     void* new_phys = pmalloc();
                     if (!new_phys) {
                         // Rollback: free all allocated pages and destroy child context
-                        for (int r = 0; r < rollback_count; r++) {
-                            unmap_vmm(child, rollback_virt[r]);
-                            pfree((void*)rollback_phys[r]);
-                        }
+                        for (int r = 0; r < rollback_count; r++) { unmap_vmm(child, rollback_virt[r]); pfree((void*)rollback_phys[r]); }
                         free(child);
                         return NULL;
                     }
@@ -379,9 +358,7 @@ void* vmalloc_ex(vmm_context_t* ctx, size_t size, uint64_t flags) {
     return (void*)((uintptr_t)start_addr + sizeof(vmalloc_header_t));
 }
 
-void* vmalloc_user_ex(vmm_context_t* ctx, size_t size) {
-    return vmalloc_ex(ctx, size, VMM_WRITABLE | VMM_USER | VMM_NX);
-}
+void* vmalloc_user_ex(vmm_context_t* ctx, size_t size) { return vmalloc_ex(ctx, size, VMM_WRITABLE | VMM_USER | VMM_NX); }
 
 void* vmap_mmio(uint64_t phys, size_t num_pages) {
     if (num_pages == 0) return NULL;
@@ -430,13 +407,9 @@ void* vmap_user_at(vmm_context_t* ctx, uint64_t virt, size_t size, uint64_t flag
     return (void*)virt;
 }
 
-void* vmalloc(size_t size) {
-    return vmalloc_ex(&kernel_context, size, VMM_WRITABLE | VMM_NX);
-}
+void* vmalloc(size_t size) { return vmalloc_ex(&kernel_context, size, VMM_WRITABLE | VMM_NX); }
 
-void* vmalloc_user(size_t size) {
-    return vmalloc_user_ex(&kernel_context, size);
-}
+void* vmalloc_user(size_t size) { return vmalloc_user_ex(&kernel_context, size); }
 
 void* vrealloc(void* ptr, size_t size) {
     if (!ptr) return vmalloc(size);
@@ -468,9 +441,7 @@ void vfree(void* ptr) {
     vmalloc_header_t* header = (vmalloc_header_t*)((uintptr_t)ptr - sizeof(vmalloc_header_t));
     uint64_t virt = (uintptr_t)header;
 
-    for (uint64_t i = 0; i < header->page_count; i++) {
-        unmap_vmm(&kernel_context, virt + (i * PAGE_SIZE));
-    }
+    for (uint64_t i = 0; i < header->page_count; i++) { unmap_vmm(&kernel_context, virt + (i * PAGE_SIZE)); }
 }
 
 void init_vmm(void) {

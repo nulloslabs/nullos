@@ -2,6 +2,4 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
-int flock(int fd, int operation) {
-    return (int)syscall(SYS_flock, fd, operation);
-}
+int flock(int fd, int operation) { return (int)syscall(SYS_flock, fd, operation); }

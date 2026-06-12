@@ -16,8 +16,7 @@ extern "C" {
 #define MAP_ANONYMOUS 0x20
 #define MAP_ANON      MAP_ANONYMOUS
 #define MAP_FIXED     0x10
-
-#define MAP_FAILED ((void *)-1)
+#define MAP_FAILED    ((void *)-1)
 
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, long offset);
 int mprotect(void *addr, size_t length, int prot);

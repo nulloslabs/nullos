@@ -27,18 +27,14 @@ static uint8_t next_msi_vector = MSI_VECTOR_BASE;
 void pci_dispatch(uint8_t vector) {
     if (vector >= LEGACY_IRQ_BASE && vector < LEGACY_IRQ_BASE + 16) {
         intx_chain_t *c = &intx_chains[vector - LEGACY_IRQ_BASE];
-        for (int i = 0; i < c->count; i++) {
-            if (c->fns[i]) c->fns[i]();
-        }
+        for (int i = 0; i < c->count; i++) { if (c->fns[i]) c->fns[i](); }
         return;
     }
     void (*h)(void) = msi_handlers[vector];
     if (h) h();
 }
 
-void pci_register_msi_handler(uint8_t vector, void (*handler)(void)) {
-    msi_handlers[vector] = handler;
-}
+void pci_register_msi_handler(uint8_t vector, void (*handler)(void)) { msi_handlers[vector] = handler; }
 
 void pci_register_intx_handler(uint8_t irq_line, void (*handler)(void)) {
     if (irq_line >= 16) return;
@@ -59,9 +55,7 @@ void write_pci(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg, uint32_t val
     outl(0xCFC, val);
 }
 
-uint16_t vendor_pci(uint8_t bus, uint8_t dev, uint8_t func) {
-    return (uint16_t)(read_pci(bus, dev, func, 0) & 0xFFFF);
-}
+uint16_t vendor_pci(uint8_t bus, uint8_t dev, uint8_t func) { return (uint16_t)(read_pci(bus, dev, func, 0) & 0xFFFF); }
 
 pci_device_t* find_pci(uint16_t vendor, uint16_t device) {
     for (int i = 0; i < pci_device_count; i++)
@@ -127,10 +121,7 @@ uint8_t pci_enable_msi(pci_device_t *dev) {
     uint8_t cap = pci_find_cap(dev, 0x05);
     if (!cap) return 0;
 
-    if (next_msi_vector >= MSI_VECTOR_END) {
-        printf("pci: out of msi vectors\n");
-        return 0;
-    }
+    if (next_msi_vector >= MSI_VECTOR_END) { printf("pci: out of msi vectors\n"); return 0; }
     uint8_t vector = next_msi_vector++;
 
     // Read Message Control (upper 16 bits of cap dword 0)
@@ -146,12 +137,7 @@ uint8_t pci_enable_msi(pci_device_t *dev) {
     uint32_t data = vector;
 
     write_pci(dev->bus, dev->dev, dev->func, cap + 0x04, addr_lo);
-    if (is_64bit) {
-        write_pci(dev->bus, dev->dev, dev->func, cap + 0x08, addr_hi);
-        write_pci(dev->bus, dev->dev, dev->func, cap + 0x0C, data & 0xFFFF);
-    } else {
-        write_pci(dev->bus, dev->dev, dev->func, cap + 0x08, data & 0xFFFF);
-    }
+    if (is_64bit) { write_pci(dev->bus, dev->dev, dev->func, cap + 0x08, addr_hi); write_pci(dev->bus, dev->dev, dev->func, cap + 0x0C, data & 0xFFFF); } else { write_pci(dev->bus, dev->dev, dev->func, cap + 0x08, data & 0xFFFF); }
 
     // Set MSI Enable (bit 0 of Message Control), force MME=0 (1 vector).
     mc |= 1;          // MSI Enable
@@ -171,10 +157,7 @@ uint8_t pci_enable_msi(pci_device_t *dev) {
 // vector. Driver should register its handler on the returned vector.
 uint8_t pci_request_irq(pci_device_t *dev, void (*handler)(void)) {
     uint8_t v = pci_enable_msi(dev);
-    if (v) {
-        pci_register_msi_handler(v, handler);
-        return v;
-    }
+    if (v) { pci_register_msi_handler(v, handler); return v; }
     // Fall back to legacy INTx. Make sure INTx is *enabled* (clear bit 10).
     pci_set_intx_disable(dev, 0);
     uint32_t r = read_pci(dev->bus, dev->dev, dev->func, 0x3C);
@@ -220,13 +203,7 @@ void init_pci_drivers(void) {
         {"e1000",   E1000_VENDOR,   E1000_DEVICE,   init_e1000}
     };
 
-    for (int i = 0; i < (int)(sizeof(known_pci_drivers)/sizeof(known_pci_drivers[0])); i++) {
-        pci_device_t *dev = find_pci(known_pci_drivers[i].vendor, known_pci_drivers[i].device);
-        if (dev) {
-            printf("pci: found driver for %s\n", known_pci_drivers[i].name);
-            known_pci_drivers[i].init(dev);
-        }
-    }
+    for (int i = 0; i < (int)(sizeof(known_pci_drivers)/sizeof(known_pci_drivers[0])); i++) { pci_device_t *dev = find_pci(known_pci_drivers[i].vendor, known_pci_drivers[i].device); if (dev) { printf("pci: found driver for %s\n", known_pci_drivers[i].name); known_pci_drivers[i].init(dev); } }
 
     struct {
         const char *name;
@@ -240,10 +217,7 @@ void init_pci_drivers(void) {
         for (int j = 0; j < pci_device_count; j++) {
             if (pci_devices[j].class == USB_PCI_CLASS &&
                 pci_devices[j].subclass == USB_PCI_SUBCLASS &&
-                pci_devices[j].progif == known_usb_drivers[i].progif) {
-                printf("pci: found %s usb controller\n", known_usb_drivers[i].name);
-                known_usb_drivers[i].init(&pci_devices[j]);
-            }
+                pci_devices[j].progif == known_usb_drivers[i].progif) { printf("pci: found %s usb controller\n", known_usb_drivers[i].name); known_usb_drivers[i].init(&pci_devices[j]); }
         }
     }
 }
