@@ -304,7 +304,7 @@ void sys_read(syscall_frame_t *frame) {
             *sbuf_pos = 0;
             spin_unlock_irqrestore(&stdin_lock, irq);
     
-            reset_term_line_start();
+            puts("\033[s");
             while (1) {
                 current_task_ptr->state = TASK_READY;
                 spin_unlock(&sched_lock);

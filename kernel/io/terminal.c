@@ -4,6 +4,7 @@
 #include <main/string.h>
 #include <main/limine_req.h>
 #include <main/spinlock.h>
+#include <main/halt.h>
 #include <io/framebuffer.h>
 #include <io/fonts.h>
 #include <io/serial.h>
@@ -39,26 +40,49 @@ static void flush_backbuffer(struct limine_framebuffer *fb) {
     if (!back_buffer_initialized || !back_buffer || !back_buffer_available) return;
     if (!fb || !fb->address) return;
 
-    uint32_t *fb_ptr = (uint32_t *)fb->address;
     uint64_t width = fb->width;
     uint64_t height = fb->height;
 
     // Validate framebuffer dimensions
     if (width == 0 || height == 0 || width > 8192 || height > 8192) return;
-    if (fb->pitch < width * 4 || fb->pitch > 65536) return;
 
-    // Copy line by line to handle pitch differences
+    uint8_t *fb_addr = (uint8_t *)fb->address;
+    uint8_t r_size = fb->red_mask_size;
+    uint8_t r_shift = fb->red_mask_shift;
+    uint8_t g_size = fb->green_mask_size;
+    uint8_t g_shift = fb->green_mask_shift;
+    uint8_t b_size = fb->blue_mask_size;
+    uint8_t b_shift = fb->blue_mask_shift;
+    uint8_t bpp = fb->bpp;
+
     for (uint64_t y = 0; y < height; y++) {
-        uint64_t fb_offset = y * (fb->pitch / 4);
-        uint64_t bb_offset = y * width;
+        uint64_t fb_row_offset = y * fb->pitch;
+        uint64_t bb_row_offset = y * width;
 
-        // Bounds check
-        if (fb_offset >= (uint64_t)(fb->pitch * fb->height / 4)) break;
-        if (bb_offset >= (back_buffer_pitch * back_buffer_height / 4)) break;
+        for (uint64_t x = 0; x < width; x++) {
+            uint32_t color = back_buffer[bb_row_offset + x];
+            uint8_t r = (color >> 16) & 0xFF;
+            uint8_t g = (color >> 8) & 0xFF;
+            uint8_t b = color & 0xFF;
 
-        memcpy(fb_ptr + fb_offset,
-               back_buffer + bb_offset,
-               width * sizeof(uint32_t));
+            uint32_t pixel = 0;
+            pixel |= (uint32_t)((r * ((1 << r_size) - 1)) / 255) << r_shift;
+            pixel |= (uint32_t)((g * ((1 << g_size) - 1)) / 255) << g_shift;
+            pixel |= (uint32_t)((b * ((1 << b_size) - 1)) / 255) << b_shift;
+
+            uint64_t fb_offset = fb_row_offset + x * ((bpp + 7) / 8);
+            switch (bpp) {
+                case 15:
+                case 16: *(uint16_t *)(fb_addr + fb_offset) = (uint16_t)pixel; break;
+                case 24:
+                    fb_addr[fb_offset + 0] = (uint8_t)(pixel & 0xFF);
+                    fb_addr[fb_offset + 1] = (uint8_t)((pixel >> 8) & 0xFF);
+                    fb_addr[fb_offset + 2] = (uint8_t)((pixel >> 16) & 0xFF);
+                    break;
+                case 32: *(uint32_t *)(fb_addr + fb_offset) = pixel; break;
+                default: halt(); break;
+            }
+        }
     }
 }
 
@@ -72,19 +96,43 @@ static void flush_region_backbuffer(struct limine_framebuffer *fb, uint64_t x, u
     if (x + w > fb->width) w = fb->width - x;
     if (y + h > fb->height) h = fb->height - y;
 
-    uint32_t *fb_ptr = (uint32_t *)fb->address;
+    uint8_t *fb_addr = (uint8_t *)fb->address;
+    uint8_t r_size = fb->red_mask_size;
+    uint8_t r_shift = fb->red_mask_shift;
+    uint8_t g_size = fb->green_mask_size;
+    uint8_t g_shift = fb->green_mask_shift;
+    uint8_t b_size = fb->blue_mask_size;
+    uint8_t b_shift = fb->blue_mask_shift;
+    uint8_t bpp = fb->bpp;
 
     for (uint64_t row = 0; row < h; row++) {
-        uint64_t fb_offset = (y + row) * (fb->pitch / 4) + x;
-        uint64_t bb_offset = (y + row) * back_buffer_width + x;
+        uint64_t fb_row_offset = (y + row) * fb->pitch;
+        uint64_t bb_row_offset = (y + row) * back_buffer_width;
 
-        // Bounds check
-        if (fb_offset >= (uint64_t)(fb->pitch * fb->height / 4)) break;
-        if (bb_offset >= (back_buffer_pitch * back_buffer_height / 4)) break;
+        for (uint64_t col = 0; col < w; col++) {
+            uint32_t color = back_buffer[bb_row_offset + (x + col)];
+            uint8_t r = (color >> 16) & 0xFF;
+            uint8_t g = (color >> 8) & 0xFF;
+            uint8_t b = color & 0xFF;
 
-        memcpy(fb_ptr + fb_offset,
-               back_buffer + bb_offset,
-               w * sizeof(uint32_t));
+            uint32_t pixel = 0;
+            pixel |= (uint32_t)((r * ((1 << r_size) - 1)) / 255) << r_shift;
+            pixel |= (uint32_t)((g * ((1 << g_size) - 1)) / 255) << g_shift;
+            pixel |= (uint32_t)((b * ((1 << b_size) - 1)) / 255) << b_shift;
+
+            uint64_t fb_offset = fb_row_offset + (x + col) * ((bpp + 7) / 8);
+            switch (bpp) {
+                case 15:
+                case 16: *(uint16_t *)(fb_addr + fb_offset) = (uint16_t)pixel; break;
+                case 24:
+                    fb_addr[fb_offset + 0] = (uint8_t)(pixel & 0xFF);
+                    fb_addr[fb_offset + 1] = (uint8_t)((pixel >> 8) & 0xFF);
+                    fb_addr[fb_offset + 2] = (uint8_t)((pixel >> 16) & 0xFF);
+                    break;
+                case 32: *(uint32_t *)(fb_addr + fb_offset) = pixel; break;
+                default: halt(); break;
+            }
+        }
     }
 }
 
@@ -269,12 +317,11 @@ void show_cursor(bool visible) {
         unsigned char *glyph = &current_font[(unsigned char)current_char * current_font_h];
 
         for (int row_idx = 0; row_idx < current_font_h; row_idx++) {
-            uint32_t *row = (uint32_t *)((uint8_t *)fb->address + (cursor_y + row_idx) * fb->pitch);
             unsigned char row_data = glyph[row_idx];
             
             for (int col_idx = 0; col_idx < current_font_w; col_idx++) {
-                if (row_data & (0x80 >> col_idx)) row[cursor_x + col_idx] = bg_color;
-                else row[cursor_x + col_idx] = fg_color;
+                uint32_t color = (row_data & (0x80 >> col_idx)) ? bg_color : fg_color;
+                put_pixel_fb(cursor_x + col_idx, cursor_y + row_idx, color);
             }
         }
     } else {
@@ -315,14 +362,11 @@ void scroll(struct limine_framebuffer *fb) {
         uint64_t bytes_per_line = line_height * fb->pitch;
         uint64_t total_fb_size = fb->height * fb->pitch;
 
+        // memmove is format-independent as it just moves raw bytes
         memmove(fb_addr, fb_addr + bytes_per_line, total_fb_size - bytes_per_line);
 
-        for (uint64_t y = fb->height - line_height; y < fb->height; y++) {
-            uint32_t *row = (uint32_t *)(fb_addr + y * fb->pitch);
-            for (uint64_t x = 0; x < fb->width; x++) {
-                row[x] = bg_color;
-            }
-        }
+        // Clear bottom line using the new bit-depth independent function
+        for (uint64_t y = fb->height - line_height; y < fb->height; y++) for (uint64_t x = 0; x < fb->width; x++) put_pixel_fb(x, y, bg_color);
     }
 
     cursor_y = fb->height - line_height;
@@ -374,11 +418,9 @@ void clrscr(void) {
         flush_backbuffer(fb);
     } else {
         // Direct framebuffer clear
-        uint8_t *fb_addr = (uint8_t *)fb->address;
         for (uint64_t y = 0; y < fb->height; y++) {
-            uint32_t *row = (uint32_t *)(fb_addr + y * fb->pitch);
             for (uint64_t x = 0; x < fb->width; x++) {
-                row[x] = bg_color;
+                put_pixel_fb(x, y, bg_color);
             }
         }
     }
@@ -392,13 +434,6 @@ void clrscr(void) {
 
     // Show cursor at new position if enabled
     if (cursor_enabled) show_cursor(true);
-    spin_unlock_irqrestore(&term_lock, rflags);
-}
-
-void reset_term_line_start(void) {
-    uint64_t rflags;
-    spin_lock_irqsave(&term_lock, &rflags);
-    line_start_y = cursor_y;
     spin_unlock_irqrestore(&term_lock, rflags);
 }
 
@@ -458,9 +493,8 @@ static void putc_unlocked(char c) {
                     flush_region_backbuffer(fb, cursor_x, cursor_y, current_font_w, current_font_h);
                 } else {
                     for (uint64_t y = 0; y < current_font_h; y++) {
-                        uint32_t *row = (uint32_t *)((uint8_t *)fb->address + (cursor_y + y) * fb->pitch);
                         for (uint64_t x = 0; x < current_font_w; x++) {
-                            row[cursor_x + x] = bg_color;
+                            put_pixel_fb(cursor_x + x, cursor_y + y, bg_color);
                         }
                     }
                 }
@@ -530,8 +564,9 @@ static void putc_unlocked(char c) {
                         flush_backbuffer(fb);
                     } else {
                         for (uint64_t y = 0; y < fb->height; y++) {
-                            uint32_t *row = (uint32_t *)((uint8_t *)fb->address + y * fb->pitch);
-                            for (uint64_t x = 0; x < fb->width; x++) row[x] = bg_color;
+                            for (uint64_t x = 0; x < fb->width; x++) {
+                                put_pixel_fb(x, y, bg_color);
+                            }
                         }
                     }
                     cursor_x = 0;
@@ -542,6 +577,8 @@ static void putc_unlocked(char c) {
             } else if (c == 'H') {
                 cursor_x = 0;
                 cursor_y = 0;
+            } else if (c == 's') {
+                line_start_y = cursor_y;
             } else if (c == 'h' || c == 'l') {
                 if (strcmp(ansi_buffer, "?25") == 0) {
                     cursor_enabled = (c == 'h');

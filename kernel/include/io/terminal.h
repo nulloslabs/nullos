@@ -19,7 +19,6 @@ typedef enum {
     STATE_READ_PARAMS
 } parser_state_t;
 
-void reset_term_line_start(void);
 void show_cursor(bool visible);
 void scroll(struct limine_framebuffer *fb);
 void clrscr(void);

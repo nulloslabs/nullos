@@ -3,6 +3,7 @@
 #include <limine/limine.h>
 #include <main/limine_req.h>
 #include <main/string.h>
+#include <main/halt.h>
 #include <io/framebuffer.h>
 #include <io/fonts.h>
 
@@ -27,10 +28,40 @@ uint64_t fb_write_index(int idx, const void* buf, uint64_t count, uint64_t offse
 }
 
 void put_pixel_fb(uint32_t x, uint32_t y, uint32_t color) {
-    if (!fb_req.response || fb_req.response->framebuffer_count < 1) return; // If there's no framebuffer don't even bother drawing.
+    if (!fb_req.response || fb_req.response->framebuffer_count < 1) return;
     struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
-    uint32_t *fb_ptr = (uint32_t *)fb->address;
-    fb_ptr[y * (fb->pitch / 4) + x] = color;
+
+    // Standard color is 0xRRGGBB. Extract components.
+    uint8_t r = (color >> 16) & 0xFF;
+    uint8_t g = (color >> 8) & 0xFF;
+    uint8_t b = color & 0xFF;
+
+    // Scale components to target bit depths and shift into place
+    uint32_t pixel = 0;
+    pixel |= (uint32_t)((r * ((1 << fb->red_mask_size) - 1)) / 255) << fb->red_mask_shift;
+    pixel |= (uint32_t)((g * ((1 << fb->green_mask_size) - 1)) / 255) << fb->green_mask_shift;
+    pixel |= (uint32_t)((b * ((1 << fb->blue_mask_size) - 1)) / 255) << fb->blue_mask_shift;
+
+    uint8_t *fb_ptr = (uint8_t *)fb->address;
+    uint64_t offset = y * fb->pitch + x * ((fb->bpp + 7) / 8);
+
+    switch (fb->bpp) {
+        case 15:
+        case 16:
+            *(uint16_t *)(fb_ptr + offset) = (uint16_t)pixel;
+            break;
+        case 24:
+            fb_ptr[offset + 0] = (uint8_t)(pixel & 0xFF);
+            fb_ptr[offset + 1] = (uint8_t)((pixel >> 8) & 0xFF);
+            fb_ptr[offset + 2] = (uint8_t)((pixel >> 16) & 0xFF);
+            break;
+        case 32:
+            *(uint32_t *)(fb_ptr + offset) = pixel;
+            break;
+        default:
+            halt();
+            break;
+    }
 }
 
 void putc_fb(char c, int x, int y, uint32_t fg, uint32_t bg) {
@@ -43,11 +74,8 @@ void putc_fb(char c, int x, int y, uint32_t fg, uint32_t bg) {
     for (int row = 0; row < current_font_h; row++) {
         unsigned char row_data = glyph[row];
         for (int col = 0; col < current_font_w; col++) {
-            if (row_data & (0x80 >> col)) {
-                put_pixel_fb(x + col, y + row, fg);
-            } else {
-                put_pixel_fb(x + col, y + row, bg);
-            }
+            if (row_data & (0x80 >> col)) put_pixel_fb(x + col, y + row, fg);
+            else put_pixel_fb(x + col, y + row, bg);
         }
     }
 }
