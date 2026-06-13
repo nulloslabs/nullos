@@ -12,6 +12,8 @@
 #define SYS_mprotect 10
 #define SYS_munmap 11
 #define SYS_brk 12
+#define SYS_rt_sigaction 13
+#define SYS_rt_sigreturn 15
 #define SYS_ioctl 16
 #define SYS_fcntl 17
 #define SYS_writev 20

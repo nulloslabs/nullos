@@ -742,6 +742,7 @@ void sys_brk(syscall_frame_t *frame) {
 }
 
 void sys_ioctl(syscall_frame_t *frame) {
+
     int fd = (int)frame->rdi;
     unsigned long req = (unsigned long)frame->rsi;
     uint64_t argp = frame->rdx;
@@ -829,7 +830,44 @@ void sys_ioctl(syscall_frame_t *frame) {
     case TCSETS:
     case TCSETSW:
     case TCSETSF:
-        // Accept termios writes silently — we don't implement full termios
+        if (entry && entry->type == FD_DEV) {
+            char rel[256];
+            if (is_mounted_under(entry->path, "devfs", rel)) {
+                if (strncmp(rel, "tty", 3) == 0) {
+                     int idx = rel[3] - '0';
+                     if (idx >= 0 && idx < NUM_TTYS) { read_vmm(current_task_ptr->ctx, &get_tty(idx)->termios, argp, sizeof(termios_t)); }
+                }
+            }
+        }
+        frame->rax = 0;
+        return;
+    case 0x540B: // TCFLSH
+        if (entry && entry->type == FD_DEV) {
+            char rel[256];
+            if (is_mounted_under(entry->path, "devfs", rel)) {
+                if (strncmp(rel, "tty", 3) == 0) {
+                     int idx = rel[3] - '0';
+                     if (idx >= 0 && idx < NUM_TTYS) { 
+                         if (argp == 0 /* TCIFLUSH */ || argp == 2 /* TCIOFLUSH */) {
+                             get_tty(idx)->input.head = get_tty(idx)->input.tail = 0;
+                         }
+                     }
+                } else if (strncmp(rel, "pts/", 4) == 0) {
+                     int idx = 0;
+                     const char *p = rel + 4;
+                     while (*p >= '0' && *p <= '9') { idx = idx * 10 + (*p - '0'); p++; }
+                     if (idx >= 0 && idx < NUM_PTYS) {
+                         if (argp == 0 || argp == 2) {
+                             get_pty(idx)->m2s.head = get_pty(idx)->m2s.tail = 0;
+                         }
+                     }
+                }
+            }
+        }
+        frame->rax = 0;
+        return;
+    case 0x5409: // TCSBRK
+    case 0x540A: // TCXONC
         frame->rax = 0;
         return;
 
@@ -1527,26 +1565,22 @@ void sys_kill(syscall_frame_t *frame) {
                     }
                     break;
                 default:
-                    // SIGKILL, SIGSEGV, SIGINT, SIGTERM, SIGABRT, SIGILL, SIGHUP
-                    if (pid == current_task_ptr->pid) {
-                        exit_task(128 + sig);
-                        // exit_task does not return
-                    }
-
-                    tasks[i].state = TASK_ZOMBIE;
-                    tasks[i].exit_status = 128 + sig;
-
-                    // Reparent children to init
-                    for (int j = 1; j < MAX_TASKS; j++) {
-                        if (tasks[j].state != TASK_DEAD && tasks[j].ppid == pid) { if (tasks[j].state == TASK_ZOMBIE) { tasks[j].state = TASK_DEAD; } else {
-                                tasks[j].ppid = 1;
+                    if (sig == 9 /* SIGKILL */) {
+                        if (pid == current_task_ptr->pid) { exit_task(128 + sig); }
+                        tasks[i].state = TASK_ZOMBIE;
+                        tasks[i].exit_status = 128 + sig;
+                        for (int j = 1; j < MAX_TASKS; j++) {
+                            if (tasks[j].state != TASK_DEAD && tasks[j].ppid == pid) { 
+                                if (tasks[j].state == TASK_ZOMBIE) { tasks[j].state = TASK_DEAD; } else { tasks[j].ppid = 1; }
                             }
                         }
+                        // Close file descriptors
+                        for (int j = 0; j < FD_MAX; j++) {
+                            if (tasks[i].fd_table.entries[j].open) { free_fd(&tasks[i].fd_table, j); } 
+                        }
+                    } else {
+                        tasks[i].pending_signals |= (1ULL << sig);
                     }
-
-                    // Close file descriptors
-                    for (int j = 0; j < FD_MAX; j++) {
-                        if (tasks[i].fd_table.entries[j].open) { free_fd(&tasks[i].fd_table, j); } }
                     break;
             }
 
@@ -2266,4 +2300,81 @@ void sys_fchmodat(syscall_frame_t *frame) {
     if (current_task_ptr->euid != 0 && current_task_ptr->euid != file.uid) { frame->rax = (uint64_t)-EPERM; return; }
 
     frame->rax = (uint64_t)chmod_rootfs(abs_path, mode);
+}
+
+void sys_rt_sigaction(syscall_frame_t *frame) {
+    int signum = (int)frame->rdi;
+    uint64_t act_ptr = frame->rsi;
+    uint64_t oldact_ptr = frame->rdx;
+
+    if (signum < 1 || signum > 31) {
+        frame->rax = (uint64_t)-EINVAL;
+        return;
+    }
+
+    if (oldact_ptr) {
+        write_vmm(current_task_ptr->ctx, oldact_ptr, &current_task_ptr->sigactions[signum * 4], 32);
+    }
+    if (act_ptr) {
+        read_vmm(current_task_ptr->ctx, &current_task_ptr->sigactions[signum * 4], act_ptr, 32);
+    }
+    frame->rax = 0;
+}
+
+void sys_rt_sigreturn(syscall_frame_t *frame) {
+    uint64_t user_rsp = frame->r12; 
+    syscall_frame_t saved_frame;
+    read_vmm(current_task_ptr->ctx, &saved_frame, user_rsp, sizeof(syscall_frame_t));
+    *frame = saved_frame;
+}
+
+void check_signals(syscall_frame_t *frame) {
+    if (!current_task_ptr) return;
+    if (current_task_ptr->pending_signals == 0) return;
+    
+    for (int i = 1; i < 32; i++) {
+        if (current_task_ptr->pending_signals & (1ULL << i)) {
+            uint64_t *sa = &current_task_ptr->sigactions[i * 4];
+            uint64_t handler = sa[0];
+            uint64_t flags = sa[2];
+            uint64_t restorer = sa[3];
+            
+            if (handler == 0 /* SIG_DFL */) {
+                if (i != 17 /* SIGCHLD */) {
+                    current_task_ptr->pending_signals = 0;
+                    exit_task(128 + i);
+                }
+                current_task_ptr->pending_signals &= ~(1ULL << i);
+                continue;
+            } else if (handler == 1 /* SIG_IGN */) {
+                current_task_ptr->pending_signals &= ~(1ULL << i);
+                continue;
+            }
+            
+            current_task_ptr->pending_signals &= ~(1ULL << i);
+            
+            uint64_t user_rsp = frame->r12 - 128; // red zone
+            user_rsp -= sizeof(syscall_frame_t);
+            user_rsp &= ~15ULL;
+            
+            write_vmm(current_task_ptr->ctx, user_rsp, frame, sizeof(syscall_frame_t));
+            
+            frame->rcx = handler;
+            frame->rdi = i;
+            
+            if (flags & 4 /* SA_SIGINFO */) {
+                user_rsp -= 16; // siginfo_t is 12 bytes, align to 16
+                uint32_t sinfo[4] = {i, 0, 0, 0};
+                write_vmm(current_task_ptr->ctx, user_rsp, &sinfo, sizeof(sinfo));
+                frame->rsi = user_rsp; // siginfo_t*
+                frame->rdx = 0; // ucontext_t*
+            }
+            
+            user_rsp -= 8;
+            write_vmm(current_task_ptr->ctx, user_rsp, &restorer, sizeof(uint64_t));
+            frame->r12 = user_rsp;
+            
+            break;
+        }
+    }
 }

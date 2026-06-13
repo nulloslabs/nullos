@@ -195,7 +195,7 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
             uint8_t *idata = (uint8_t *)ifile.data;
             elf64_ehdr_t *iehdr = (elf64_ehdr_t *)idata;
             // ASLR: randomize interpreter base
-            interp_base = 0x5000000000ULL + aslr_random_offset(0x40000);
+            interp_base = (iehdr->type == ET_DYN) ? (0x5000000000ULL + aslr_random_offset(0x40000)) : 0;
             load_elf_segments(ctx, idata, iehdr, interp_base, NULL);
             entry = iehdr->entry + interp_base;
         }
@@ -291,7 +291,7 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
             uint8_t *idata = (uint8_t *)ifile.data;
             elf64_ehdr_t *iehdr = (elf64_ehdr_t *)idata;
             // ASLR: randomize interpreter base
-            interp_base = 0x5000000000ULL + aslr_random_offset(0x40000);
+            interp_base = (iehdr->type == ET_DYN) ? (0x5000000000ULL + aslr_random_offset(0x40000)) : 0;
             load_elf_segments(ctx, idata, iehdr, interp_base, NULL);
             entry = iehdr->entry + interp_base;
         }

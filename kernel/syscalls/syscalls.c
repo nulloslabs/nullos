@@ -80,13 +80,18 @@ static syscall_fn_t syscall_table[] = {
     [SYS_fchmodat]     = sys_fchmodat,
     [SYS_getsockopt]   = sys_getsockopt,
     [SYS_setsockopt]   = sys_setsockopt,
+    [SYS_rt_sigaction] = sys_rt_sigaction,
+    [SYS_rt_sigreturn] = sys_rt_sigreturn,
 };
 
 extern void syscall_entry(void);
 
+extern void check_signals(syscall_frame_t *frame);
+
 void syscall_dispatch(syscall_frame_t *frame) {
     if (frame->rax < (sizeof(syscall_table) / sizeof(syscall_table[0])) && syscall_table[frame->rax]) syscall_table[frame->rax](frame);
     else frame->rax = (uint64_t)-ENOSYS;
+    check_signals(frame);
 }
 
 void init_syscalls(void) {

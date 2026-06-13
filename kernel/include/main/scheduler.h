@@ -37,6 +37,10 @@ typedef struct {
     char stdin_buf[TASK_STDIN_BUF_SIZE];
     int stdin_buf_len;
     int stdin_buf_pos;
+
+    // Signals
+    uint64_t sigactions[32 * 4]; // 32 struct k_sigaction (4 * 8 = 32 bytes each)
+    uint64_t pending_signals;
 } __attribute__((aligned(16))) task_t;
 
 #define TASK_DEAD 0
