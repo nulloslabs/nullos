@@ -264,3 +264,7 @@ int unlinkat(int dirfd, const char *pathname, int flags) {
 int symlinkat(const char *target, int newdirfd, const char *linkpath) {
     return (int)syscall(SYS_symlinkat, target, newdirfd, linkpath);
 }
+
+int rmdir(const char *pathname) {
+    return (int)syscall(SYS_rmdir, pathname);
+}

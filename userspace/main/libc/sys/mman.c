@@ -1,48 +1,17 @@
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <stdint.h>
+#include <unistd.h>
 
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, long offset) {
-    int64_t ret;
-    register int64_t r10 __asm__ ("r10") = (int64_t)flags;
-    register int64_t r8  __asm__ ("r8")  = (int64_t)fd;
-    register int64_t r9  __asm__ ("r9")  = (int64_t)offset;
-    __asm__ volatile (
-        "syscall"
-        : "=a"(ret)
-        : "a"((int64_t)SYS_mmap),
-          "D"((int64_t)addr),
-          "S"((int64_t)length),
-          "d"((int64_t)prot),
-          "r"(r10), "r"(r8), "r"(r9)
-        : "rcx", "r11", "memory"
-    );
+    int64_t ret = syscall(SYS_mmap, addr, length, prot, flags, fd, offset);
     return (ret < 0) ? MAP_FAILED : (void *)ret;
 }
 
 int mprotect(void *addr, size_t length, int prot) {
-    int64_t ret;
-    __asm__ volatile (
-        "syscall"
-        : "=a"(ret)
-        : "a"((int64_t)SYS_mprotect),
-          "D"((int64_t)addr),
-          "S"((int64_t)length),
-          "d"((int64_t)prot)
-        : "rcx", "r11", "memory"
-    );
-    return (int)ret;
+    return (int)syscall(SYS_mprotect, addr, length, prot);
 }
 
 int munmap(void *addr, size_t length) {
-    int64_t ret;
-    __asm__ volatile (
-        "syscall"
-        : "=a"(ret)
-        : "a"((int64_t)SYS_munmap),
-          "D"((int64_t)addr),
-          "S"((int64_t)length)
-        : "rcx", "r11", "memory"
-    );
-    return (int)ret;
+    return (int)syscall(SYS_munmap, addr, length);
 }

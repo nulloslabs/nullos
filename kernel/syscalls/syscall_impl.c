@@ -346,7 +346,9 @@ void sys_write(syscall_frame_t *frame) {
     const uint8_t *buf = (const uint8_t *)frame->rsi;
     uint64_t count = frame->rdx;
 
+    // Validate user buffer pointer
     if (!buf) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (count > 0 && !user_ptr_ok(buf, count)) { frame->rax = (uint64_t)-EFAULT; return; }
 
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
@@ -551,15 +553,25 @@ void sys_lseek(syscall_frame_t *frame) {
 
     switch (whence) {
         case 0: // SEEK_SET
+            // Reject negative absolute positions
+            if (offset < 0) { frame->rax = -EINVAL; return; }
             entry->offset = (uint64_t)offset;
             break;
-        case 1: // SEEK_CUR
-            entry->offset = (uint64_t)((int64_t)entry->offset + offset);
+        case 1: { // SEEK_CUR
+            // Guard against signed overflow and underflow
+            int64_t cur = (int64_t)entry->offset;
+            if (offset > 0 && cur > (int64_t)0x7FFFFFFFFFFFFFFFLL - offset) { frame->rax = -EOVERFLOW; return; }
+            int64_t new_off = cur + offset;
+            if (new_off < 0) { frame->rax = -EINVAL; return; }
+            entry->offset = (uint64_t)new_off;
             break;
+        }
         case 2: { // SEEK_END
             rootfs_file_t file = read_rootfs(entry->path);
             if (!file.data) { frame->rax = -ENOENT; return; }
-            entry->offset = (uint64_t)((int64_t)file.size + offset);
+            int64_t new_off = (int64_t)file.size + offset;
+            if (new_off < 0) { frame->rax = -EINVAL; return; }
+            entry->offset = (uint64_t)new_off;
             break;
         }
         default:
@@ -580,10 +592,19 @@ void sys_mmap(syscall_frame_t *frame) {
 
     if (length == 0) { frame->rax = (uint64_t)-EINVAL; return; }
 
+    // Guard against integer overflow in page-count calculation
+    if (length > USER_ADDR_MAX) { frame->rax = (uint64_t)-EINVAL; return; }
+
     // Validate addr if MAP_FIXED or hint provided
     if (addr != 0 && !user_addr_ok(addr, length)) { frame->rax = (uint64_t)-EINVAL; return; }
 
+    // Reject W+X mappings (W^X policy)
+    if ((prot & PROT_WRITE) && (prot & PROT_EXEC)) { frame->rax = (uint64_t)-EACCES; return; }
+
     uint64_t num_pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
+    // Overflow check: ensure num_pages * PAGE_SIZE doesn't wrap
+    if (num_pages > (USER_ADDR_MAX / PAGE_SIZE)) { frame->rax = (uint64_t)-EINVAL; return; }
+
     uint64_t vmm_flags = VMM_USER;
     if (prot & PROT_WRITE) vmm_flags |= VMM_WRITABLE;
     if (!(prot & PROT_EXEC)) vmm_flags |= VMM_NX;
@@ -612,10 +633,15 @@ void sys_mmap(syscall_frame_t *frame) {
 
         rootfs_file_t file = read_rootfs(entry->path);
         if (file.data) {
-            uint64_t map_size = num_pages * PAGE_SIZE;
-            uint64_t file_avail = (file.size > offset) ? (file.size - offset) : 0;
-            uint64_t copy_len = (file_avail < map_size) ? file_avail : map_size;
-            if (copy_len > 0) { write_vmm(current_task_ptr->ctx, (uint64_t)ptr, (uint8_t *)file.data + offset, copy_len); }
+            // Validate offset is within file bounds to prevent out-of-bounds read
+            if (offset >= file.size && file.size > 0) {
+                // Nothing to copy, mapping is zero-filled
+            } else {
+                uint64_t map_size = num_pages * PAGE_SIZE;
+                uint64_t file_avail = (file.size > offset) ? (file.size - offset) : 0;
+                uint64_t copy_len = (file_avail < map_size) ? file_avail : map_size;
+                if (copy_len > 0) { write_vmm(current_task_ptr->ctx, (uint64_t)ptr, (uint8_t *)file.data + offset, copy_len); }
+            }
             // Zero the remaining bytes (BSS-like) is already handled by vmap_user_at/vmalloc_ex
             // which zeroed the newly allocated pages.
         }
@@ -667,6 +693,9 @@ void sys_munmap(syscall_frame_t *frame) {
     frame->rax = 0;
 }
 
+// Maximum heap size: 256 MiB per process
+#define MAX_BRK_SIZE (256ULL * 1024ULL * 1024ULL)
+
 void sys_brk(syscall_frame_t *frame) {
     uint64_t addr = frame->rdi;
 
@@ -677,9 +706,15 @@ void sys_brk(syscall_frame_t *frame) {
     }
 
     // Validate: new brk must be in user-space and above brk_start
-    if (!user_addr_ok(addr, 0)) { frame->rax = current_task_ptr->brk; return; }
+    if (!user_addr_ok(addr, 1)) { frame->rax = current_task_ptr->brk; return; }
     if (addr < current_task_ptr->brk_start) {
         // Cannot shrink below initial heap start
+        frame->rax = current_task_ptr->brk;
+        return;
+    }
+
+    // Enforce upper bound to prevent unconstrained heap growth
+    if (addr - current_task_ptr->brk_start > MAX_BRK_SIZE) {
         frame->rax = current_task_ptr->brk;
         return;
     }
@@ -1182,14 +1217,25 @@ void sys_nanosleep(syscall_frame_t *frame) {
     struct timespec *req = (struct timespec *)frame->rdi;
     struct timespec *rem = (struct timespec *)frame->rsi;
     if (!req) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_ptr_ok(req, sizeof(struct timespec))) { frame->rax = (uint64_t)-EFAULT; return; }
 
     struct timespec ts;
     read_vmm(current_task_ptr->ctx, &ts, (uint64_t)req, sizeof(struct timespec));
 
-    uint64_t total_us = (ts.tv_sec * 1000000) + (ts.tv_nsec / 1000);
+    // Validate: tv_nsec must be in [0, 999999999] and tv_sec must be non-negative
+    if (ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000L || ts.tv_sec < 0) {
+        frame->rax = (uint64_t)-EINVAL; return;
+    }
+    // Cap sleep at ~292 years to prevent integer overflow in µs calculation
+    if (ts.tv_sec > 9000000000LL) { ts.tv_sec = 9000000000LL; }
+    uint64_t total_us = ((uint64_t)ts.tv_sec * 1000000ULL) + (uint64_t)(ts.tv_nsec / 1000);
     sleep_us(total_us);
 
-    if (rem) { struct timespec zero_ts = {0, 0}; write_vmm(current_task_ptr->ctx, (uint64_t)rem, &zero_ts, sizeof(struct timespec)); }
+    if (rem) {
+        if (!user_ptr_ok(rem, sizeof(struct timespec))) { frame->rax = (uint64_t)-EFAULT; return; }
+        struct timespec zero_ts = {0, 0};
+        write_vmm(current_task_ptr->ctx, (uint64_t)rem, &zero_ts, sizeof(struct timespec));
+    }
 
     frame->rax = 0;
 }
@@ -1456,9 +1502,11 @@ void sys_kill(syscall_frame_t *frame) {
     pid_t pid = (pid_t)frame->rdi;
     int sig = (int)frame->rsi;
 
+    // pid 0 or negative would require process-group semantics; reject for now
     if (pid <= 0) { frame->rax = (uint64_t)-EINVAL; return; }
 
-    if (sig < 0 || sig > 10) { frame->rax = (uint64_t)-EINVAL; return; }
+    // Accept signal 0 (existence check) and standard POSIX signals 1-31
+    if (sig < 0 || sig > 31) { frame->rax = (uint64_t)-EINVAL; return; }
 
     for (int i = 0; i < MAX_TASKS; i++) {
         if (tasks[i].state != TASK_DEAD && tasks[i].pid == pid) {
@@ -1588,6 +1636,8 @@ void sys_getdents(syscall_frame_t *frame) {
 
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+    // Reject zero-length buffer or invalid pointer
+    if (buflen == 0) { frame->rax = (uint64_t)-EINVAL; return; }
     if (!user_addr_ok(bufp, buflen)) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char dir_norm[256];
@@ -1807,6 +1857,13 @@ void sys_fchmod(syscall_frame_t *frame) {
 
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+
+    // Permission check: only the file owner or root may chmod
+    rootfs_file_t file = read_rootfs(entry->path);
+    if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
+    if (current_task_ptr->euid != 0 && current_task_ptr->euid != file.uid) {
+        frame->rax = (uint64_t)-EPERM; return;
+    }
 
     frame->rax = (uint64_t)chmod_rootfs(entry->path, mode);
 }

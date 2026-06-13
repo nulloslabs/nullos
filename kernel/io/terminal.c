@@ -606,6 +606,9 @@ void puts(const char *s) {
     spin_unlock_irqrestore(&term_lock, rflags);
 }
 
+/* We don't have %f implemented into the kernel vprintf(), because:
+   1. We don't use it
+   2. We use vprintf() before SSE is enabled */
 void vprintf(const char *fmt, va_list args) {
     uint64_t rflags;
     spin_lock_irqsave(&term_lock, &rflags);
@@ -658,6 +661,7 @@ void vprintf(const char *fmt, va_list args) {
                 break;
             }
             case 'o':
+            case 'i':
             case 'd':
             case 'u':
             case 'x': case 'X': {
@@ -665,10 +669,10 @@ void vprintf(const char *fmt, va_list args) {
                 if (is_long) {
                     val = va_arg(args, uint64_t);
                 } else {
-                    if (*p == 'd') val = (uint64_t)va_arg(args, int);
+                    if (*p == 'd' || *p == 'i') val = (uint64_t)va_arg(args, int);
                     else           val = (uint64_t)va_arg(args, unsigned int);
                 }
-                bool is_neg = (*p == 'd' || *p == 'D') && (int64_t)val < 0;
+                bool is_neg = (*p == 'd' || *p == 'D' || *p == 'i') && (int64_t)val < 0;
                 if (is_neg) val = -(int64_t)val;
                 int base = (*p=='x'||*p=='X') ? 16 : (*p=='o'||*p=='O') ? 8 : 10;
                 char buf[64];
