@@ -84,7 +84,10 @@ static syscall_fn_t syscall_table[] = {
 
 extern void syscall_entry(void);
 
-void syscall_dispatch(syscall_frame_t *frame) { if (frame->rax < (sizeof(syscall_table) / sizeof(syscall_table[0])) && syscall_table[frame->rax]) syscall_table[frame->rax](frame); else frame->rax = (uint64_t)-ENOSYS; }
+void syscall_dispatch(syscall_frame_t *frame) {
+    if (frame->rax < (sizeof(syscall_table) / sizeof(syscall_table[0])) && syscall_table[frame->rax]) syscall_table[frame->rax](frame);
+    else frame->rax = (uint64_t)-ENOSYS;
+}
 
 void init_syscalls(void) {
     // Enable syscall/sysret in EFER

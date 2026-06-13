@@ -6,6 +6,36 @@
 #include <io/pty.h>
 #include <io/sockets.h>
 
+flock_obj_t global_flocks[128];
+
+flock_obj_t *alloc_flock_obj(const char *path) {
+    for (int i = 0; i < 128; i++) {
+        if (!global_flocks[i].used) {
+            global_flocks[i].used = true;
+            global_flocks[i].refcount = 1;
+            global_flocks[i].lock_type = 0;
+            strncpy(global_flocks[i].path, path, 255);
+            global_flocks[i].path[255] = '\0';
+            return &global_flocks[i];
+        }
+    }
+    return NULL;
+}
+
+void retain_flock_obj(flock_obj_t *obj) {
+    if (obj) obj->refcount++;
+}
+
+void release_flock_obj(flock_obj_t *obj) {
+    if (obj) {
+        obj->refcount--;
+        if (obj->refcount <= 0) {
+            obj->used = false;
+            obj->lock_type = 0;
+        }
+    }
+}
+
 int alloc_fd_handle(fd_table_t *table, const char *path, fd_type_t type, uint32_t flags, void *handle) {
     for (int i = 0; i < FD_MAX; i++) {
         if (!table->entries[i].open) {
@@ -39,7 +69,8 @@ int free_fd(fd_table_t *table, int fd) {
         int idx = pty_slave_path_idx(table->entries[fd].path);
         if (idx >= 0)
             release_pty_slave(idx);
-    } else if (table->entries[fd].type == FD_PIPE || table->entries[fd].type == FD_SOCKET) { release_unix_handle((unix_handle_t *)table->entries[fd].handle); }
+    } else if (table->entries[fd].type == FD_PIPE || table->entries[fd].type == FD_SOCKET) { release_unix_handle((unix_handle_t *)table->entries[fd].handle); 
+    } else if (table->entries[fd].type == FD_FILE && table->entries[fd].handle != NULL) { release_flock_obj((flock_obj_t *)table->entries[fd].handle); }
     table->entries[fd].open   = false;
     table->entries[fd].type   = FD_NONE;
     table->entries[fd].offset = 0;
@@ -74,7 +105,8 @@ void retain_fd_entry(fd_entry_t *entry) {
         int idx = pty_slave_path_idx(entry->path);
         if (idx >= 0)
             retain_pty_slave(idx);
-    } else if (entry->type == FD_PIPE || entry->type == FD_SOCKET) { retain_unix_handle((unix_handle_t *)entry->handle); } }
+    } else if (entry->type == FD_PIPE || entry->type == FD_SOCKET) { retain_unix_handle((unix_handle_t *)entry->handle); 
+    } else if (entry->type == FD_FILE && entry->handle != NULL) { retain_flock_obj((flock_obj_t *)entry->handle); } }
 
 void init_fd_table(fd_table_t *table) {
     for (int i = 0; i < FD_MAX; i++) {

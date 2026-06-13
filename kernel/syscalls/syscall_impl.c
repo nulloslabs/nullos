@@ -1534,8 +1534,49 @@ void sys_flock(syscall_frame_t *frame) {
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
 
+    if (entry->type != FD_FILE) { frame->rax = (uint64_t)-EBADF; return; }
+
     int op = operation & ~LOCK_NB;
     if (op != LOCK_SH && op != LOCK_EX && op != LOCK_UN) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    extern void sleep(uint64_t ms);
+
+retry:;
+    if (op == LOCK_UN) {
+        if (entry->handle) {
+            flock_obj_t *obj = (flock_obj_t *)entry->handle;
+            obj->lock_type = 0;
+        }
+        frame->rax = 0;
+        return;
+    }
+
+    bool conflict = false;
+    for (int i = 0; i < 128; i++) {
+        if (global_flocks[i].used && global_flocks[i].lock_type != 0 &&
+            strncmp(global_flocks[i].path, entry->path, 255) == 0) {
+            
+            if (&global_flocks[i] == (flock_obj_t *)entry->handle) continue;
+            
+            if (op == LOCK_EX || global_flocks[i].lock_type == LOCK_EX) {
+                conflict = true;
+                break;
+            }
+        }
+    }
+
+    if (conflict) {
+        if (operation & LOCK_NB) { frame->rax = (uint64_t)-EAGAIN; return; }
+        sleep(10);
+        goto retry;
+    }
+
+    if (entry->handle == NULL) {
+        entry->handle = alloc_flock_obj(entry->path);
+        if (!entry->handle) { frame->rax = (uint64_t)-ENOLCK; return; }
+    }
+    
+    ((flock_obj_t *)entry->handle)->lock_type = op;
 
     frame->rax = 0;
 }

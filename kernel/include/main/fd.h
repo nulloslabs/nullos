@@ -19,6 +19,13 @@ typedef enum {
 } fd_type_t;
 
 typedef struct {
+    bool used;
+    int refcount;
+    int lock_type;
+    char path[256];
+} flock_obj_t;
+
+typedef struct {
     bool open;
     fd_type_t type;
     char path[256];
@@ -38,3 +45,8 @@ int free_fd(fd_table_t *table, int fd);
 fd_entry_t *get_fd(fd_table_t *table, int fd);
 fd_entry_t *get_current_fd(int fd);
 void retain_fd_entry(fd_entry_t *entry);
+
+extern flock_obj_t global_flocks[128];
+flock_obj_t *alloc_flock_obj(const char *path);
+void retain_flock_obj(flock_obj_t *obj);
+void release_flock_obj(flock_obj_t *obj);
