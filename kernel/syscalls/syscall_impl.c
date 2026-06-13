@@ -20,16 +20,6 @@
 #include <freestanding/sys/resource.h>
 #include <freestanding/sys/reboot.h>
 #include <main/limine_req.h>
-#include <syscalls/syscalls.h>
-#include <main/fd.h>
-#include <main/rootfs.h>
-#include <main/scheduler.h>
-#include <main/string.h>
-#include <io/terminal.h>
-#include <io/keyboard.h>
-#include <mm/mm.h>
-#include <mm/vmm.h>
-#include <mm/pmm.h>
 #include <main/devfs.h>
 #include <main/spinlock.h>
 #include <main/elf.h>
@@ -39,10 +29,20 @@
 #include <main/uname.h>
 #include <main/acpi.h>
 #include <main/msr.h>
+#include <main/fd.h>
+#include <main/rootfs.h>
+#include <main/scheduler.h>
+#include <main/string.h>
+#include <io/terminal.h>
+#include <io/keyboard.h>
 #include <io/tty.h>
 #include <io/pty.h>
 #include <io/hpet.h>
 #include <io/sockets.h>
+#include <mm/mm.h>
+#include <mm/vmm.h>
+#include <mm/pmm.h>
+#include <syscalls/syscalls.h>
 
 // Should be never exposed to other files
 #define MAX_MOUNTS 16
@@ -89,32 +89,6 @@ static bool can_access_rootfs(const rootfs_file_t *file, int want_read, int want
     if (want_write && !(perm & 2)) return false;
     if (want_exec && !(perm & 1)) return false;
     return true;
-}
-
-bool is_mounted_under(const char *path, const char *filesystemtype, char *relative_out) {
-    uint64_t irq;
-    spin_lock_irqsave(&vfs_lock, &irq);
-    bool found = false;
-
-    for (int i = 0; i < MAX_MOUNTS; i++) {
-        if (!mounts[i].active) continue;
-        if (strcmp(mounts[i].filesystemtype, filesystemtype) != 0) continue;
-
-        size_t mlen = strlen(mounts[i].path);
-        if (strncmp(path, mounts[i].path, mlen) == 0 &&
-            (path[mlen] == '/' || path[mlen] == '\0')) {
-            if (relative_out) {
-                const char *rel = path + mlen;
-                if (*rel == '/') rel++;
-                strcpy(relative_out, rel);
-            }
-            found = true;
-            break;
-        }
-    }
-
-    spin_unlock_irqrestore(&vfs_lock, irq);
-    return found;
 }
 
 static void normalize_path_str(char *path) {
@@ -175,9 +149,7 @@ static int build_abs_path_at(int dirfd, const char *path, char *out, size_t out_
     return 0;
 }
 
-static void build_abs_path(const char *path, char *out, size_t out_size) {
-    build_abs_path_at(AT_FDCWD, path, out, out_size);
-}
+static void build_abs_path(const char *path, char *out, size_t out_size) { build_abs_path_at(AT_FDCWD, path, out, out_size); }
 
 static int copy_user_strarray(char **user_arr, char **out, int max_count) {
     int count = 0;
@@ -205,9 +177,34 @@ static int ptm_path_idx(const char *path) {
     return idx;
 }
 
-static void free_strarray(char **arr, int count) {
-    for (int i = 0; i < count; i++) free(arr[i]);
+static void free_strarray(char **arr, int count) { for (int i = 0; i < count; i++) free(arr[i]); }
+
+bool is_mounted_under(const char *path, const char *filesystemtype, char *relative_out) {
+    uint64_t irq;
+    spin_lock_irqsave(&vfs_lock, &irq);
+    bool found = false;
+
+    for (int i = 0; i < MAX_MOUNTS; i++) {
+        if (!mounts[i].active) continue;
+        if (strcmp(mounts[i].filesystemtype, filesystemtype) != 0) continue;
+
+        size_t mlen = strlen(mounts[i].path);
+        if (strncmp(path, mounts[i].path, mlen) == 0 &&
+            (path[mlen] == '/' || path[mlen] == '\0')) {
+            if (relative_out) {
+                const char *rel = path + mlen;
+                if (*rel == '/') rel++;
+                strcpy(relative_out, rel);
+            }
+            found = true;
+            break;
+        }
+    }
+
+    spin_unlock_irqrestore(&vfs_lock, irq);
+    return found;
 }
+
 
 void sys_read(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
