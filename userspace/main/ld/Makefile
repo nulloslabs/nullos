@@ -37,8 +37,8 @@ ld: Makefile ../../config.mk
 	else \
 		printf "  %-7s %s\n" "LD" "$(SUBDIR)/ld.so" && \
 		$(LD) $(LDFLAGS) -shared -o ../../ld.so $(OBJ) && \
-                printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/ld.so" && \
-                $(STRIP) ../../ld.so; \
+		printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/ld.so" && \
+		$(STRIP) ../../ld.so; \
 	fi
 
 clean:
