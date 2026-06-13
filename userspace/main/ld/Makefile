@@ -35,8 +35,10 @@ ld: Makefile ../../config.mk
 	if [ $$needs_build -eq 0 ]; then \
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/ld.so is already up to date"; \
 	else \
-		printf "  %-7s %s\n" "LD" "$(SUBDIR)/ld.so"; \
-		$(LD) $(LDFLAGS) -shared -o ../../ld.so $(OBJ); \
+		printf "  %-7s %s\n" "LD" "$(SUBDIR)/ld.so" && \
+		$(LD) $(LDFLAGS) -shared -o ../../ld.so $(OBJ) && \
+                printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/ld.so" && \
+                $(STRIP) ../../ld.so; \
 	fi
 
 clean:
