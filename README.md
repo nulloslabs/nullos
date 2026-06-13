@@ -2,6 +2,8 @@
 
 A secure, fast and privacy-focused hobby OS.
 
+[![Discord](https://img.shields.io/discord/1512751094583791726?color=5865F2&label=NullOS%20Labs&logo=discord&logoColor=white)](https://discord.gg/TMrw9rzfvx)
+
 ## ✨ Features
 
 | Status | Feature | Notes |
