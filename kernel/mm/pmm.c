@@ -5,6 +5,7 @@
 #include <main/spinlock.h>
 
 static uint8_t* bitmap = NULL;
+static uint8_t* ref_counts = NULL;
 static uint64_t max_pages = 0;
 static uint64_t last_index = 0; // For optimization
 static spinlock_t pmm_lock = SPINLOCK_INIT;
@@ -18,6 +19,7 @@ void* pmalloc(void) {
         uint64_t idx = (last_index + i) % max_pages;
         if (!(bitmap[idx / 8] & (1 << (idx % 8)))) {
             bitmap[idx / 8] |= (1 << (idx % 8)); // Mark used
+            ref_counts[idx] = 1;
             last_index = idx;
             spin_unlock_irqrestore(&pmm_lock, flags);
             return (void*)(idx * PAGE_SIZE); // Returns PHYSICAL address
@@ -31,7 +33,22 @@ void pfree(void *phys_addr) {
     uint64_t flags;
     spin_lock_irqsave(&pmm_lock, &flags);
     uint64_t page_idx = (uint64_t)phys_addr / PAGE_SIZE;
-    bitmap[page_idx / 8] &= ~(1 << (page_idx % 8));
+    if (ref_counts[page_idx] > 0) {
+        ref_counts[page_idx]--;
+        if (ref_counts[page_idx] == 0) {
+            bitmap[page_idx / 8] &= ~(1 << (page_idx % 8));
+        }
+    }
+    spin_unlock_irqrestore(&pmm_lock, flags);
+}
+
+void pref(void *phys_addr) {
+    uint64_t flags;
+    spin_lock_irqsave(&pmm_lock, &flags);
+    uint64_t page_idx = (uint64_t)phys_addr / PAGE_SIZE;
+    if (ref_counts[page_idx] > 0 && ref_counts[page_idx] < 255) {
+        ref_counts[page_idx]++;
+    }
     spin_unlock_irqrestore(&pmm_lock, flags);
 }
 
@@ -49,20 +66,23 @@ void init_pmm(void) {
 
     max_pages = highest_addr / PAGE_SIZE;
     uint64_t bitmap_size = max_pages / 8;
+    uint64_t refcount_size = max_pages;
 
     // find usable hole for bitmap
     for (size_t i = 0; i < memmap->entry_count; i++) {
         struct limine_memmap_entry* entry = memmap->entries[i];
-        if (entry->type == LIMINE_MEMMAP_USABLE && entry->length >= bitmap_size) {
+        if (entry->type == LIMINE_MEMMAP_USABLE && entry->length >= bitmap_size + refcount_size) {
             // Place bitmap in virtual address space via HHDM
             bitmap = (uint8_t*)(entry->base + hhdm_offset);
+            ref_counts = (uint8_t*)(entry->base + hhdm_offset + bitmap_size);
             
             // initially mark everything reserved
             memset(bitmap, 0xFF, bitmap_size);
+            memset(ref_counts, 1, refcount_size);
             
             // shrink entry to protect bitmap memory
-            entry->base += bitmap_size;
-            entry->length -= bitmap_size;
+            entry->base += bitmap_size + refcount_size;
+            entry->length -= bitmap_size + refcount_size;
             break;
         }
     }
@@ -75,6 +95,7 @@ void init_pmm(void) {
                 uint64_t page_idx = (entry->base + j) / PAGE_SIZE;
                 // Clear the bit
                 bitmap[page_idx / 8] &= ~(1 << (page_idx % 8));
+                ref_counts[page_idx] = 0;
             }
         }
     }

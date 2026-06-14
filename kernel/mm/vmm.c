@@ -285,6 +285,13 @@ vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
 
                     uint64_t virt = (pml4_i << 39) | (pdpt_i << 30) | (pd_i << 21) | (pt_i << 12);
 
+                    if (entry & VMM_SHARED) {
+                        uint64_t phys = entry & 0x000ffffffffff000ULL;
+                        pref((void*)phys);
+                        map_vmm(child, virt, phys, entry & (0xFFFULL | VMM_NX) & ~VMM_PRESENT);
+                        continue;
+                    }
+
                     void* new_phys = pmalloc();
                     if (!new_phys) {
                         // Rollback: free all allocated pages and destroy child context

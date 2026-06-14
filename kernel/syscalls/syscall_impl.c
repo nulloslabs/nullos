@@ -1,5 +1,6 @@
 #include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/sys/futex.h>
 #include <freestanding/stddef.h>
 #include <freestanding/signal.h>
 #include <freestanding/fcntl.h>
@@ -605,6 +606,7 @@ void sys_mmap(syscall_frame_t *frame) {
     uint64_t vmm_flags = VMM_USER;
     if (prot & PROT_WRITE) vmm_flags |= VMM_WRITABLE;
     if (!(prot & PROT_EXEC)) vmm_flags |= VMM_NX;
+    if (flags & MAP_SHARED) vmm_flags |= VMM_SHARED;
 
     void *ptr = NULL;
     if (flags & MAP_FIXED) {
@@ -2376,5 +2378,488 @@ void check_signals(syscall_frame_t *frame) {
             
             break;
         }
+    }
+}
+/* =========================================================================
+ * Futex subsystem
+ * =========================================================================
+ *
+ * Waiter states:
+ *   FW_FREE       – slot is available for a new waiter
+ *   FW_WAITING    – task is blocked; deadline_us may be non-zero
+ *   FW_WOKEN      – woken normally by FUTEX_WAKE / FUTEX_WAKE_OP
+ *   FW_TIMED_OUT  – woken because the deadline elapsed
+ *
+ * After returning from the int $32 yield point, the waiting task reads its
+ * own slot (indexed by `slot`), determines why it was woken, then frees the
+ * slot by setting state = FW_FREE.
+ *
+ * futex_check_timeouts() is called by schedule() on every timer tick; it
+ * expires timed-out waiters and also wakes tasks that received a signal
+ * while blocked (so that -EINTR can be returned to user-space).
+ * ========================================================================= */
+
+#define FW_FREE       0
+#define FW_WAITING    1
+#define FW_WOKEN      2
+#define FW_TIMED_OUT  3
+
+#define FUTEX_MAX_WAITERS 256
+
+typedef struct {
+    int      state;        /* FW_* above */
+    uint64_t phys_addr;   /* physical address used as the futex key */
+    int      task_idx;    /* index into tasks[] */
+    uint32_t bitset;      /* for WAIT_BITSET / WAKE_BITSET matching */
+    uint64_t deadline_us; /* absolute deadline from time_get_realtime_us(), 0=no timeout */
+} futex_waiter_t;
+
+static futex_waiter_t futex_waiters[FUTEX_MAX_WAITERS];
+static spinlock_t futex_lock = SPINLOCK_INIT;
+
+/* --------------------------------------------------------------------------
+ * futex_check_timeouts – called from schedule() on every tick
+ * -------------------------------------------------------------------------- */
+void futex_check_timeouts(void) {
+    uint64_t now = time_get_realtime_us();
+
+    for (int i = 0; i < FUTEX_MAX_WAITERS; i++) {
+        if (futex_waiters[i].state != FW_WAITING) continue;
+
+        int idx = futex_waiters[i].task_idx;
+        if (idx < 0 || idx >= MAX_TASKS) continue;
+
+        /* Expire timed-out waiters. */
+        if (futex_waiters[i].deadline_us != 0 &&
+            now >= futex_waiters[i].deadline_us) {
+            futex_waiters[i].state = FW_TIMED_OUT;
+            if (tasks[idx].state == TASK_STOPPED)
+                tasks[idx].state = TASK_READY;
+            continue;
+        }
+
+        /* Wake waiters that received a pending signal so -EINTR can be
+         * delivered once the task runs again and hits check_signals(). */
+        if (tasks[idx].pending_signals && tasks[idx].state == TASK_STOPPED) {
+            futex_waiters[i].state = FW_WOKEN; /* -EINTR detected via pending_signals */
+            tasks[idx].state = TASK_READY;
+        }
+    }
+}
+
+/* --------------------------------------------------------------------------
+ * Helper: resolve the futex physical key for the current task's uaddr.
+ * Returns 0 on error (sets frame->rax to -EFAULT).
+ * -------------------------------------------------------------------------- */
+static uint64_t futex_resolve_key(uint32_t *uaddr, syscall_frame_t *frame) {
+    if (!uaddr || !user_ptr_ok(uaddr, sizeof(uint32_t))) {
+        frame->rax = (uint64_t)-EFAULT;
+        return 0;
+    }
+    uint64_t phys = get_vmm_phys(current_task_ptr->ctx, (uint64_t)uaddr);
+    if (!phys) {
+        frame->rax = (uint64_t)-EFAULT;
+        return 0;
+    }
+    return phys;
+}
+
+/* --------------------------------------------------------------------------
+ * FUTEX_WAIT / FUTEX_WAIT_BITSET
+ * --------------------------------------------------------------------------
+ * rdi = uaddr, rsi = op, rdx = val,
+ * r10 = timeout (struct timespec *), r9 = val3 (bitset for WAIT_BITSET)
+ *
+ * FUTEX_WAIT   timeout is relative (added to now).
+ * FUTEX_WAIT_BITSET timeout is absolute (as stored).
+ * -------------------------------------------------------------------------- */
+static void futex_wait(syscall_frame_t *frame, uint64_t phys, uint32_t val,
+                       struct timespec *timeout_ptr, uint32_t bitset, bool absolute_timeout) {
+    if (bitset == 0) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    /* Parse optional timeout. */
+    uint64_t deadline_us = 0;
+    if (timeout_ptr) {
+        if (!user_ptr_ok(timeout_ptr, sizeof(struct timespec))) {
+            frame->rax = (uint64_t)-EFAULT; return;
+        }
+        struct timespec ts;
+        read_vmm(current_task_ptr->ctx, &ts, (uint64_t)timeout_ptr, sizeof(struct timespec));
+        if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000L) {
+            frame->rax = (uint64_t)-EINVAL; return;
+        }
+        uint64_t timeout_us = (uint64_t)ts.tv_sec * 1000000ULL
+                            + (uint64_t)ts.tv_nsec / 1000ULL;
+        if (absolute_timeout) {
+            deadline_us = timeout_us;
+        } else {
+            deadline_us = time_get_realtime_us() + timeout_us;
+        }
+        /* Already expired? */
+        if (deadline_us != 0 && time_get_realtime_us() >= deadline_us) {
+            frame->rax = (uint64_t)-ETIMEDOUT; return;
+        }
+    }
+
+    uint64_t irq_flags;
+    spin_lock_irqsave(&futex_lock, &irq_flags);
+
+    /* Atomically verify the futex value hasn't changed. */
+    uint32_t cur_val = 0;
+    read_vmm(current_task_ptr->ctx, &cur_val,
+             (uint64_t)(frame->rdi) /* original user uaddr */, sizeof(uint32_t));
+    if (cur_val != val) {
+        spin_unlock_irqrestore(&futex_lock, irq_flags);
+        frame->rax = (uint64_t)-EAGAIN;
+        return;
+    }
+
+    /* Allocate a waiter slot. */
+    int slot = -1;
+    for (int i = 0; i < FUTEX_MAX_WAITERS; i++) {
+        if (futex_waiters[i].state == FW_FREE) { slot = i; break; }
+    }
+    if (slot < 0) {
+        spin_unlock_irqrestore(&futex_lock, irq_flags);
+        frame->rax = (uint64_t)-ENOMEM;
+        return;
+    }
+
+    futex_waiters[slot].state       = FW_WAITING;
+    futex_waiters[slot].phys_addr   = phys;
+    futex_waiters[slot].task_idx    = current_task;
+    futex_waiters[slot].bitset      = bitset;
+    futex_waiters[slot].deadline_us = deadline_us;
+
+    current_task_ptr->state = TASK_STOPPED;
+
+    spin_unlock_irqrestore(&futex_lock, irq_flags);
+
+    while (1) {
+        /* Yield to the scheduler.  The syscall entry path holds sched_lock;
+         * the timer ISR skips schedule() when sched_lock is non-zero, so we
+         * must drop it before yielding and re-acquire it after waking. */
+        spin_unlock(&sched_lock);
+        __asm__ volatile("int $32" ::: "memory");
+        spin_lock(&sched_lock);
+
+        /* ---- Resumed after being woken ---- */
+        spin_lock_irqsave(&futex_lock, &irq_flags);
+        if (futex_waiters[slot].state != FW_WAITING) {
+            break;
+        }
+        current_task_ptr->state = TASK_STOPPED;
+        spin_unlock_irqrestore(&futex_lock, irq_flags);
+    }
+
+    int wake_state = futex_waiters[slot].state;
+    futex_waiters[slot].state = FW_FREE; /* consume the slot */
+    spin_unlock_irqrestore(&futex_lock, irq_flags);
+
+    if (wake_state == FW_TIMED_OUT) {
+        frame->rax = (uint64_t)-ETIMEDOUT;
+    } else if (current_task_ptr->pending_signals) {
+        /* Signal arrived while we slept; check_signals() will handle it. */
+        frame->rax = (uint64_t)-EINTR;
+    } else {
+        frame->rax = 0;
+    }
+}
+
+/* --------------------------------------------------------------------------
+ * FUTEX_WAKE / FUTEX_WAKE_BITSET
+ * --------------------------------------------------------------------------
+ * Wake up to `max_wake` tasks waiting on `phys` whose bitset overlaps.
+ * Returns the number of tasks actually woken.
+ * -------------------------------------------------------------------------- */
+static int futex_wake(uint64_t phys, uint32_t max_wake, uint32_t bitset) {
+    if (bitset == 0) return 0;
+
+    int woken = 0;
+    uint64_t irq_flags;
+    spin_lock_irqsave(&futex_lock, &irq_flags);
+
+    for (int i = 0; i < FUTEX_MAX_WAITERS && (uint32_t)woken < max_wake; i++) {
+        if (futex_waiters[i].state != FW_WAITING) continue;
+        if (futex_waiters[i].phys_addr != phys) continue;
+        if (!(futex_waiters[i].bitset & bitset)) continue;
+
+        futex_waiters[i].state = FW_WOKEN;
+        int idx = futex_waiters[i].task_idx;
+        if (idx >= 0 && idx < MAX_TASKS && tasks[idx].state == TASK_STOPPED)
+            tasks[idx].state = TASK_READY;
+        woken++;
+    }
+
+    spin_unlock_irqrestore(&futex_lock, irq_flags);
+    return woken;
+}
+
+/* --------------------------------------------------------------------------
+ * sys_futex – main entry point
+ *
+ * Linux x86-64 calling convention for sys_futex:
+ *   rdi = uaddr
+ *   rsi = op
+ *   rdx = val
+ *   r10 = timeout / val2
+ *   r8  = uaddr2
+ *   r9  = val3
+ * -------------------------------------------------------------------------- */
+void sys_futex(syscall_frame_t *frame) {
+    uint32_t       *uaddr       = (uint32_t *)frame->rdi;
+    int             op          = (int)frame->rsi;
+    uint32_t        val         = (uint32_t)frame->rdx;
+    struct timespec *timeout_ptr = (struct timespec *)frame->r10;
+    uint32_t       *uaddr2      = (uint32_t *)frame->r8;
+    uint32_t        val3        = (uint32_t)frame->r9;
+
+    int cmd = op & FUTEX_CMD_MASK;
+
+    /* Resolve the physical key for uaddr (validates the pointer too). */
+    uint64_t phys = futex_resolve_key(uaddr, frame);
+    if (!phys) return; /* frame->rax already set to -EFAULT */
+
+    switch (cmd) {
+
+    /* ------------------------------------------------------------------ */
+    case FUTEX_WAIT: {
+        futex_wait(frame, phys, val, timeout_ptr,
+                   FUTEX_BITSET_MATCH_ANY, /*absolute=*/false);
+        return;
+    }
+
+    /* ------------------------------------------------------------------ */
+    case FUTEX_WAIT_BITSET: {
+        if (val3 == 0) { frame->rax = (uint64_t)-EINVAL; return; }
+        /* FUTEX_WAIT_BITSET timeouts are absolute by convention. */
+        futex_wait(frame, phys, val, timeout_ptr, val3, /*absolute=*/true);
+        return;
+    }
+
+    /* ------------------------------------------------------------------ */
+    case FUTEX_WAKE: {
+        if (val3 == 0) val3 = FUTEX_BITSET_MATCH_ANY; /* unused for plain WAKE */
+        int woken = futex_wake(phys, val, FUTEX_BITSET_MATCH_ANY);
+        frame->rax = (uint64_t)woken;
+        return;
+    }
+
+    /* ------------------------------------------------------------------ */
+    case FUTEX_WAKE_BITSET: {
+        if (val3 == 0) { frame->rax = (uint64_t)-EINVAL; return; }
+        int woken = futex_wake(phys, val, val3);
+        frame->rax = (uint64_t)woken;
+        return;
+    }
+
+    /* ------------------------------------------------------------------ */
+    case FUTEX_REQUEUE: {
+        /*
+         * val  = max tasks to wake on uaddr
+         * r10 (timeout_ptr cast to uint32_t) = val2 = max tasks to requeue onto uaddr2
+         */
+        uint32_t val2 = (uint32_t)(uintptr_t)timeout_ptr;
+
+        if (!uaddr2 || !user_ptr_ok(uaddr2, sizeof(uint32_t))) {
+            frame->rax = (uint64_t)-EFAULT; return;
+        }
+        uint64_t phys2 = get_vmm_phys(current_task_ptr->ctx, (uint64_t)uaddr2);
+        if (!phys2) { frame->rax = (uint64_t)-EFAULT; return; }
+
+        int woken = 0, requeued = 0;
+        uint64_t irq_flags;
+        spin_lock_irqsave(&futex_lock, &irq_flags);
+
+        for (int i = 0; i < FUTEX_MAX_WAITERS; i++) {
+            if (futex_waiters[i].state != FW_WAITING) continue;
+            if (futex_waiters[i].phys_addr != phys) continue;
+
+            if ((uint32_t)woken < val) {
+                futex_waiters[i].state = FW_WOKEN;
+                int idx = futex_waiters[i].task_idx;
+                if (idx >= 0 && idx < MAX_TASKS && tasks[idx].state == TASK_STOPPED)
+                    tasks[idx].state = TASK_READY;
+                woken++;
+            } else if ((uint32_t)requeued < val2) {
+                futex_waiters[i].phys_addr = phys2;
+                requeued++;
+            } else {
+                break;
+            }
+        }
+
+        spin_unlock_irqrestore(&futex_lock, irq_flags);
+        frame->rax = (uint64_t)woken;
+        return;
+    }
+
+    /* ------------------------------------------------------------------ */
+    case FUTEX_CMP_REQUEUE: {
+        /*
+         * Like FUTEX_REQUEUE but first checks *uaddr == val3; returns
+         * -EAGAIN if not.
+         * val  = max tasks to wake on uaddr
+         * r10  = val2 = max tasks to requeue onto uaddr2
+         * r9   = val3 = expected value of *uaddr
+         */
+        uint32_t val2 = (uint32_t)(uintptr_t)timeout_ptr;
+
+        if (!uaddr2 || !user_ptr_ok(uaddr2, sizeof(uint32_t))) {
+            frame->rax = (uint64_t)-EFAULT; return;
+        }
+        uint64_t phys2 = get_vmm_phys(current_task_ptr->ctx, (uint64_t)uaddr2);
+        if (!phys2) { frame->rax = (uint64_t)-EFAULT; return; }
+
+        uint64_t irq_flags;
+        spin_lock_irqsave(&futex_lock, &irq_flags);
+
+        /* Atomic compare: *uaddr must equal val3. */
+        uint32_t cur_val = 0;
+        read_vmm(current_task_ptr->ctx, &cur_val, (uint64_t)uaddr, sizeof(uint32_t));
+        if (cur_val != val3) {
+            spin_unlock_irqrestore(&futex_lock, irq_flags);
+            frame->rax = (uint64_t)-EAGAIN;
+            return;
+        }
+
+        int woken = 0, requeued = 0;
+        for (int i = 0; i < FUTEX_MAX_WAITERS; i++) {
+            if (futex_waiters[i].state != FW_WAITING) continue;
+            if (futex_waiters[i].phys_addr != phys) continue;
+
+            if ((uint32_t)woken < val) {
+                futex_waiters[i].state = FW_WOKEN;
+                int idx = futex_waiters[i].task_idx;
+                if (idx >= 0 && idx < MAX_TASKS && tasks[idx].state == TASK_STOPPED)
+                    tasks[idx].state = TASK_READY;
+                woken++;
+            } else if ((uint32_t)requeued < val2) {
+                futex_waiters[i].phys_addr = phys2;
+                requeued++;
+            } else {
+                break;
+            }
+        }
+
+        spin_unlock_irqrestore(&futex_lock, irq_flags);
+        frame->rax = (uint64_t)woken;
+        return;
+    }
+
+    /* ------------------------------------------------------------------ */
+    case FUTEX_WAKE_OP: {
+        /*
+         * Atomically:
+         *   1. Apply the encoded operation to *uaddr2 and remember oldval.
+         *   2. Wake up to val  tasks on uaddr.
+         *   3. If the comparison of oldval against cmp_arg is true,
+         *      also wake up to val2 tasks on uaddr2.
+         *
+         * val3 encoding (Linux futex_op):
+         *   bits [31:28] = op   (FUTEX_OP_*)
+         *   bit  [27]    = FUTEX_OP_ARG_SHIFT flag
+         *   bits [26:12] = op_arg  (12 bits; shifted left if flag set)
+         *   bits [23:12] = cmp  (FUTEX_OP_CMP_*)
+         *   bits [11:0]  = cmp_arg
+         *
+         * Actual Linux layout (from kernel source):
+         *   bits [31:28] = op
+         *   bit  [27]    = FUTEX_OP_ARG_SHIFT
+         *   bits [26:12] = op_arg (15 bits)  – we use [26:12]
+         *   bits [11:8]  = cmp               – we use [23:12] from Linux man
+         *
+         * We follow the kernel header encoding:
+         *   #define FUTEX_OP(op, oparg, cmp, cmparg) \
+         *       (((op & 0xf) << 28) | ((cmp & 0xf) << 24) | \
+         *        ((oparg & 0xfff) << 12) | (cmparg & 0xfff))
+         */
+        uint32_t val2 = (uint32_t)(uintptr_t)timeout_ptr;
+
+        if (!uaddr2 || !user_ptr_ok(uaddr2, sizeof(uint32_t))) {
+            frame->rax = (uint64_t)-EFAULT; return;
+        }
+        uint64_t phys2 = get_vmm_phys(current_task_ptr->ctx, (uint64_t)uaddr2);
+        if (!phys2) { frame->rax = (uint64_t)-EFAULT; return; }
+
+        /* Decode val3. */
+        int      fop      = (int)((val3 >> 28) & 0x7U);
+        int      fopshift = (int)((val3 >> 28) & 0x8U);
+        uint32_t op_arg   = (val3 >> 12) & 0xFFFU; /* 12 bits */
+        int      fcmp     = (int)((val3 >> 24) & 0xFU);
+        uint32_t cmp_arg  = val3 & 0xFFFU;           /* 12 bits */
+
+        if (fopshift) op_arg = 1U << (op_arg & 0x1F);
+
+        uint64_t irq_flags;
+        spin_lock_irqsave(&futex_lock, &irq_flags);
+
+        /* Apply operation to *uaddr2, save old value. */
+        uint32_t oldval = 0;
+        read_vmm(current_task_ptr->ctx, &oldval, (uint64_t)uaddr2, sizeof(uint32_t));
+
+        uint32_t newval = oldval;
+        switch (fop) {
+            case FUTEX_OP_SET:  newval = op_arg;           break;
+            case FUTEX_OP_ADD:  newval = oldval + op_arg;  break;
+            case FUTEX_OP_OR:   newval = oldval | op_arg;  break;
+            case FUTEX_OP_ANDN: newval = oldval & ~op_arg; break;
+            case FUTEX_OP_XOR:  newval = oldval ^ op_arg;  break;
+            default:
+                spin_unlock_irqrestore(&futex_lock, irq_flags);
+                frame->rax = (uint64_t)-ENOSYS;
+                return;
+        }
+        write_vmm(current_task_ptr->ctx, (uint64_t)uaddr2, &newval, sizeof(uint32_t));
+
+        /* Wake up to val tasks on uaddr. */
+        int woken = 0;
+        for (int i = 0; i < FUTEX_MAX_WAITERS && (uint32_t)woken < val; i++) {
+            if (futex_waiters[i].state != FW_WAITING) continue;
+            if (futex_waiters[i].phys_addr != phys) continue;
+            futex_waiters[i].state = FW_WOKEN;
+            int idx = futex_waiters[i].task_idx;
+            if (idx >= 0 && idx < MAX_TASKS && tasks[idx].state == TASK_STOPPED)
+                tasks[idx].state = TASK_READY;
+            woken++;
+        }
+
+        /* Evaluate comparison against oldval. */
+        bool cond = false;
+        switch (fcmp) {
+            case FUTEX_OP_CMP_EQ: cond = (oldval == cmp_arg);                         break;
+            case FUTEX_OP_CMP_NE: cond = (oldval != cmp_arg);                         break;
+            case FUTEX_OP_CMP_LT: cond = ((int32_t)oldval <  (int32_t)cmp_arg);       break;
+            case FUTEX_OP_CMP_LE: cond = ((int32_t)oldval <= (int32_t)cmp_arg);       break;
+            case FUTEX_OP_CMP_GT: cond = ((int32_t)oldval >  (int32_t)cmp_arg);       break;
+            case FUTEX_OP_CMP_GE: cond = ((int32_t)oldval >= (int32_t)cmp_arg);       break;
+            default:
+                spin_unlock_irqrestore(&futex_lock, irq_flags);
+                frame->rax = (uint64_t)-ENOSYS;
+                return;
+        }
+
+        /* Conditionally wake up to val2 tasks on uaddr2. */
+        if (cond) {
+            for (int i = 0; i < FUTEX_MAX_WAITERS && (uint32_t)(woken - (int)val) < val2; i++) {
+                if (futex_waiters[i].state != FW_WAITING) continue;
+                if (futex_waiters[i].phys_addr != phys2) continue;
+                futex_waiters[i].state = FW_WOKEN;
+                int idx = futex_waiters[i].task_idx;
+                if (idx >= 0 && idx < MAX_TASKS && tasks[idx].state == TASK_STOPPED)
+                    tasks[idx].state = TASK_READY;
+                woken++;
+            }
+        }
+
+        spin_unlock_irqrestore(&futex_lock, irq_flags);
+        frame->rax = (uint64_t)woken;
+        return;
+    }
+
+    /* ------------------------------------------------------------------ */
+    default:
+        frame->rax = (uint64_t)-ENOSYS;
+        return;
     }
 }

@@ -12,6 +12,7 @@
 #define VMM_USER     (1ULL << 2)
 #define VMM_PWT      (1ULL << 3)
 #define VMM_PCD      (1ULL << 4)
+#define VMM_SHARED   (1ULL << 9)
 #define VMM_NX       (1ULL << 63)
 
 typedef struct {

@@ -26,6 +26,8 @@ ssize_t read(int fd, void *buf, size_t count);
 ssize_t write(int fd, const void *buf, size_t count);
 char *getcwd(char *buf, size_t size);
 int chdir(const char *path);
+int mkdir(const char *path, mode_t mode);
+int rmdir(const char *pathname);
 int execve(const char *path, char *const argv[], char *const envp[]);
 int execv(const char *path, char *const argv[]);
 int execvp(const char *file, char *const argv[]);
@@ -55,7 +57,8 @@ int chown(const char *path, uid_t owner, gid_t group);
 int lchown(const char *path, uid_t owner, gid_t group);
 int unlinkat(int dirfd, const char *pathname, int flags);
 int symlinkat(const char *target, int newdirfd, const char *linkpath);
-int rmdir(const char *pathname);
+int dup(int oldfd);
+int dup2(int oldfd, int newfd);
 
 #ifdef __cplusplus
 }

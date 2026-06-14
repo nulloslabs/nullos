@@ -5,6 +5,7 @@
 
 syscall_entry:
     // switch to kernel stack
+    swapgs
     mov r12, rsp
     mov rsp, [rip + current_task_ptr]
     mov rsp, [rsp + 40]
@@ -52,6 +53,14 @@ syscall_entry:
     pop rax
     pop rbx
     pop rcx
+    // Mitigate AMD sysret vulnerability: check if return RIP in RCX is canonical user space.
+    // User canonical addresses must have bits 47-63 as all 0s.
+    // Use rdx (about to be popped next anyway) as temporary scratch space.
+    mov rdx, rcx
+    shr rdx, 47
+    jz .Lrcx_ok
+    xor rcx, rcx           // Force non-canonical/kernel addresses to 0 to safely fault in ring 3
+.Lrcx_ok:
     pop rdx
     pop rsi
     pop rdi
@@ -66,5 +75,5 @@ syscall_entry:
     pop r15
 
     mov rsp, r12
-
+    swapgs                 // Switch kernel GS back to user GS
     sysretq

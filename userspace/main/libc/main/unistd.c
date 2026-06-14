@@ -116,6 +116,12 @@ int chdir(const char *path) {
     return (int)syscall(SYS_chdir, path);
 }
 
+
+
+int rmdir(const char *pathname) {
+    return (int)syscall(SYS_rmdir, pathname);
+}
+
 int execve(const char *path, char *const argv[], char *const envp[]) {
     return (int)syscall(SYS_execve, path, argv, envp);
 }
@@ -265,6 +271,10 @@ int symlinkat(const char *target, int newdirfd, const char *linkpath) {
     return (int)syscall(SYS_symlinkat, target, newdirfd, linkpath);
 }
 
-int rmdir(const char *pathname) {
-    return (int)syscall(SYS_rmdir, pathname);
+int dup(int oldfd) {
+    return (int)syscall(SYS_dup, oldfd);
+}
+
+int dup2(int oldfd, int newfd) {
+    return (int)syscall(SYS_dup2, oldfd, newfd);
 }

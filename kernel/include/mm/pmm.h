@@ -9,3 +9,4 @@
 void init_pmm(void);
 void* pmalloc(void);
 void pfree(void *phys_addr);
+void pref(void *phys_addr);

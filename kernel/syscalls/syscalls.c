@@ -82,6 +82,7 @@ static syscall_fn_t syscall_table[] = {
     [SYS_setsockopt]   = sys_setsockopt,
     [SYS_rt_sigaction] = sys_rt_sigaction,
     [SYS_rt_sigreturn] = sys_rt_sigreturn,
+    [SYS_futex]        = sys_futex,
 };
 
 extern void syscall_entry(void);

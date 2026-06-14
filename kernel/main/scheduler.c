@@ -12,11 +12,13 @@
 #include <main/fd.h>
 #include <main/msr.h>
 #include <io/usb.h>
+#include <main/futex.h>
 
 task_t tasks[MAX_TASKS];
 int current_task = 0;
 task_t* current_task_ptr = &tasks[0];
 static spinlock_t task_lock = SPINLOCK_INIT;
+static pid_t next_pid = 0;
 
 // Let's keep this public and not private, other functions change it.
 spinlock_t sched_lock = SPINLOCK_INIT;
@@ -100,8 +102,8 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
             #undef PUSH
 
             tasks[i].rsp = k_rsp;
-            tasks[i].pid = (pid_t)i;
-            tasks[i].ppid = current_task_ptr->pid;
+            tasks[i].pid = next_pid++;
+            tasks[i].ppid = current_task_ptr ? current_task_ptr->pid : 0;
             tasks[i].state = TASK_READY;
             tasks[i].priority = 1;
 
@@ -193,6 +195,9 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
 }
 
 void schedule(void) {
+    /* Expire timed-out futex waiters and wake any that received a signal. */
+    futex_check_timeouts();
+
     int old_task = current_task;
 
     if (tasks[old_task].state == TASK_RUNNING) {
@@ -237,6 +242,8 @@ void schedule(void) {
         }
 
         write_msr(MSR_FS_BASE, tasks[next].fs_base);
+        write_msr(MSR_KERNEL_GS_BASE, tasks[next].gs_base);
+        write_msr(MSR_GS_BASE, (uint64_t)current_task_ptr);
     }
 }
 
