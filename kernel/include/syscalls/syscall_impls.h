@@ -78,5 +78,8 @@ void sys_fchmodat(syscall_frame_t *frame);
 void sys_rt_sigaction(syscall_frame_t *frame);
 void sys_rt_sigreturn(syscall_frame_t *frame);
 void sys_futex(syscall_frame_t *frame);
+
 // Some public helpers
 bool is_mounted_under(const char* path, const char* fstype, char* relative_out);
+void check_signals(syscall_frame_t *frame);
+void futex_check_timeouts(void);

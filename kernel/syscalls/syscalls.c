@@ -1,7 +1,7 @@
 #include <freestanding/errno.h>
 #include <freestanding/sys/syscall.h>
 #include <syscalls/syscalls.h>
-#include <syscalls/syscall_impl.h>
+#include <syscalls/syscall_impls.h>
 #include <main/scheduler.h>
 #include <io/terminal.h>
 #include <main/msr.h>
@@ -86,8 +86,6 @@ static syscall_fn_t syscall_table[] = {
 };
 
 extern void syscall_entry(void);
-
-extern void check_signals(syscall_frame_t *frame);
 
 void syscall_dispatch(syscall_frame_t *frame) {
     if (frame->rax < (sizeof(syscall_table) / sizeof(syscall_table[0])) && syscall_table[frame->rax]) syscall_table[frame->rax](frame);

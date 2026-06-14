@@ -1,18 +1,18 @@
 #include <freestanding/stddef.h>
-#include <main/string.h>
-#include <main/scheduler.h>
-#include <mm/mm.h>
-#include <mm/vmm.h>
 #include <freestanding/errno.h>
+#include <main/string.h>
 #include <main/halt.h>
 #include <main/panic.h>
 #include <main/gdt.h>
 #include <main/spinlock.h>
-#include <io/terminal.h>
+#include <main/scheduler.h>
 #include <main/fd.h>
 #include <main/msr.h>
+#include <mm/mm.h>
+#include <mm/vmm.h>
+#include <io/terminal.h>
 #include <io/usb.h>
-#include <main/futex.h>
+#include <syscalls/syscall_impls.h>
 
 task_t tasks[MAX_TASKS];
 int current_task = 0;
@@ -195,7 +195,6 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
 }
 
 void schedule(void) {
-    /* Expire timed-out futex waiters and wake any that received a signal. */
     futex_check_timeouts();
 
     int old_task = current_task;
