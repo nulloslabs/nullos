@@ -21,6 +21,8 @@ int main(int argc, char **argv) {
 
     printf("\033[2J\033[H");
     if (mount("devfs", "/dev", "devfs", 0, NULL) < 0) { perror("init: mount() failed"); return 1; }
+    if (mkdir("/dev/pts", 0755) < 0) { perror("init: mkdir() failed"); return 1; }
+    if (mount("devpts", "/dev/pts", "devpts", 0, NULL) < 0) { perror("init: mount() failed"); return 1; }
 
     char *login_argv[] = { "/usr/bin/login", NULL }; // 
     char *login_envp[] = { NULL };

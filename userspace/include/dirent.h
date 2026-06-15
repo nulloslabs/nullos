@@ -6,6 +6,15 @@
 extern "C" {
 #endif
 
+#define DT_UNKNOWN 0
+#define DT_FIFO    1
+#define DT_CHR     2
+#define DT_DIR     4
+#define DT_BLK     6
+#define DT_REG     8
+#define DT_LNK     10
+#define DT_SOCK    12
+
 struct dirent {
     uint64_t d_ino;
     int64_t d_off;
@@ -23,11 +32,6 @@ struct __dirstream {
 };
 
 typedef struct __dirstream DIR;
-
-#define DT_UNKNOWN 0
-#define DT_DIR 4
-#define DT_REG 8
-#define DT_LNK 10
 
 int getdents(int fd, struct dirent *buf, int count);
 DIR *opendir(const char *name);

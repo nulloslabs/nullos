@@ -28,4 +28,6 @@ int pty_slave_path_idx(const char *path);
 pty_t *get_pty(int idx);
 int read_pty_master(int idx, char *buf, int len);
 int write_pty_master(int idx, const char *buf, int len);
+uint64_t read_pts(int idx, void *buf, uint64_t count, uint64_t offset);
+uint64_t write_pts(int idx, const void *buf, uint64_t count, uint64_t offset);
 void init_ptys(void);
