@@ -16,6 +16,7 @@ extern "C" {
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
 
+extern const char *__progname;
 extern char **environ;
 
 int64_t syscall(int64_t num, ...);

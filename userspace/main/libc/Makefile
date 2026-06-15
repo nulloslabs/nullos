@@ -9,7 +9,7 @@ endif
 
 include ../../config.mk
 
-SUBDIRS = main netinet sys
+SUBDIRS = asm main sys __ssp __start
 OBJ = $(wildcard */*.o)
 
 all: $(SUBDIRS) libc

@@ -21,11 +21,11 @@ all: $(OBJ)
 
 ../../../%.o: %.c
 	@printf "  %-7s %s\n" "CC" "userspace/$(@F)"
-	@$(CC) $(CFLAGS) -MF $*.d -c $< -o $@
+	@$(CC) $(CFLAGS) -fno-stack-protector -MF $*.d -c $< -o $@
 
 ../../../%.o: %.S
 	@printf "  %-7s %s\n" "AS" "userspace/$(@F)"
-	@$(AS) $(AFLAGS) -MF $*.d -c $< -o $@
+	@$(AS) $(AFLAGS) -fno-stack-protector -MF $*.d -c $< -o $@
 
 clean:
-	@rm -f ../../../crt*.o *.d
+	@rm -f ../../../crt*.o ../../../Scrt*.o *.d

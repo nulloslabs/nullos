@@ -15,7 +15,7 @@ all:
 	done; \
 	$(MAKE) -C main; \
 	if [ $$needs_build -eq 0 ] && [ -n "$(OBJ)" ]; then \
-		printf "  %-7s %s\n" "INFO" "userspace/crt0.o is already up to date"; \
+		printf "  %-7s %s\n" "INFO" "userspace/crt0.o userspace/crt1.o userspace/Scrt1.o userspace/crti.o userspace/crtn.o are already up to date"; \
 	fi
 
 clean:

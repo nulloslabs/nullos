@@ -2226,13 +2226,13 @@ void sys_utime(syscall_frame_t *frame) {
 
 void sys_arch_prctl(syscall_frame_t *frame) {
     int code = (int)frame->rdi;
-    uint64_t addr = frame->rsi;
+    unsigned long addr = (unsigned long)frame->rsi;
 
     switch (code) {
         case ARCH_SET_FS:
             // Validate user-space address for FS base (TLS pointer)
             if (addr != 0 && !user_addr_ok(addr, 1)) {
-                frame->rax = (uint64_t)-EPERM; return;
+                frame->rax = (long)-EPERM; return;
             }
             current_task_ptr->fs_base = addr;
             write_msr(MSR_FS_BASE, addr);
@@ -2240,14 +2240,14 @@ void sys_arch_prctl(syscall_frame_t *frame) {
             return;
         case ARCH_GET_FS:
             if (!user_ptr_ok((void*)addr, sizeof(uint64_t))) {
-                frame->rax = (uint64_t)-EFAULT; return;
+                frame->rax = (long)-EFAULT; return;
             }
             write_vmm(current_task_ptr->ctx, addr, &current_task_ptr->fs_base, sizeof(uint64_t));
             frame->rax = 0;
             return;
         case ARCH_SET_GS:
             if (addr != 0 && !user_addr_ok(addr, 1)) {
-                frame->rax = (uint64_t)-EPERM; return;
+                frame->rax = (long)-EPERM; return;
             }
             current_task_ptr->gs_base = addr;
             write_msr(MSR_GS_BASE, addr);
@@ -2255,13 +2255,13 @@ void sys_arch_prctl(syscall_frame_t *frame) {
             return;
         case ARCH_GET_GS:
             if (!user_ptr_ok((void*)addr, sizeof(uint64_t))) {
-                frame->rax = (uint64_t)-EFAULT; return;
+                frame->rax = (long)-EFAULT; return;
             }
             write_vmm(current_task_ptr->ctx, addr, &current_task_ptr->gs_base, sizeof(uint64_t));
             frame->rax = 0;
             return;
         default:
-            frame->rax = (uint64_t)-EINVAL;
+            frame->rax = (long)-EINVAL;
             return;
     }
 }

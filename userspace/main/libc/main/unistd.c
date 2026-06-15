@@ -10,6 +10,7 @@
 
 // Variables, structs etc. for functions
 static void *current_program_break = NULL;
+const char *__progname = NULL;
 char **environ = NULL;
 
 // Helpers for functions

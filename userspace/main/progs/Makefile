@@ -18,7 +18,7 @@ all: main
 	for p in $(PROGS); do \
 		t="../../$$p"; \
 		o="main/$$p.o"; \
-		if [ ! -f $$t ] || [ $$o -nt $$t ] || [ ../../crt0.o -nt $$t ] || [ ../../libc.a -nt $$t ] || [ ../../ld.so -nt $$t ]; then \
+		if [ ! -f $$t ] || [ $$o -nt $$t ] || [ ../../Scrt1.o -nt $$t ] || [ ../../crti.o -nt $$t ] || [ ../../crtn.o -nt $$t ] || [ ../../libc.a -nt $$t ] || [ ../../ld.so -nt $$t ] || [ Makefile -nt $$t ] || [ ../../config.mk -nt $$t ]; then \
 			needs_build=1; \
 		fi; \
 	done; \
@@ -32,9 +32,9 @@ main:
 	@$(MAKE) -C main
 
 define PROG_rule
-../../$(1): main/$(1).o ../../crt0.o ../../libc.so ../../libc.a ../../ld.so Makefile ../../config.mk
+../../$(1): main/$(1).o ../../Scrt1.o ../../crti.o ../../crtn.o ../../libc.so ../../libc.a ../../ld.so Makefile ../../config.mk
 	@printf "  %-7s %s\n" "LD" "$(SUBDIR)/$(1)"
-	$(LD) $(LDFLAGS) ../../crt0.o main/$(1).o -o $$@ -L../.. -Wl,--dynamic-linker=/usr/lib/ld.so -l:libc.so
+	$(LD) $(LDFLAGS) ../../Scrt1.o ../../crti.o main/$(1).o ../../crtn.o -o $$@ -L../.. -Wl,--dynamic-linker=/usr/lib/ld.so -l:libc.so
 	@printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/$(1)"
 	$(STRIP) $(STRIPFLAGS) $$@
 endef

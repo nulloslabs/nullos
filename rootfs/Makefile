@@ -9,7 +9,7 @@ include config.mk
 
 .DEFAULT_GOAL := all
 USERSPACE_PROGS := $(patsubst ../userspace/main/progs/main/%.c,../userspace/%,$(wildcard ../userspace/main/progs/main/*.c)) $(patsubst ../userspace/main/progs/main/%.S,../userspace/%,$(wildcard ../userspace/main/progs/main/*.S))
-DEP := $(wildcard ../userspace/main/progs/*.c) $(wildcard ../userspace/main/progs/*.S) $(USERSPACE_PROGS) $(shell find main/ 2>/dev/null) config.mk ../userspace/libc.so ../userspace/libc.a ../userspace/crt0.o ../userspace/ld.so
+DEP := $(wildcard ../userspace/main/progs/*.c) $(wildcard ../userspace/main/progs/*.S) $(USERSPACE_PROGS) $(shell find main/ 2>/dev/null) config.mk ../userspace/libc.so ../userspace/libc.a ../userspace/crt0.o ../userspace/crt1.o ../userspace/Scrt1.o ../userspace/crti.o ../userspace/crtn.o ../userspace/ld.so
 
 all: rootfs
 
@@ -23,7 +23,7 @@ rootfs:
 			ln -snf usr/sbin main/sbin && \
 			ln -snf usr/lib main/lib && \
 			cp ../userspace/init main/init && \
-			cp ../userspace/libc.so ../userspace/libc.a ../userspace/crt0.o main/usr/lib && \
+			cp ../userspace/libc.so ../userspace/libc.a ../userspace/crt0.o ../userspace/crt1.o ../userspace/Scrt1.o ../userspace/crti.o ../userspace/crtn.o main/usr/lib && \
 			cp ../userspace/ld.so main/usr/lib/ld.so && \
 		cp -a ../userspace/include main/usr/ && \
 		cp $(filter-out ../userspace/init,$(USERSPACE_PROGS)) main/usr/bin && \
