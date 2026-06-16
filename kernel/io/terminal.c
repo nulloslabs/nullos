@@ -602,7 +602,7 @@ void putc(char c) {
 void puts(const char *s) {
     uint64_t rflags;
     spin_lock_irqsave(&term_lock, &rflags);
-    while (*s) putc_unlocked(*s++);
+    while (*s) { putc_unlocked(*s); s++; }
     spin_unlock_irqrestore(&term_lock, rflags);
 }
 
