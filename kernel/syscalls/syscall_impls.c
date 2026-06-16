@@ -2369,8 +2369,7 @@ void sys_mount(syscall_frame_t *frame) {
 
     char target_buf[64];
     char fstype_buf[32];
-    if (copy_user_string(user_target, target_buf, sizeof(target_buf)) < 0 ||
-        copy_user_string(user_fstype, fstype_buf, sizeof(fstype_buf)) < 0) {
+    if (copy_user_string(user_target, target_buf, sizeof(target_buf)) < 0 || copy_user_string(user_fstype, fstype_buf, sizeof(fstype_buf)) < 0) {
         frame->rax = (uint64_t)-EFAULT; return;
     }
     if (!*target_buf || !*fstype_buf) {
