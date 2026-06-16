@@ -1,6 +1,6 @@
 #include <main/elf.h>
 #include <main/rootfs.h>
-#include <main/devfs.h>
+#include <io/devtmpfs.h>
 #include <freestanding/errno.h>
 #include <main/string.h>
 #include <io/terminal.h>
@@ -12,20 +12,40 @@
 #include <syscalls/syscalls.h>
 #include <io/hpet.h>
 
+static uint64_t s[4];
 
-// Simple entropy source using HPET counter
-static uint64_t aslr_entropy_counter = 0;
+static uint64_t rotl(const uint64_t x, int k) {
+    return (x << k) | (x >> (64 - k));
+}
+
+static uint64_t next(void) {
+    const uint64_t result = rotl(s[1] * 5, 7) * 9;
+    const uint64_t t = s[1] << 17;
+
+    s[2] ^= s[0];
+    s[3] ^= s[1];
+    s[1] ^= s[2];
+    s[0] ^= s[3];
+
+    s[2] ^= t;
+    s[3] = rotl(s[3], 45);
+
+    return result;
+}
+
+static void seed_prng(void) {
+    // Seed with HPET and some constant mixing
+    uint64_t hpet = read_hpet_counter();
+    for (int i = 0; i < 4; i++) {
+        s[i] = hpet ^ (0x9E3779B97F4A7C15ULL * (i + 1));
+    }
+}
 
 static uint64_t aslr_random_offset(uint64_t max_pages) {
-    // Mix HPET counter with a simple counter for entropy
-    uint64_t hpet = read_hpet_counter();
-    aslr_entropy_counter += 0x9E3779B97F4A7C15ULL; // golden ratio constant
-    uint64_t mixed = hpet ^ aslr_entropy_counter;
-    // Simple xorshift
-    mixed ^= mixed << 13;
-    mixed ^= mixed >> 7;
-    mixed ^= mixed << 17;
-    return (mixed % max_pages) * PAGE_SIZE;
+    if (s[0] == 0 && s[1] == 0 && s[2] == 0 && s[3] == 0) {
+        seed_prng();
+    }
+    return (next() % max_pages) * PAGE_SIZE;
 }
 
 static uint64_t setup_stack(vmm_context_t *ctx, uint64_t v_rsp,
@@ -149,7 +169,7 @@ static int load_elf_segments(vmm_context_t *ctx, uint8_t *data,
 }
 
 pid_t execute_elf(const char *path, char **argv, char **envp) {
-    if (devfs_device_exists(path)) return -EACCES;
+    if (devtmpfs_device_exists(path)) return -EACCES;
 
     rootfs_file_t file = read_rootfs(path);
     if (!file.data) return -ENOENT;
@@ -243,8 +263,7 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
 int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     syscall_frame_t *frame = (syscall_frame_t *)raw_frame;
 
-    if (devfs_device_exists(path))
-        return -EACCES;
+    if (devtmpfs_device_exists(path)) return -EACCES;
 
     rootfs_file_t file = read_rootfs(path);
     if (!file.data) return -ENOENT;

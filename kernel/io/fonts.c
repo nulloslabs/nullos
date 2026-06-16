@@ -3,7 +3,7 @@
 #include <io/fonts.h>
 #include <io/terminal.h>
 #include <main/string.h>
-#include <main/devfs.h>
+#include <io/devtmpfs.h>
 #include <limine/limine.h>
 #include <main/limine_req.h>
 #include <main/halt.h>
@@ -703,7 +703,7 @@ void init_default_font(void) {
 void change_font(const char *path, uint8_t w, uint8_t h) {
     if (!w || !h) return; // Sanity check if width or height is 0
 
-    if (devfs_device_exists(path)) return;
+    if (devtmpfs_device_exists(path)) return;
 
     rootfs_file_t file = read_rootfs(path);
 

@@ -1,4 +1,4 @@
-#include <main/devfs.h>
+#include <io/devtmpfs.h>
 #include <main/string.h>
 #include <main/spinlock.h>
 #include <freestanding/errno.h>

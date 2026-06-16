@@ -21,8 +21,10 @@
 #include <freestanding/sys/resource.h>
 #include <freestanding/sys/reboot.h>
 #include <main/limine_req.h>
-#include <main/devfs.h>
-#include <main/devpts.h>
+#include <io/devices.h>
+#include <io/devtmpfs.h>
+#include <io/devpts.h>
+#include <io/pts_devices.h>
 #include <main/spinlock.h>
 #include <main/elf.h>
 #include <main/halt.h>
@@ -502,16 +504,16 @@ void sys_read(syscall_frame_t *frame) {
     if (entry->type == FD_DEV) {
         char rel[256];
         uint64_t res;
-        if (is_mounted_under(entry->path, "devfs", rel) || is_mounted_under(entry->path, "devtmpfs", rel)) {
+        if (is_mounted_under(entry->path, "devtmpfs", rel)) {
             if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
             uint8_t *kbuf = malloc(count);
-            res = read_devfs(rel, kbuf, count, entry->offset);
+            res = read_device(rel, kbuf, count, entry->offset);
             if ((int64_t)res >= 0) { write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, res); entry->offset += res; }
             free(kbuf);
         } else if (is_mounted_under(entry->path, "devpts", rel)) {
             if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
             uint8_t *kbuf = malloc(count);
-            res = read_devpts(rel, kbuf, count, entry->offset);
+            res = read_pts_device(rel, kbuf, count, entry->offset);
             if ((int64_t)res >= 0) { write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, res); entry->offset += res; }
             free(kbuf);
         } else {
@@ -589,12 +591,12 @@ void sys_write(syscall_frame_t *frame) {
     if (entry->type == FD_DEV) {
         char rel[256];
         uint64_t res;
-        if (is_mounted_under(entry->path, "devfs", rel) || is_mounted_under(entry->path, "devtmpfs", rel)) {
+        if (is_mounted_under(entry->path, "devtmpfs", rel)) {
             if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
             uint8_t *kbuf = malloc(count);
             if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
             read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count);
-            res = write_devfs(rel, kbuf, count, entry->offset);
+            res = write_device(rel, kbuf, count, entry->offset);
             if ((int64_t)res >= 0) entry->offset += res;
             free(kbuf);
         } else if (is_mounted_under(entry->path, "devpts", rel)) {
@@ -602,7 +604,7 @@ void sys_write(syscall_frame_t *frame) {
             uint8_t *kbuf = malloc(count);
             if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
             read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count);
-            res = write_devpts(rel, kbuf, count, entry->offset);
+            res = write_pts_device(rel, kbuf, count, entry->offset);
             if ((int64_t)res >= 0) entry->offset += res;
             free(kbuf);
         } else {
@@ -673,8 +675,14 @@ void sys_open(syscall_frame_t *frame) {
     build_abs_path(path, abs_path, sizeof(abs_path));
 
     char rel_path[256];
-    if (is_mounted_under(abs_path, "devfs", rel_path) || is_mounted_under(abs_path, "devtmpfs", rel_path)) {
-        if (!devfs_device_exists(rel_path)) { frame->rax = (uint64_t)-ENOENT; return; }
+    if (is_mounted_under(abs_path, "devtmpfs", rel_path)) {
+        if (rel_path[0] != '\0' && !devtmpfs_device_exists(rel_path)) {
+            rootfs_file_t file = read_rootfs(abs_path);
+            if (!(file.mode & 0040000)) {
+                frame->rax = (uint64_t)-ENOENT;
+                return;
+            }
+        }
         // ptmx: allocate a PTY and return a master fd
         if (strcmp(rel_path, "ptmx") == 0 || strcmp(rel_path, "pts/ptmx") == 0) {
             int idx = alloc_pty();
@@ -708,7 +716,13 @@ void sys_open(syscall_frame_t *frame) {
             frame->rax = (uint64_t)fd;
             return;
         }
-        if (!devpts_device_exists(rel_path)) { frame->rax = (uint64_t)-ENOENT; return; }
+        if (rel_path[0] != '\0' && !devpts_device_exists(rel_path)) {
+            rootfs_file_t file = read_rootfs(abs_path);
+            if (!(file.mode & 0040000)) {
+                frame->rax = (uint64_t)-ENOENT;
+                return;
+            }
+        }
         int pty_idx = 0;
         const char *p = rel_path;
         while (*p >= '0' && *p <= '9') { pty_idx = pty_idx * 10 + (*p - '0'); p++; }
@@ -1007,7 +1021,7 @@ void sys_ioctl(syscall_frame_t *frame) {
     // Handle framebuffer ioctl requests
     if (entry && entry->type == FD_DEV) {
         char rel[256];
-        if (is_mounted_under(entry->path, "devfs", rel) || is_mounted_under(entry->path, "devtmpfs", rel)) {
+        if (is_mounted_under(entry->path, "devtmpfs", rel)) {
             if (strncmp(rel, "fb", 2) == 0) {
                 int idx = rel[2] - '0';
                 if (fb_req.response && idx >= 0 && idx < (int)fb_req.response->framebuffer_count) {
@@ -1040,11 +1054,11 @@ void sys_ioctl(syscall_frame_t *frame) {
 
     int is_tty = (fd == 0 || fd == 1 || fd == 2);
 
-    // Also treat devfs tty devices as ttys
+    // Also treat devtmpfs tty devices as ttys
     if (!is_tty) {
         if (entry && entry->type == FD_DEV) {
             char rel[256];
-            if (is_mounted_under(entry->path, "devfs", rel) || is_mounted_under(entry->path, "devtmpfs", rel)) {
+            if (is_mounted_under(entry->path, "devtmpfs", rel)) {
                 if (strncmp(rel, "tty", 3) == 0 || strncmp(rel, "pts/", 4) == 0 || strcmp(rel, "console") == 0)
                     is_tty = 1;
             } else if (is_mounted_under(entry->path, "devpts", rel)) {
@@ -1069,7 +1083,7 @@ void sys_ioctl(syscall_frame_t *frame) {
         termios_t t = {0};
         if (entry && entry->type == FD_DEV) {
             char rel[256];
-            if (is_mounted_under(entry->path, "devfs", rel) || is_mounted_under(entry->path, "devtmpfs", rel)) {
+            if (is_mounted_under(entry->path, "devtmpfs", rel)) {
                 if (strncmp(rel, "tty", 3) == 0) {
                      int idx = rel[3] - '0';
                      if (idx >= 0 && idx < NUM_TTYS) { t = get_tty(idx)->termios; } } else if (strncmp(rel, "pts/", 4) == 0) {
@@ -1096,7 +1110,7 @@ void sys_ioctl(syscall_frame_t *frame) {
     case TCSETSF:
         if (entry && entry->type == FD_DEV) {
             char rel[256];
-            if (is_mounted_under(entry->path, "devfs", rel) || is_mounted_under(entry->path, "devtmpfs", rel)) {
+            if (is_mounted_under(entry->path, "devtmpfs", rel)) {
                 if (strncmp(rel, "tty", 3) == 0) {
                      int idx = rel[3] - '0';
                      if (idx >= 0 && idx < NUM_TTYS) { read_vmm(current_task_ptr->ctx, &get_tty(idx)->termios, argp, sizeof(termios_t)); }
@@ -1108,7 +1122,7 @@ void sys_ioctl(syscall_frame_t *frame) {
     case TCFLSH:
         if (entry && entry->type == FD_DEV) {
             char rel[256];
-            if (is_mounted_under(entry->path, "devfs", rel) || is_mounted_under(entry->path, "devtmpfs", rel)) {
+            if (is_mounted_under(entry->path, "devtmpfs", rel)) {
                 if (strncmp(rel, "tty", 3) == 0) {
                      int idx = rel[3] - '0';
                      if (idx >= 0 && idx < NUM_TTYS) {
@@ -1952,13 +1966,13 @@ void sys_getdents(syscall_frame_t *frame) {
 
     uint64_t written = 0;
 
-    // Check if this directory is a devfs mount point
+    // Check if this directory is a devtmpfs mount point
     char rel[256];
-    if (is_mounted_under(entry->path, "devfs", rel) || is_mounted_under(entry->path, "devtmpfs", rel)) {
+    if (is_mounted_under(entry->path, "devtmpfs", rel)) {
         int index = (int)entry->offset;
-        // Enumerate devfs devices
+        // Enumerate devtmpfs devices
         while (written + sizeof(dirent_t) <= buflen) {
-            const char *devname = devfs_get_device_name(index);
+            const char *devname = devtmpfs_get_device_name(index);
             if (!devname) break;
 
             dirent_t d;
@@ -2479,8 +2493,14 @@ void sys_openat(syscall_frame_t *frame) {
     if (res < 0) { frame->rax = (uint64_t)res; return; }
 
     char rel_path[256];
-    if (is_mounted_under(abs_path, "devfs", rel_path) || is_mounted_under(abs_path, "devtmpfs", rel_path)) {
-        if (!devfs_device_exists(rel_path)) { frame->rax = (uint64_t)-ENOENT; return; }
+    if (is_mounted_under(abs_path, "devtmpfs", rel_path)) {
+        if (rel_path[0] != '\0' && !devtmpfs_device_exists(rel_path)) {
+            rootfs_file_t file = read_rootfs(abs_path);
+            if (!(file.mode & 0040000)) {
+                frame->rax = (uint64_t)-ENOENT;
+                return;
+            }
+        }
         if (strcmp(rel_path, "ptmx") == 0 || strcmp(rel_path, "pts/ptmx") == 0) {
             int idx = alloc_pty();
             if (idx < 0) { frame->rax = (uint64_t)-ENOSPC; return; }
@@ -2513,7 +2533,13 @@ void sys_openat(syscall_frame_t *frame) {
             frame->rax = (uint64_t)fd;
             return;
         }
-        if (!devpts_device_exists(rel_path)) { frame->rax = (uint64_t)-ENOENT; return; }
+        if (rel_path[0] != '\0' && !devpts_device_exists(rel_path)) {
+            rootfs_file_t file = read_rootfs(abs_path);
+            if (!(file.mode & 0040000)) {
+                frame->rax = (uint64_t)-ENOENT;
+                return;
+            }
+        }
         int pty_idx = 0;
         const char *p = rel_path;
         while (*p >= '0' && *p <= '9') { pty_idx = pty_idx * 10 + (*p - '0'); p++; }

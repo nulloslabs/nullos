@@ -1,11 +1,11 @@
-#include <main/devpts.h>
+#include <io/devpts.h>
 #include <main/string.h>
 #include <io/pty.h>
 #include <freestanding/errno.h>
 
-static int get_pts_idx(const char *name) {
+int get_pts_idx(const char *name) {
     if (!name || *name == '\0') return -1;
-    if (strcmp(name, "ptmx") == 0) return -1; // handled specially or in devfs
+    if (strcmp(name, "ptmx") == 0) return -1;
 
     int idx = 0;
     const char *p = name;
@@ -16,18 +16,6 @@ static int get_pts_idx(const char *name) {
     if (*p != '\0') return -1;
     if (idx < 0 || idx >= NUM_PTYS) return -1;
     return idx;
-}
-
-uint64_t read_devpts(const char* name, void* buf, uint64_t count, uint64_t offset) {
-    int idx = get_pts_idx(name);
-    if (idx < 0) return (uint64_t)-ENOENT;
-    return read_pts(idx, buf, count, offset);
-}
-
-uint64_t write_devpts(const char* name, const void* buf, uint64_t count, uint64_t offset) {
-    int idx = get_pts_idx(name);
-    if (idx < 0) return (uint64_t)-ENOENT;
-    return write_pts(idx, buf, count, offset);
 }
 
 bool devpts_device_exists(const char* name) {

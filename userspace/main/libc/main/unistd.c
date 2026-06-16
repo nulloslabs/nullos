@@ -31,41 +31,31 @@ static int has_slash(const char *s) {
     return strchr(s, '/') != NULL;
 }
 
-int64_t syscall(int64_t num, ...) {
-    va_list args;
-    va_start(args, num);
-
-    int64_t a1 = va_arg(args, int64_t);
-    int64_t a2 = va_arg(args, int64_t);
-    int64_t a3 = va_arg(args, int64_t);
-    int64_t a4 = va_arg(args, int64_t);
-    int64_t a5 = va_arg(args, int64_t);
-    int64_t a6 = va_arg(args, int64_t);
-    va_end(args);
-    int64_t ret;
-
-    register int64_t r10 __asm__ ("r10") = a4;
-    register int64_t r8 __asm__ ("r8") = a5;
-    register int64_t r9 __asm__ ("r9") = a6;
+__attribute__((naked)) int64_t syscall(int64_t num, ...) {
     __asm__ volatile (
-        "syscall"
-        : "=a"(ret)
-        : "a"(num),
-          "D"(a1),
-          "S"(a2),
-          "d"(a3),
-          "r"(r10),
-          "r"(r8),
-          "r"(r9)
-        : "rcx", "r11", "memory"
+        "movq %rdi, %rax\n"
+        "movq %rsi, %rdi\n"
+        "movq %rdx, %rsi\n"
+        "movq %rcx, %rdx\n"
+        "movq %r8,  %r10\n"
+        "movq %r9,  %r8\n"
+        "movq 8(%rsp), %r9\n"
+        "syscall\n"
+        "cmpq $-4095, %rax\n"
+        "jae .Lerror\n"
+        "ret\n"
+        ".Lerror:\n"
+        "negq %rax\n"
+        "movq %rax, %rcx\n"
+#ifdef __PIC__
+        "movq errno@GOTPCREL(%rip), %rdx\n"
+        "movl %ecx, (%rdx)\n"
+#else
+        "movl %ecx, errno(%rip)\n"
+#endif
+        "movq $-1, %rax\n"
+        "ret\n"
     );
-    if (ret < 0) { 
-        // Uh oh! We hit an error, save our error code inside errno and return -1
-        errno = (int)-ret;
-        return -1;
-    }
-    // Great! We didn't hit an error, just return our return value given by the syscall
-    return ret;
 }
 
 __attribute__((noreturn)) void _exit(int status) {

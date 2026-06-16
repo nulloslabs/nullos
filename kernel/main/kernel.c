@@ -4,7 +4,7 @@
 #include <io/framebuffer.h>
 #include <main/panic.h>
 #include <main/rootfs.h>
-#include <main/devfs.h>
+#include <io/devices.h>
 #include <mm/mm.h>
 // Are we there yet?
 #include <main/gdt.h>
@@ -51,7 +51,7 @@ void kmain(uint64_t load_offset) {
     init_pmm();
     init_vmm();
     init_rootfs();
-    init_devfs();
+    init_devices();
     init_ttys();
     init_ptys();
     show_cursor(true);
