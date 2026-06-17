@@ -25,7 +25,7 @@ __attribute__((noreturn)) void exception_panic(uint64_t vector, uint64_t rip, ui
     const char *reason = "";
 
     switch (vector) {
-        case 0: reason = "a division by 0 instruction occurred"; break;
+        case 0: reason = "a division error occurred"; break;
         case 4: reason = "a signed arithmetic overflow occurred"; break;
         case 5: reason = "an instruction that exceeded the bound range occurred"; break;
         case 6: reason = "a invalid opcode instruction occurred"; break;

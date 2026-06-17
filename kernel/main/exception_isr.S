@@ -9,7 +9,7 @@
 
 /*
 Table of all CPU faults:
-  0: Divide error | Does not push an error code
+  0: Division Error | Does not push an error code
   1: Debug | Does not push an error code
   2: Non-Maskable Interrupt | Does not push an error code
   3: Breakpoint | Does not push an error code
