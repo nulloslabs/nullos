@@ -3,7 +3,7 @@
 #include <main/string.h>
 #include <freestanding/errno.h>
 #include <main/scheduler.h>
-#include <io/pty.h>
+#include <io/ptys.h>
 #include <io/sockets.h>
 
 flock_obj_t global_flocks[128];

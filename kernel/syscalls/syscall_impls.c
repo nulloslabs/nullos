@@ -39,8 +39,8 @@
 #include <main/string.h>
 #include <io/terminal.h>
 #include <io/keyboard.h>
-#include <io/tty.h>
-#include <io/pty.h>
+#include <io/ttys.h>
+#include <io/ptys.h>
 #include <io/hpet.h>
 #include <io/sockets.h>
 #include <mm/mm.h>

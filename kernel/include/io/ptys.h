@@ -2,7 +2,7 @@
 
 #include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
-#include <io/tty.h>
+#include <io/ttys.h>
 
 #define NUM_PTYS 16
 

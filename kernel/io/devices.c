@@ -1,7 +1,7 @@
 #include <io/devices.h>
 #include <io/devtmpfs.h>
-#include <io/tty.h>
-#include <io/pty.h>
+#include <io/ttys.h>
+#include <io/ptys.h>
 #include <io/terminal.h>
 #include <io/keyboard.h>
 #include <main/string.h>

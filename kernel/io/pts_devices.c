@@ -1,5 +1,5 @@
 #include <io/pts_devices.h>
-#include <io/pty.h>
+#include <io/ptys.h>
 #include <freestanding/errno.h>
 
 extern int get_pts_idx(const char *name);

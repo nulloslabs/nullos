@@ -1,6 +1,6 @@
 #include <io/devpts.h>
 #include <main/string.h>
-#include <io/pty.h>
+#include <io/ptys.h>
 #include <freestanding/errno.h>
 
 int get_pts_idx(const char *name) {

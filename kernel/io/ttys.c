@@ -1,6 +1,6 @@
 #include <freestanding/stddef.h>
 #include <main/spinlock.h>
-#include <io/tty.h>
+#include <io/ttys.h>
 
 static tty_t ttys[NUM_TTYS];
 static spinlock_t tty_lock = SPINLOCK_INIT;

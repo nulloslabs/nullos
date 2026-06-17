@@ -34,8 +34,8 @@
 #include <syscalls/syscalls.h>
 #include <main/madt.h>
 #include <main/uname.h>
-#include <io/tty.h>
-#include <io/pty.h>
+#include <io/ttys.h>
+#include <io/ptys.h>
 // Lets never do that again.
 
 void kmain(uint64_t load_offset) {

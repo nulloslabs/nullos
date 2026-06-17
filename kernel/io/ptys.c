@@ -3,8 +3,8 @@
 #include <main/spinlock.h>
 #include <freestanding/errno.h>
 #include <io/terminal.h>
-#include <io/pty.h>
-#include <io/tty.h>
+#include <io/ptys.h>
+#include <io/ttys.h>
 
 pty_t ptys[NUM_PTYS];
 spinlock_t pty_lock = SPINLOCK_INIT;

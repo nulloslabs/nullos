@@ -41,6 +41,86 @@ static void int_to_str(unsigned long long value, char *buf, int base, bool upper
     buf[j] = '\0';
 }
 
+static void double_to_str(double val, int precision, char *out, size_t out_size) {
+    if (out_size < 2) return;
+
+    uint64_t bits;
+    __builtin_memcpy(&bits, &val, 8);
+
+    int sign = (bits >> 63) & 1;
+    int exp  = (int)((bits >> 52) & 0x7FF);
+    uint64_t mant = bits & 0x000FFFFFFFFFFFFFULL;
+
+    // special cases
+    if (exp == 0x7FF) {
+        if (mant == 0) {
+            size_t i = 0;
+            if (sign && i < out_size - 1) out[i++] = '-';
+            const char *inf = "inf";
+            while (*inf && i < out_size - 1) out[i++] = *inf++;
+            out[i] = '\0';
+        } else {
+            size_t i = 0;
+            const char *nan = "nan";
+            while (*nan && i < out_size - 1) out[i++] = *nan++;
+            out[i] = '\0';
+        }
+        return;
+    }
+
+    size_t pos = 0;
+    if (sign && pos < out_size - 1) out[pos++] = '-';
+
+    // reconstruct integer and fractional parts using integer arithmetic.
+    // we work with the value as: significand * 2^(exp-1023-52)
+    int e = exp - 1023 - 52;
+    uint64_t sig = (exp == 0) ? mant : (mant | (1ULL << 52));
+
+    uint64_t int_part;
+    uint64_t frac_num, frac_den;
+
+    if (e >= 0) {
+        // value is an integer (or too large for frac precision)
+        if (e < 63) int_part = sig << e; else int_part = 0xFFFFFFFFFFFFFFFFULL;
+        frac_num = 0; frac_den = 1;
+    } else if (e > -53) {
+        int shift = -e;
+        int_part  = sig >> shift;
+        frac_num  = sig & ((1ULL << shift) - 1);
+        frac_den  = 1ULL << shift;
+    } else {
+        int_part = 0;
+        // value < 1; represent as frac_num/frac_den with capped shift
+        int shift = (e < -62) ? 62 : -e;
+        frac_num = sig >> (-e - shift);
+        frac_den = 1ULL << shift;
+    }
+
+    // write integer part
+    char ibuf[24]; int ilen = 0;
+    if (int_part == 0) {
+        ibuf[ilen++] = '0';
+    } else {
+        uint64_t tmp = int_part;
+        while (tmp > 0 && ilen < 23) { ibuf[ilen++] = '0' + (int)(tmp % 10); tmp /= 10; }
+        // reverse
+        for (int a = 0, b = ilen - 1; a < b; a++, b--) { char t = ibuf[a]; ibuf[a] = ibuf[b]; ibuf[b] = t; }
+    }
+    for (int i = 0; i < ilen && pos < out_size - 1; i++) out[pos++] = ibuf[i];
+
+    if (precision <= 0) { out[pos] = '\0'; return; }
+    if (pos < out_size - 1) out[pos++] = '.';
+
+    // write fractional digits
+    for (int d = 0; d < precision && pos < out_size - 1; d++) {
+        frac_num *= 10;
+        uint64_t digit = frac_num / frac_den;
+        frac_num %= frac_den;
+        out[pos++] = '0' + (int)digit;
+    }
+    out[pos] = '\0';
+}
+
 int fflush(FILE *stream) {
     if (!stream) {
         int ret = 0;
@@ -286,6 +366,7 @@ int vfprintf(FILE *stream, const char *fmt, va_list args) {
             case 'i':
             case 'd':
             case 'u':
+            case 'b':
             case 'x': case 'X': {
                 uint64_t val;
                 if (is_long) {
@@ -296,7 +377,7 @@ int vfprintf(FILE *stream, const char *fmt, va_list args) {
                 }
                 bool is_neg = (*p == 'd' || *p == 'D' || *p == 'i') && (int64_t)val < 0;
                 if (is_neg) val = -(int64_t)val;
-                int base = (*p == 'x' || *p == 'X') ? 16 : (*p == 'o' || *p == 'O') ? 8 : 10;
+                int base = (*p == 'x' || *p == 'X') ? 16 : (*p == 'o' || *p == 'O') ? 8 : (*p == 'b') ? 2 : 10;
                 char buf[64];
                 int_to_str(val, buf, base, (*p == 'X'));
                 int len = 0;
@@ -328,34 +409,12 @@ int vfprintf(FILE *stream, const char *fmt, va_list args) {
                 }
                 break;
             }
-            case 'f': {
+            case 'f': case 'F': {
                 double fval = va_arg(args, double);
-                bool is_neg = false;
-                if (fval < 0) {
-                    is_neg = true;
-                    fval = -fval;
-                }
-                uint64_t int_part = (uint64_t)fval;
-                double frac_part = fval - (double)int_part;
-                
-                char int_buf[64];
-                int_to_str(int_part, int_buf, 10, false);
-                
-                char frac_buf[16];
-                frac_buf[0] = '.';
-                for (int i = 1; i <= 6; i++) {
-                    frac_part *= 10.0;
-                    int digit = (int)frac_part;
-                    frac_buf[i] = '0' + digit;
-                    frac_part -= digit;
-                }
-                frac_buf[7] = '\0';
-                
-                int len = 0;
-                while (int_buf[len]) len++;
-                len += 7; // .xxxxxx
-                if (is_neg) len++;
-
+                int prec = 6;
+                char fbuf[64];
+                double_to_str(fval, prec, fbuf, sizeof(fbuf));
+                int len = 0; while (fbuf[len]) len++;
                 if (!left_align) {
                     while (width > len) { 
                         if (fputc(pad_char, stream) == EOF) return total_written;
@@ -363,16 +422,7 @@ int vfprintf(FILE *stream, const char *fmt, va_list args) {
                         total_written++; 
                     }
                 }
-                if (is_neg) { 
-                    if (fputc('-', stream) == EOF) return total_written;
-                    total_written++; 
-                }
-                char *ptr = int_buf;
-                while (*ptr) { 
-                    if (fputc(*ptr++, stream) == EOF) return total_written;
-                    total_written++; 
-                }
-                ptr = frac_buf;
+                char *ptr = fbuf;
                 while (*ptr) { 
                     if (fputc(*ptr++, stream) == EOF) return total_written;
                     total_written++; 
@@ -515,6 +565,7 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
             case 'i':
             case 'd':
             case 'u':
+            case 'b':
             case 'x': case 'X': {
                 uint64_t val;
                 if (is_long) {
@@ -525,7 +576,7 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
                 }
                 bool is_neg = (*p == 'd' || *p == 'D' || *p == 'i') && (int64_t)val < 0;
                 if (is_neg) val = -(int64_t)val;
-                int base = (*p == 'x' || *p == 'X') ? 16 : (*p == 'o' || *p == 'O') ? 8 : 10;
+                int base = (*p == 'x' || *p == 'X') ? 16 : (*p == 'o' || *p == 'O') ? 8 : (*p == 'b') ? 2 : 10;
                 char buf[64];
                 int_to_str(val, buf, base, (*p == 'X'));
                 int len = 0;
@@ -553,48 +604,19 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
                 }
                 break;
             }
-            case 'f': {
+            case 'f': case 'F': {
                 double fval = va_arg(args, double);
-                bool is_neg = false;
-                if (fval < 0) {
-                    is_neg = true;
-                    fval = -fval;
-                }
-                uint64_t int_part = (uint64_t)fval;
-                double frac_part = fval - (double)int_part;
-                
-                char int_buf[64];
-                int_to_str(int_part, int_buf, 10, false);
-                
-                char frac_buf[16];
-                frac_buf[0] = '.';
-                for (int i = 1; i <= 6; i++) {
-                    frac_part *= 10.0;
-                    int digit = (int)frac_part;
-                    frac_buf[i] = '0' + digit;
-                    frac_part -= digit;
-                }
-                frac_buf[7] = '\0';
-                
-                int len = 0;
-                while (int_buf[len]) len++;
-                len += 7; // .xxxxxx
-                if (is_neg) len++;
-
+                int prec = 6;
+                char fbuf[64];
+                double_to_str(fval, prec, fbuf, sizeof(fbuf));
+                int len = 0; while (fbuf[len]) len++;
                 if (!left_align) {
                     while (width > len) { 
                         PUTVSNC(pad_char);
                         width--; 
                     }
                 }
-                if (is_neg) { 
-                    PUTVSNC('-');
-                }
-                char *ptr = int_buf;
-                while (*ptr) { 
-                    PUTVSNC(*ptr++);
-                }
-                ptr = frac_buf;
+                char *ptr = fbuf;
                 while (*ptr) { 
                     PUTVSNC(*ptr++);
                 }
