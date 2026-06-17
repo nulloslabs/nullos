@@ -735,7 +735,7 @@ void vprintf(const char *fmt, va_list args) {
                 if (!left_align)
                     while (width > len) { putc_unlocked(pad_char); width--; }
     
-                while (*s) putc_unlocked(*s++);
+                while (*s) { putc_unlocked(*s); s++; }
     
                 if (left_align)
                     while (width > len) { putc_unlocked(' '); width--; }

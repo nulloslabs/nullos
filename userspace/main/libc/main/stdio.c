@@ -350,7 +350,8 @@ int vfprintf(FILE *stream, const char *fmt, va_list args) {
                     }
                 }
                 while (*s) { 
-                    if (fputc(*s++, stream) == EOF) return total_written;
+                    if (fputc(*s, stream) == EOF) return total_written;
+                    s++;
                     total_written++; 
                 }
                 if (left_align) {
@@ -550,9 +551,7 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
                         width--; 
                     }
                 }
-                while (*s) { 
-                    PUTVSNC(*s++);
-                }
+                while (*s) { PUTVSNC(*s); s++; }
                 if (left_align) {
                     while (width > len) { 
                         PUTVSNC(' ');
