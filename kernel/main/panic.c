@@ -49,7 +49,7 @@ __attribute__((noreturn)) void exception_panic(uint64_t vector, uint64_t rip, ui
         __builtin_unreachable();
     }
 
-    // Kernel fault — panic as before
+    // Kernel fault, panic as before
     cli();
     printf("kernel panic: %s\n", reason);
     printf("\nregisters:\n");
