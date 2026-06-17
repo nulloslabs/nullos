@@ -4,7 +4,7 @@
 #include <main/halt.h>
 #include <main/panic.h>
 #include <main/gdt.h>
-#include <main/spinlock.h>
+#include <main/spinlocks.h>
 #include <main/scheduler.h>
 #include <main/fd.h>
 #include <main/msr.h>

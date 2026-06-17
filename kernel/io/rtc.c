@@ -27,21 +27,21 @@ typedef struct {
     uint8_t year;
 } rtc_time_t;
 
-static uint8_t rtc_read_register(uint8_t reg) {
+static uint8_t read_rtc_register(uint8_t reg) {
     outb(CMOS_ADDR, reg | 0x80);
     io_wait();
     return inb(CMOS_DATA);
 }
 
 static bool rtc_update_in_progress(void) {
-    return (rtc_read_register(RTC_REG_STATUS_A) & 0x80) != 0;
+    return (read_rtc_register(RTC_REG_STATUS_A) & 0x80) != 0;
 }
 
 static uint8_t bcd_to_binary(uint8_t value) {
     return (uint8_t)((value & 0x0F) + ((value / 16) * 10));
 }
 
-static bool rtc_read_stable_time(rtc_time_t *time, uint8_t *status_b) {
+static bool read_rtc_stable_time(rtc_time_t *time, uint8_t *status_b) {
     rtc_time_t prev;
     rtc_time_t cur;
 
@@ -49,12 +49,12 @@ static bool rtc_read_stable_time(rtc_time_t *time, uint8_t *status_b) {
         __asm__ volatile("pause");
     }
 
-    prev.second = rtc_read_register(RTC_REG_SECONDS);
-    prev.minute = rtc_read_register(RTC_REG_MINUTES);
-    prev.hour = rtc_read_register(RTC_REG_HOURS);
-    prev.day = rtc_read_register(RTC_REG_DAY);
-    prev.month = rtc_read_register(RTC_REG_MONTH);
-    prev.year = rtc_read_register(RTC_REG_YEAR);
+    prev.second = read_rtc_register(RTC_REG_SECONDS);
+    prev.minute = read_rtc_register(RTC_REG_MINUTES);
+    prev.hour = read_rtc_register(RTC_REG_HOURS);
+    prev.day = read_rtc_register(RTC_REG_DAY);
+    prev.month = read_rtc_register(RTC_REG_MONTH);
+    prev.year = read_rtc_register(RTC_REG_YEAR);
 
     do {
         cur = prev;
@@ -63,17 +63,17 @@ static bool rtc_read_stable_time(rtc_time_t *time, uint8_t *status_b) {
             __asm__ volatile("pause");
         }
 
-        prev.second = rtc_read_register(RTC_REG_SECONDS);
-        prev.minute = rtc_read_register(RTC_REG_MINUTES);
-        prev.hour = rtc_read_register(RTC_REG_HOURS);
-        prev.day = rtc_read_register(RTC_REG_DAY);
-        prev.month = rtc_read_register(RTC_REG_MONTH);
-        prev.year = rtc_read_register(RTC_REG_YEAR);
+        prev.second = read_rtc_register(RTC_REG_SECONDS);
+        prev.minute = read_rtc_register(RTC_REG_MINUTES);
+        prev.hour = read_rtc_register(RTC_REG_HOURS);
+        prev.day = read_rtc_register(RTC_REG_DAY);
+        prev.month = read_rtc_register(RTC_REG_MONTH);
+        prev.year = read_rtc_register(RTC_REG_YEAR);
     } while (cur.second != prev.second || cur.minute != prev.minute ||
              cur.hour != prev.hour || cur.day != prev.day ||
              cur.month != prev.month || cur.year != prev.year);
 
-    *status_b = rtc_read_register(RTC_REG_STATUS_B);
+    *status_b = read_rtc_register(RTC_REG_STATUS_B);
     *time = cur;
     return true;
 }
@@ -114,11 +114,11 @@ static uint64_t rtc_to_unix_seconds(const rtc_time_t *time) {
            time->second;
 }
 
-uint64_t rtc_read_unix_time(void) {
+uint64_t read_rtc_unix_time(void) {
     rtc_time_t time;
     uint8_t status_b;
 
-    if (!rtc_read_stable_time(&time, &status_b)) {
+    if (!read_rtc_stable_time(&time, &status_b)) {
         return 0;
     }
 
@@ -144,7 +144,7 @@ uint64_t rtc_read_unix_time(void) {
 }
 
 void init_rtc(void) {
-    uint64_t unix_seconds = rtc_read_unix_time();
+    uint64_t unix_seconds = read_rtc_unix_time();
     if (!unix_seconds) {
         printf("rtc: failed to read rtc\n");
         return;
@@ -153,4 +153,3 @@ void init_rtc(void) {
     time_seed_realtime_us(unix_seconds * 1000000ULL);
     printf("rtc: seeded realtime clock\n");
 }
-

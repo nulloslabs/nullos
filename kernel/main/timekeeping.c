@@ -1,6 +1,6 @@
 #include <freestanding/stdint.h>
 #include <io/hpet.h>
-#include <main/spinlock.h>
+#include <main/spinlocks.h>
 #include <main/timekeeping.h>
 
 static spinlock_t time_lock = SPINLOCK_INIT;

@@ -1,6 +1,6 @@
 #include <io/sockets.h>
 #include <freestanding/errno.h>
-#include <main/spinlock.h>
+#include <main/spinlocks.h>
 #include <main/string.h>
 #include <main/scheduler.h>
 #include <mm/mm.h>

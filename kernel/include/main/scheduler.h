@@ -3,7 +3,7 @@
 #include <freestanding/stdint.h>
 #include <freestanding/sys/types.h>
 #include <main/fd.h>
-#include <main/spinlock.h>
+#include <main/spinlocks.h>
 #include <mm/vmm.h>
 #include <syscalls/syscalls.h>
 

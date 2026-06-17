@@ -2,7 +2,7 @@
 #include <main/string.h>
 #include <main/limine_req.h>
 #include <io/terminal.h>
-#include <main/spinlock.h>
+#include <main/spinlocks.h>
 
 static uint8_t* bitmap = NULL;
 static uint8_t* ref_counts = NULL;

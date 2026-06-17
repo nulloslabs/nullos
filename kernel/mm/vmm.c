@@ -3,7 +3,7 @@
 #include <mm/mm.h>
 #include <main/string.h>
 #include <main/limine_req.h>
-#include <main/spinlock.h>
+#include <main/spinlocks.h>
 #include <main/machine_info.h>
 #include <main/msr.h>
 #include <main/panic.h>

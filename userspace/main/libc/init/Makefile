@@ -19,15 +19,15 @@ DEP = $(OBJ:.o=.d)
 all: $(OBJ)
 
 %.o: %.c ../../../config.mk
-	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/main/libc/__ssp/$@"
+	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/main/libc/init/$@"
 	@$(CC) $(CFLAGS) -fno-stack-protector -c $< -o $@
 
 %.o: %.S ../../../config.mk
-	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/main/libc/__ssp/$@"
+	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/main/libc/init/$@"
 	@$(AS) $(AFLAGS) -fno-stack-protector -c $< -o $@
 
 clean:
-	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/libc/__ssp/*.o $(SUBDIR)/main/libc/__ssp/*.d"
+	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/libc/init/*.o $(SUBDIR)/main/libc/init/*.d"
 	@rm -f *.o *.d
 
 mrproper: clean

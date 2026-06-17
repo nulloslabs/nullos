@@ -8,44 +8,14 @@
 #include <mm/pmm.h>
 #include <mm/vmm.h>
 #include <freestanding/sys/types.h>
-#include <main/spinlock.h>
+#include <main/spinlocks.h>
 #include <syscalls/syscalls.h>
-#include <io/hpet.h>
-
-static uint64_t s[4];
-
-static uint64_t rotl(const uint64_t x, int k) {
-    return (x << k) | (x >> (64 - k));
-}
-
-static uint64_t next(void) {
-    const uint64_t result = rotl(s[1] * 5, 7) * 9;
-    const uint64_t t = s[1] << 17;
-
-    s[2] ^= s[0];
-    s[3] ^= s[1];
-    s[1] ^= s[2];
-    s[0] ^= s[3];
-
-    s[2] ^= t;
-    s[3] = rotl(s[3], 45);
-
-    return result;
-}
-
-static void seed_prng(void) {
-    // Seed with HPET and some constant mixing
-    uint64_t hpet = read_hpet_counter();
-    for (int i = 0; i < 4; i++) {
-        s[i] = hpet ^ (0x9E3779B97F4A7C15ULL * (i + 1));
-    }
-}
+#include <main/rng.h>
 
 static uint64_t aslr_random_offset(uint64_t max_pages) {
-    if (s[0] == 0 && s[1] == 0 && s[2] == 0 && s[3] == 0) {
-        seed_prng();
-    }
-    return (next() % max_pages) * PAGE_SIZE;
+    uint64_t val;
+    get_random_bytes(&val, sizeof(val));
+    return (val % max_pages) * PAGE_SIZE;
 }
 
 static uint64_t setup_stack(vmm_context_t *ctx, uint64_t v_rsp,

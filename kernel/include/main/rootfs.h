@@ -5,6 +5,13 @@
 #include <freestanding/stddef.h>
 #include <freestanding/sys/types.h>
 
+#define MAX_MODIFIED_FILES 128
+
+#define FT_FILE 1
+#define FT_DIRECTORY 2
+#define FT_EXECUTABLE 3
+#define FT_SYMLINK 4
+
 struct tar_header {
     char name[100];
     char mode[8];
@@ -41,11 +48,6 @@ typedef struct {
     char name[128];
     int type;
 } directory_entry_t;
-
-#define FT_FILE 1
-#define FT_DIRECTORY 2
-#define FT_EXECUTABLE 3
-#define FT_SYMLINK 4
 
 // Some public helpers
 void get_absolute_path(const char *in, char *out_abs, size_t out_size);

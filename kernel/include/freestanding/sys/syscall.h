@@ -83,6 +83,7 @@
 #define SYS_symlinkat 266
 #define SYS_fchmodat 268
 #define SYS_utimensat 280
-#define SYS_futex      202
+#define SYS_futex 202
 #define SYS_getsockopt 300
 #define SYS_setsockopt 301
+#define SYS_getrandom 318

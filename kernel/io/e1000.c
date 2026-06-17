@@ -6,7 +6,7 @@
 #include <main/string.h>
 #include <io/net.h>
 #include <io/terminal.h>
-#include <main/spinlock.h>
+#include <main/spinlocks.h>
 
 static uint8_t mac_addr[6];
 static volatile uint8_t *e1000_mmio;

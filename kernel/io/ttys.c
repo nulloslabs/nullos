@@ -1,5 +1,5 @@
 #include <freestanding/stddef.h>
-#include <main/spinlock.h>
+#include <main/spinlocks.h>
 #include <io/ttys.h>
 
 static tty_t ttys[NUM_TTYS];

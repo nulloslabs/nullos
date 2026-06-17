@@ -6,7 +6,7 @@
 #include <main/panic.h>
 #include <main/limine_req.h>
 #include <io/terminal.h>
-#include <main/spinlock.h>
+#include <main/spinlocks.h>
 
 struct memory_header *free_list_start = NULL;
 uint64_t hhdm_offset = 0;

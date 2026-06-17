@@ -1,3 +1,4 @@
+#include <freestanding/errno.h>
 #include <io/devices.h>
 #include <io/devtmpfs.h>
 #include <io/ttys.h>
@@ -5,10 +6,11 @@
 #include <io/terminal.h>
 #include <io/keyboard.h>
 #include <main/string.h>
-#include <freestanding/errno.h>
 #include <main/limine_req.h>
 #include <main/panic.h>
 #include <main/strings.h>
+#include <main/rng.h>
+#include <syscalls/syscall_impls.h>
 
 devtmpfs_device_t devtmpfs_devices[MAX_DEVTMPFS_DEVICES];
 spinlock_t devtmpfs_lock = SPINLOCK_INIT;
@@ -126,15 +128,42 @@ static uint64_t write_ptmx(const void *buf, uint64_t count, uint64_t offset) {
     return (uint64_t)-EIO;
 }
 
-static uint64_t tty_read(void* buf, uint64_t count, uint64_t offset) {
+static uint64_t read_tty(void* buf, uint64_t count, uint64_t offset) {
     (void)buf; (void)count; (void)offset;
     return 0;
 }
 
-static uint64_t tty_write(const void* buf, uint64_t count, uint64_t offset) {
+static uint64_t write_tty(const void* buf, uint64_t count, uint64_t offset) {
     for (uint64_t i = 0; i < count; i++) {
         putc(((const char*)buf)[i]);
     }
+    return count;
+}
+
+static uint64_t read_urandom(void* buf, uint64_t count, uint64_t offset) {
+    (void)offset; 
+
+    if (count == 0 || buf == NULL) return 0;
+
+    uint8_t kernel_buffer[256];
+    uint64_t bytes_read = 0;
+
+    while (bytes_read < count) {
+        uint64_t remaining = count - bytes_read;
+        uint64_t chunk_size = (remaining < sizeof(kernel_buffer)) ? remaining : sizeof(kernel_buffer);
+
+        get_random_bytes(kernel_buffer, chunk_size);
+        memcpy((uint8_t*)buf + bytes_read, kernel_buffer, chunk_size);
+
+        bytes_read += chunk_size;
+    }
+
+    return bytes_read;
+}
+static uint64_t write_urandom(const void* buf, uint64_t count, uint64_t offset) {
+    (void)offset;
+    if (count == 0 || buf == NULL) return 0;
+    add_entropy_bytes(buf, count);
     return count;
 }
 
@@ -211,18 +240,19 @@ void init_devices(void) {
         }
     }
 
-    register_device("tty",  tty_read, tty_write);
-    register_device("tty0", tty_read, tty_write);
-    register_device("tty1", tty_read, tty_write);
-    register_device("tty2", tty_read, tty_write);
-    register_device("tty3", tty_read, tty_write);
-    register_device("tty4", tty_read, tty_write);
-    register_device("tty5", tty_read, tty_write);
-    register_device("tty6", tty_read, tty_write);
-    register_device("tty7", tty_read, tty_write);
+    register_device("tty",  read_tty, write_tty);
+    register_device("tty0", read_tty, write_tty);
+    register_device("tty1", read_tty, write_tty);
+    register_device("tty2", read_tty, write_tty);
+    register_device("tty3", read_tty, write_tty);
+    register_device("tty4", read_tty, write_tty);
+    register_device("tty5", read_tty, write_tty);
+    register_device("tty6", read_tty, write_tty);
+    register_device("tty7", read_tty, write_tty);
 
-    register_device("ptmx",     read_ptmx, write_ptmx);
-    register_device("pts/ptmx", read_ptmx, write_ptmx);
+    register_device("ptmx", read_ptmx, write_ptmx);
+
+    register_device("urandom", read_urandom, write_urandom);
 
     printf("devices: initialized devices\n");
 }

@@ -2,4 +2,5 @@
 
 #include <freestanding/stdint.h>
 
-void init_pit(uint32_t frequency);
+uint16_t read_pit_counter(void);
+void init_pit(uint32_t freq);

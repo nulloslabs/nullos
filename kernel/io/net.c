@@ -4,7 +4,7 @@
 #include <io/hpet.h>
 #include <io/io.h>
 #include <mm/mm.h>
-#include <main/spinlock.h>
+#include <main/spinlocks.h>
 
 static inline uint16_t htons(uint16_t x) { return (uint16_t)((x >> 8) | (x << 8)); }
 static inline uint16_t ntohs(uint16_t x) { return htons(x); }

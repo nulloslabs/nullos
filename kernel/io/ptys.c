@@ -1,6 +1,6 @@
 #include <io/devtmpfs.h>
 #include <main/string.h>
-#include <main/spinlock.h>
+#include <main/spinlocks.h>
 #include <freestanding/errno.h>
 #include <io/terminal.h>
 #include <io/ptys.h>

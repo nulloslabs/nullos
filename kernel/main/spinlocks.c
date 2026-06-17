@@ -1,4 +1,4 @@
-#include <main/spinlock.h>
+#include <main/spinlocks.h>
 
 void spin_lock(spinlock_t *lock) {
     while (__sync_lock_test_and_set(lock, 1)) {

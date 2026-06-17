@@ -9,7 +9,7 @@ endif
 
 include ../../config.mk
 
-SUBDIRS = asm main sys __ssp __start
+SUBDIRS = asm init main sys
 OBJ = $(wildcard */*.o)
 
 all: $(SUBDIRS) libc

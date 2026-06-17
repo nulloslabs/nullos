@@ -6,7 +6,7 @@
 #include <io/hpet.h>
 #include <mm/vmm.h>
 #include <main/string.h>
-#include <main/spinlock.h>
+#include <main/spinlocks.h>
 
 uint16_t nam_base = 0;
 uint16_t nabm_base = 0;

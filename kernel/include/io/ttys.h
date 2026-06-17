@@ -2,7 +2,7 @@
 
 #include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
-#include <main/spinlock.h>
+#include <main/spinlocks.h>
 #include <freestanding/termios.h>
 
 #define NUM_TTYS     8

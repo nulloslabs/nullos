@@ -36,6 +36,7 @@
 #include <main/uname.h>
 #include <io/ttys.h>
 #include <io/ptys.h>
+#include <main/rng.h>
 // Lets never do that again.
 
 void kmain(uint64_t load_offset) {
@@ -63,6 +64,7 @@ void kmain(uint64_t load_offset) {
     init_timekeeping();
     init_rtc();
     init_pit(250);
+    init_rng();
     init_scheduler();
     init_pci();
     cache_machine_info();

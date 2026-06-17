@@ -3,7 +3,7 @@
 #include <freestanding/stdint.h>
 #include <freestanding/stddef.h>
 
-#include <main/spinlock.h>
+#include <main/spinlocks.h>
 
 #define UNIX_AF_UNIX 1
 #define UNIX_AF_LOCAL UNIX_AF_UNIX

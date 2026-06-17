@@ -1,7 +1,7 @@
 #include <freestanding/stddef.h>
 #include <freestanding/errno.h>
 #include <main/hostname.h>
-#include <main/spinlock.h>
+#include <main/spinlocks.h>
 
 static char current_hostname[HOSTNAME_MAX_LEN] = DEFAULT_HOSTNAME;
 static spinlock_t hostname_lock = SPINLOCK_INIT;

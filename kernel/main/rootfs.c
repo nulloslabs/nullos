@@ -12,8 +12,6 @@
 #include <main/limine_req.h>
 #include <limine/limine.h>
 
-#define MAX_MODIFIED_FILES 128
-
 static uint8_t *tar_archive_start = NULL;
 static uint8_t *tar_decompressed = NULL;
 static modified_file_t modified_files[MAX_MODIFIED_FILES];

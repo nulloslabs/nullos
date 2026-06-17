@@ -7,8 +7,7 @@ cpu_gdt_t cpu_gdts[MAX_CPUS];
 extern void gdt_flush(uint64_t gdtr_ptr);
 extern void tss_flush(void);
 
-static void set_gdt_entry(uint64_t *gdt, int num, uint32_t base, uint32_t limit,
-                           uint8_t access, uint8_t gran) {
+static void set_gdt_entry(uint64_t *gdt, int num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran) {
     gdt[num] = (limit & 0xFFFF)
              | ((base  & 0xFFFFULL)   << 16)
              | ((base >> 16 & 0xFFULL) << 32)
@@ -41,7 +40,7 @@ void init_gdt_for_cpu(int cpu_index) {
     set_gdt_entry(g->entries, 2, 0, 0, 0x92, 0x00);   // 0x10: Kernel DS
     set_gdt_entry(g->entries, 3, 0, 0, 0xF2, 0x00);   // 0x18: User DS
     set_gdt_entry(g->entries, 4, 0, 0, 0xFA, 0x20);   // 0x20: User CS (64-bit)
-    write_tss(g);                                      // 0x28: TSS (slots 5+6)
+    write_tss(g);                                     // 0x28: TSS (slots 5+6)
 
     struct gdt_ptr ptr = {
         .limit = sizeof(g->entries) - 1,

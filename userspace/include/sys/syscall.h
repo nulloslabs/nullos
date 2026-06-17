@@ -86,3 +86,4 @@
 #define SYS_futex      202
 #define SYS_getsockopt 300
 #define SYS_setsockopt 301
+#define SYS_getrandom  318

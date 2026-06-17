@@ -27,34 +27,12 @@ typedef struct {
 static initial_tcb_t initial_tcb;
 uintptr_t __stack_chk_guard = SSP_FALLBACK_GUARD;
 
-static uint64_t s[4];
-
-static uint64_t rotl(const uint64_t x, int k) {
-    return (x << k) | (x >> (64 - k));
-}
-
-static uint64_t next(void) {
-    const uint64_t result = rotl(s[1] * 5, 7) * 9;
-    const uint64_t t = s[1] << 17;
-
-    s[2] ^= s[0];
-    s[3] ^= s[1];
-    s[1] ^= s[2];
-    s[0] ^= s[3];
-
-    s[2] ^= t;
-    s[3] = rotl(s[3], 45);
-
-    return result;
-}
-
 __attribute__((no_stack_protector)) void __libc_init_ssp(uintptr_t *stack) {
     uintptr_t guard = SSP_FALLBACK_GUARD ^ (uintptr_t)&guard ^ (uintptr_t)stack;
 
     if (stack) {
         uintptr_t argc = stack[0];
         uintptr_t *p = stack + 1 + argc + 1;
-        // Use a simple mixer for initial entropy collection
         uintptr_t mix = (uintptr_t)0x9E3779B97F4A7C15ULL;
         
         guard ^= (argc * mix);
@@ -78,14 +56,6 @@ __attribute__((no_stack_protector)) void __libc_init_ssp(uintptr_t *stack) {
         }
     }
 
-    // Seed the PRNG with accumulated entropy
-    for(int i = 0; i < 4; i++) {
-        s[i] = (uint64_t)guard ^ (0x9E3779B97F4A7C15ULL * (i + 1));
-    }
-
-    // Generate final guard using xoshiro256**
-    guard = (uintptr_t)next();
-
     guard &= ~(uintptr_t)0xff;
     if (!guard) guard = SSP_FALLBACK_GUARD;
 
@@ -93,8 +63,7 @@ __attribute__((no_stack_protector)) void __libc_init_ssp(uintptr_t *stack) {
     initial_tcb.dtv = 0;
     initial_tcb.self2 = &initial_tcb;
     initial_tcb.stack_guard = guard;
-    // Use PRNG for pointer guard as well
-    initial_tcb.pointer_guard = next() ^ (uintptr_t)&initial_tcb;
+    initial_tcb.pointer_guard = guard ^ (uintptr_t)&initial_tcb;
 
     __stack_chk_guard = guard;
     arch_prctl(ARCH_SET_FS, (uintptr_t)&initial_tcb);

@@ -7,13 +7,21 @@
 #include <io/hpet.h>
 #include <io/terminal.h>
 #include <main/halt.h>
-#include <main/spinlock.h>
+#include <main/spinlocks.h>
 #include <mm/mm.h>
 
 static struct fadt_descriptor* fadt = NULL;
 static uint16_t slp_typa = 0xFFFF;
 static uint16_t slp_typb = 0xFFFF;
 static struct acpi_header* acpi_root = NULL;
+
+static aml_obj_t ns[AML_NS_MAX];
+static int ns_n = 0;
+
+static acpi_device_registry_t acpi_devices = {0};
+static int acpi_dev_count = 0;
+
+static spinlock_t acpi_lock = SPINLOCK_INIT;
 
 static uint32_t read_acpi(struct acpi_gas *gas) {
     if (!gas || !gas->address) return 0;
@@ -42,20 +50,8 @@ static void write_acpi(struct acpi_gas *gas, uint32_t val) {
         else outl(gas->address, val);
     }
 }
-static aml_obj_t ns[AML_NS_MAX];
-static int ns_n = 0;
 
-// ACPI device registry
-static acpi_device_registry_t acpi_devices = {0};
-static int acpi_dev_count = 0;
-
-static spinlock_t acpi_lock = SPINLOCK_INIT;
-
-// ---- name/path helpers ----
-
-static void nameseg(uint8_t **p, char out[5]) {
-    memcpy(out, *p, 4); out[4] = 0; *p += 4;
-}
+static void nameseg(uint8_t **p, char out[5]) { memcpy(out, *p, 4); out[4] = 0; *p += 4; }
 
 // Parse an AML NameString into a relative path string (no allocation)
 static void parse_path(uint8_t **p, char *out) {

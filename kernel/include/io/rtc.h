@@ -2,6 +2,5 @@
 
 #include <freestanding/stdint.h>
 
+uint64_t read_rtc_unix_time(void);
 void init_rtc(void);
-uint64_t rtc_read_unix_time(void);
-

@@ -6,7 +6,7 @@
 #include <mm/vmm.h>
 #include <main/string.h>
 #include <io/net.h>
-#include <main/spinlock.h>
+#include <main/spinlocks.h>
 
 rtl8139_t rtl8139 = {0};
 

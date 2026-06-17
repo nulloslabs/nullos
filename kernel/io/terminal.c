@@ -3,7 +3,7 @@
 #include <freestanding/stdarg.h>
 #include <main/string.h>
 #include <main/limine_req.h>
-#include <main/spinlock.h>
+#include <main/spinlocks.h>
 #include <main/halt.h>
 #include <io/framebuffer.h>
 #include <io/fonts.h>
