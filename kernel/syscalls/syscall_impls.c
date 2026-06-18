@@ -50,6 +50,12 @@
 #include <mm/pmm.h>
 #include <syscalls/syscalls.h>
 
+/* Tried to fucking modularize this...
+   Didn't go well...
+   To who is reading this:
+     - Please don't try to modularize this, it's too late...just keep adding on...
+*/
+
 // Should be never exposed to other files
 #define MAX_MOUNTS 16
 #define MAX_IO_COUNT (16 * 1024 * 1024)
