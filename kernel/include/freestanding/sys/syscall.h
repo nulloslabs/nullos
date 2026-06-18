@@ -16,6 +16,7 @@
 #define SYS_rt_sigreturn 15
 #define SYS_ioctl 16
 #define SYS_fcntl 17
+#define SYS_readv 19
 #define SYS_writev 20
 #define SYS_pipe 22
 #define SYS_dup 32

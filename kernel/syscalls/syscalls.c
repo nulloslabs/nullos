@@ -84,6 +84,8 @@ static syscall_fn_t syscall_table[] = {
     [SYS_rt_sigreturn] = sys_rt_sigreturn,
     [SYS_futex]        = sys_futex,
     [SYS_getrandom]    = sys_getrandom,
+    [SYS_readv]        = sys_readv,
+    [SYS_writev]       = sys_writev,
 };
 
 extern void syscall_entry(void);

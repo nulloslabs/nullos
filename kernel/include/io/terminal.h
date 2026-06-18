@@ -24,5 +24,5 @@ void scroll(struct limine_framebuffer *fb);
 void clrscr(void);
 void putc(char c);
 void puts(const char *s);
-void vprintf(const char *fmt, va_list args);
-void printf(const char *fmt, ...);
+int vprintf(const char *fmt, va_list args);
+int printf(const char *fmt, ...);

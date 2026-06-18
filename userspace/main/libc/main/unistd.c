@@ -7,6 +7,7 @@
 #include <limits.h>
 #include <string.h>
 #include <stdlib.h>
+#include <sys/uio.h>
 
 // Variables, structs etc. for functions
 static void *current_program_break = NULL;
@@ -77,6 +78,14 @@ ssize_t read(int fd, void *buf, size_t count) {
 
 ssize_t write(int fd, const void *buf, size_t count) {
     return (ssize_t)syscall(SYS_write, fd, (int64_t)buf, count);
+}
+
+ssize_t readv(int fd, const struct iovec *iov, int iovcnt) {
+    return (ssize_t)syscall(SYS_readv, fd, (int64_t)iov, iovcnt);
+}
+
+ssize_t writev(int fd, const struct iovec *iov, int iovcnt) {
+    return (ssize_t)syscall(SYS_writev, fd, (int64_t)iov, iovcnt);
 }
 
 char *getcwd(char *buf, size_t size) {

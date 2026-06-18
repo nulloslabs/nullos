@@ -21,6 +21,7 @@
 #include <freestanding/sys/resource.h>
 #include <freestanding/sys/reboot.h>
 #include <freestanding/sys/random.h>
+#include <freestanding/sys/uio.h>
 #include <main/limine_req.h>
 #include <io/devices.h>
 #include <io/devtmpfs.h>
@@ -57,6 +58,7 @@
 */
 
 // Should be never exposed to other files
+#define MAX_IOV 1024
 #define MAX_MOUNTS 16
 #define MAX_IO_COUNT (16 * 1024 * 1024)
 #define MAX_FUTEX_WAITERS 256
@@ -1330,6 +1332,86 @@ void sys_fcntl(syscall_frame_t *frame) {
             frame->rax = (uint64_t)-EINVAL;
             return;
     }
+}
+
+void sys_readv(syscall_frame_t *frame) {
+    const struct iovec *uiov = (const struct iovec *)frame->rsi;
+    int iovcnt = (int)frame->rdx;
+
+    if (iovcnt < 0) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (iovcnt == 0) { frame->rax = 0; return; }
+    if (!uiov) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (iovcnt > MAX_IOV) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_ptr_ok(uiov, (uint64_t)iovcnt * sizeof(struct iovec))) { frame->rax = (uint64_t)-EFAULT; return; }
+
+    struct iovec kiov[MAX_IOV];
+    read_vmm(current_task_ptr->ctx, kiov, (uint64_t)uiov, (uint64_t)iovcnt * sizeof(struct iovec));
+
+    uint64_t total = 0;
+    for (int i = 0; i < iovcnt; i++) {
+        if (!kiov[i].iov_base) continue;
+        if (kiov[i].iov_len == 0) continue;
+
+        // Hand this segment off to the regular read path by spoofing rsi/rdx.
+        uint64_t saved_rsi = frame->rsi;
+        uint64_t saved_rdx = frame->rdx;
+        frame->rsi = (uint64_t)kiov[i].iov_base;
+        frame->rdx = kiov[i].iov_len;
+        sys_read(frame); // Depend on sys_read() cuz why the fuck not.
+        frame->rsi = saved_rsi;
+        frame->rdx = saved_rdx;
+
+        int64_t got = (int64_t)frame->rax;
+        if (got < 0) {
+            // Pass the error up, but report bytes already read (if any) per POSIX.
+            if (total > 0) { frame->rax = total; return; }
+            return;
+        }
+
+        total += (uint64_t)got;
+        if ((uint64_t)got < kiov[i].iov_len) break; // short read: stop here
+    }
+
+    frame->rax = total;
+}
+
+void sys_writev(syscall_frame_t *frame) {
+    const struct iovec *uiov = (const struct iovec *)frame->rsi;
+    int iovcnt = (int)frame->rdx;
+
+    if (iovcnt < 0) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (iovcnt == 0) { frame->rax = 0; return; }
+    if (!uiov) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (iovcnt > MAX_IOV) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_ptr_ok(uiov, (uint64_t)iovcnt * sizeof(struct iovec))) { frame->rax = (uint64_t)-EFAULT; return; }
+
+    struct iovec kiov[MAX_IOV];
+    read_vmm(current_task_ptr->ctx, kiov, (uint64_t)uiov, (uint64_t)iovcnt * sizeof(struct iovec));
+
+    uint64_t total = 0;
+    for (int i = 0; i < iovcnt; i++) {
+        if (!kiov[i].iov_base) continue;
+        if (kiov[i].iov_len == 0) continue;
+
+        uint64_t saved_rsi = frame->rsi;
+        uint64_t saved_rdx = frame->rdx;
+        frame->rsi = (uint64_t)kiov[i].iov_base;
+        frame->rdx = kiov[i].iov_len;
+        sys_write(frame); // Depend on sys_write() cuz why the fuck not.
+        frame->rsi = saved_rsi;
+        frame->rdx = saved_rdx;
+
+        int64_t wrote = (int64_t)frame->rax;
+        if (wrote < 0) {
+            if (total > 0) { frame->rax = total; return; }
+            return;
+        }
+
+        total += (uint64_t)wrote;
+        if ((uint64_t)wrote < kiov[i].iov_len) break; // short write: stop here
+    }
+
+    frame->rax = total;
 }
 
 void sys_pipe(syscall_frame_t *frame) {

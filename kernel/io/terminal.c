@@ -690,20 +690,25 @@ void puts(const char *s) {
     spin_unlock_irqrestore(&term_lock, rflags);
 }
 
-void vprintf(const char *fmt, va_list args) {
+int vprintf(const char *fmt, va_list args) {
+    int total_written = 0;
     uint64_t rflags;
     spin_lock_irqsave(&term_lock, &rflags);
+
+    #define PUTC(c) do { putc_unlocked(c); total_written++; } while(0)
+
     for (const char *p = fmt; *p != '\0'; p++) {
         if (*p != '%') {
-            putc_unlocked(*p);
+            PUTC(*p);
             continue;
         }
         p++;
-        if (*p == '\0') { putc_unlocked('%'); break; }
+        if (*p == '\0') { PUTC('%'); break; }
         bool left_align = false;
         int width = 0;
         char pad_char = ' ';
         bool is_long = false;
+        bool is_size = false;
 
         // Left-align flag
         if (*p == '-') {
@@ -726,6 +731,11 @@ void vprintf(const char *fmt, va_list args) {
             p++;
             if (*p == 'l') p++;
         }
+        // Size modifier (%z for size_t / ssize_t)
+        if (*p == 'z') {
+            is_size = true;
+            p++;
+        }
 
         switch (*p) {
             case 's': {
@@ -733,12 +743,12 @@ void vprintf(const char *fmt, va_list args) {
                 if (!s) s = "(null)";
                 int len = strlen(s);
                 if (!left_align)
-                    while (width > len) { putc_unlocked(pad_char); width--; }
-    
-                while (*s) { putc_unlocked(*s); s++; }
-    
+                    while (width > len) { PUTC(pad_char); width--; }
+
+                while (*s) { PUTC(*s); s++; }
+
                 if (left_align)
-                    while (width > len) { putc_unlocked(' '); width--; }
+                    while (width > len) { PUTC(' '); width--; }
                 break;
             }
             case 'o':
@@ -750,6 +760,8 @@ void vprintf(const char *fmt, va_list args) {
                 uint64_t val;
                 if (is_long) {
                     val = va_arg(args, uint64_t);
+                } else if (is_size) {
+                    val = (uint64_t)va_arg(args, size_t);
                 } else {
                     if (*p == 'd' || *p == 'i') val = (uint64_t)va_arg(args, int);
                     else           val = (uint64_t)va_arg(args, unsigned int);
@@ -763,24 +775,24 @@ void vprintf(const char *fmt, va_list args) {
                 while (buf[len]) len++;
                 if (is_neg) len++; // account for '-'
                 if (!left_align)
-                    while (width > len) { putc_unlocked(pad_char); width--; }
-                if (is_neg) putc_unlocked('-');
+                    while (width > len) { PUTC(pad_char); width--; }
+                if (is_neg) PUTC('-');
                 char *ptr = buf;
-                while (*ptr) putc_unlocked(*ptr++);
+                while (*ptr) PUTC(*ptr++);
                 if (left_align)
-                    while (width > len) { putc_unlocked(' '); width--; }
+                    while (width > len) { PUTC(' '); width--; }
                 break;
             }
             case 'p': {
                 uint64_t x = va_arg(args, uint64_t);
                 char buf[64];
                 int_to_str(x, buf, 64, 16, false);
-                putc_unlocked('0'); putc_unlocked('x');
+                PUTC('0'); PUTC('x');
                 int len = 0;
                 while (buf[len]) len++;
-                for (int i = 0; i < (16 - len); i++) putc_unlocked('0');
+                for (int i = 0; i < (16 - len); i++) PUTC('0');
                 char *ptr = buf;
-                while (*ptr) putc_unlocked(*ptr++);
+                while (*ptr) PUTC(*ptr++);
                 break;
             }
             case 'f': case 'F': {
@@ -790,31 +802,36 @@ void vprintf(const char *fmt, va_list args) {
                 double_to_str(fval, prec, fbuf, sizeof(fbuf));
                 int len = 0; while (fbuf[len]) len++;
                 if (!left_align)
-                    while (width > len) { putc_unlocked(pad_char); width--; }
-                char *fp = fbuf; while (*fp) putc_unlocked(*fp++);
+                    while (width > len) { PUTC(pad_char); width--; }
+                char *fp = fbuf; while (*fp) PUTC(*fp++);
                 if (left_align)
-                    while (width > len) { putc_unlocked(' '); width--; }
+                    while (width > len) { PUTC(' '); width--; }
                 break;
             }
             case 'c':
-                putc_unlocked((char)va_arg(args, int));
+                PUTC((char)va_arg(args, int));
                 break;
             case '%':
-                putc_unlocked('%');
+                PUTC('%');
                 break;
             default:
-                putc_unlocked('%');
-                putc_unlocked(*p);
+                PUTC('%');
+                PUTC(*p);
                 break;
         }
     }
+    
+    #undef PUTC
+
     spin_unlock_irqrestore(&term_lock, rflags);
+    return total_written;
 }
 
-void printf(const char *fmt, ...) {
+int printf(const char *fmt, ...) {
     // No spinlocks here since vprintf already has spinlocks
     va_list args;
     va_start(args, fmt);
-    vprintf(fmt, args);
+    int ret = vprintf(fmt, args);
     va_end(args);
+    return ret;
 }

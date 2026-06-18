@@ -80,6 +80,8 @@ void sys_fchmodat(syscall_frame_t *frame);
 void sys_getsockopt(syscall_frame_t *frame);
 void sys_setsockopt(syscall_frame_t *frame);
 void sys_getrandom(syscall_frame_t *frame);
+void sys_readv(syscall_frame_t *frame);
+void sys_writev(syscall_frame_t *frame);
 
 // Some public helpers
 int copy_from_user(void *kdest, const void *usrc, size_t size);

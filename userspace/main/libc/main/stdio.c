@@ -318,6 +318,7 @@ int vfprintf(FILE *stream, const char *fmt, va_list args) {
         int width = 0;
         char pad_char = ' ';
         bool is_long = false;
+        bool is_size = false;
 
         if (*p == '-') {
             left_align = true;
@@ -335,6 +336,10 @@ int vfprintf(FILE *stream, const char *fmt, va_list args) {
             is_long = true;
             p++;
             if (*p == 'l') p++;
+        }
+        if (*p == 'z') {
+            is_size = true;
+            p++;
         }
 
         switch (*p) {
@@ -372,6 +377,8 @@ int vfprintf(FILE *stream, const char *fmt, va_list args) {
                 uint64_t val;
                 if (is_long) {
                     val = va_arg(args, uint64_t);
+                } else if (is_size) {
+                    val = (uint64_t)va_arg(args, size_t);
                 } else {
                     if (*p == 'd' || *p == 'i') val = (uint64_t)va_arg(args, int);
                     else           val = (uint64_t)va_arg(args, unsigned int);
@@ -521,6 +528,7 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
         int width = 0;
         char pad_char = ' ';
         bool is_long = false;
+        bool is_size = false;
 
         if (*p == '-') {
             left_align = true;
@@ -538,6 +546,10 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
             is_long = true;
             p++;
             if (*p == 'l') p++;
+        }
+        if (*p == 'z') {
+            is_size = true;
+            p++;
         }
 
         switch (*p) {
@@ -569,6 +581,8 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
                 uint64_t val;
                 if (is_long) {
                     val = va_arg(args, uint64_t);
+                } else if (is_size) {
+                    val = (uint64_t)va_arg(args, size_t);
                 } else {
                     if (*p == 'd' || *p == 'i') val = (uint64_t)va_arg(args, int);
                     else           val = (uint64_t)va_arg(args, unsigned int);
