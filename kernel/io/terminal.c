@@ -1,6 +1,7 @@
 #include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
 #include <freestanding/stdarg.h>
+#include <freestanding/stdio.h>
 #include <main/string.h>
 #include <main/limine_req.h>
 #include <main/spinlocks.h>
@@ -186,7 +187,7 @@ static void put_pixel_bb(uint32_t x, uint32_t y, uint32_t color) {
     back_buffer[y * back_buffer_width + x] = color;
 }
 
-static void putc_bb(char c, int x, int y, uint32_t fg, uint32_t bg) {
+static void putchar_bb(char c, int x, int y, uint32_t fg, uint32_t bg) {
     if (!current_font_w || !current_font_h) return;
     if (!back_buffer_initialized || !back_buffer || !back_buffer_available) return;
 
@@ -289,10 +290,6 @@ static void int_to_str(uint64_t value, char *buf, size_t buf_size, int base, boo
     buf[j] = '\0';
 }
 
-// double_to_str: convert a double to decimal string using integer arithmetic only.
-// We reinterpret the raw bits via memcpy so no SSE/FPU instruction is ever emitted
-// by this function. The caller's va_list XMM save is already gated on al!=0 by the
-// ABI, so callers not passing floats pay zero cost.
 static void double_to_str(double val, int precision, char *out, size_t out_size) {
     if (out_size < 2) return;
 
@@ -410,7 +407,7 @@ void show_cursor(bool visible) {
         }
     } else {
         if (back_buffer_available) flush_region_backbuffer(fb, cursor_x, cursor_y, current_font_w, current_font_h);
-        else putc_fb(' ', cursor_x, cursor_y, fg_color, bg_color);
+        else putchar_fb(' ', cursor_x, cursor_y, fg_color, bg_color);
     }
 
     cursor_visible = visible;
@@ -521,17 +518,17 @@ void clrscr(void) {
     spin_unlock_irqrestore(&term_lock, rflags);
 }
 
-static void putc_unlocked(char c) {
+static int putchar_unlocked(int c) {
     if (state == STATE_NORMAL && is_visible_control((unsigned char)c)) {
-        putc_unlocked('^');
-        putc_unlocked(visible_control_char((unsigned char)c));
-        return;
+        putchar_unlocked('^');
+        putchar_unlocked(visible_control_char((unsigned char)c));
+        return EOF;
     }
 
-    serial_putc(COM1, c);
+    serial_putchar(COM1, c);
 
-    if (!current_font_w || !current_font_h) return;
-    if (!fb_req.response || fb_req.response->framebuffer_count < 1) return;
+    if (!current_font_w || !current_font_h) return EOF;
+    if (!fb_req.response || fb_req.response->framebuffer_count < 1) return EOF;
 
     struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
 
@@ -570,7 +567,6 @@ static void putc_unlocked(char c) {
                 if (cursor_x >= current_font_w) cursor_x -= current_font_w;
                 else if (cursor_y > line_start_y) { cursor_y -= current_font_h; cursor_x = fb->width - current_font_w; }
                 else break;
-
                 // Clear character - use back buffer if available, otherwise direct FB
                 if (back_buffer_available) {
                     fill_rect_backbuffer(cursor_x, cursor_y, current_font_w, current_font_h, bg_color);
@@ -586,10 +582,10 @@ static void putc_unlocked(char c) {
             default:
                 // Draw character - use back buffer if available, otherwise direct FB
                 if (back_buffer_available) {
-                    putc_bb(c, cursor_x, cursor_y, fg_color, bg_color);
+                    putchar_bb(c, cursor_x, cursor_y, fg_color, bg_color);
                     flush_region_backbuffer(fb, cursor_x, cursor_y, current_font_w, current_font_h);
                 } else {
-                    putc_fb(c, cursor_x, cursor_y, fg_color, bg_color);
+                    putchar_fb(c, cursor_x, cursor_y, fg_color, bg_color);
                 }
 
                 cursor_x += current_font_w;
@@ -674,20 +670,29 @@ static void putc_unlocked(char c) {
         } else if (ansi_idx < 15) ansi_buffer[ansi_idx++] = c;
     }
     if (cursor_enabled) show_cursor(true);
+    return c;
 }
 
-void putc(char c) {
+int putchar(int c) {
     uint64_t rflags;
     spin_lock_irqsave(&term_lock, &rflags);
-    putc_unlocked(c);
+    int ret = putchar_unlocked(c);
     spin_unlock_irqrestore(&term_lock, rflags);
+    return ret;
 }
 
-void puts(const char *s) {
+int puts(const char *s) {
+    if (!s) return EOF;
+
     uint64_t rflags;
     spin_lock_irqsave(&term_lock, &rflags);
-    while (*s) { putc_unlocked(*s); s++; }
+
+    while (*s) { putchar_unlocked(*s); s++; }
+    putchar_unlocked('\n');
+
     spin_unlock_irqrestore(&term_lock, rflags);
+
+    return 0;
 }
 
 int vprintf(const char *fmt, va_list args) {
@@ -695,7 +700,7 @@ int vprintf(const char *fmt, va_list args) {
     uint64_t rflags;
     spin_lock_irqsave(&term_lock, &rflags);
 
-    #define PUTC(c) do { putc_unlocked(c); total_written++; } while(0)
+    #define PUTC(c) do { putchar_unlocked(c); total_written++; } while(0)
 
     for (const char *p = fmt; *p != '\0'; p++) {
         if (*p != '%') {

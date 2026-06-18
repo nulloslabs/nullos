@@ -113,24 +113,28 @@ static void double_to_str(double val, int precision, char *out, size_t out_size)
     out[pos] = '\0';
 }
 
-static void serial_putc_unlocked(uint16_t port, char c) {
+static int serial_putchar_unlocked(uint16_t port, int c) {
+    unsigned char ch = (unsigned char)c;
     // Just in case if terminal dosen't support just "\n" for newlines but needs "\r\n" instead
-    if (c == '\n') outb(port, '\r');
-    outb(port, c);
+    if (ch == '\n') outb(port, '\r');
+    outb(port, ch);
+    return ch;
 }
 
-void serial_putc(uint16_t port, char c) {
+int serial_putchar(uint16_t port, int c) {
     uint64_t rflags;
     spin_lock_irqsave(&serial_lock, &rflags);
-    serial_putc_unlocked(port, c);
+    int ret = serial_putchar_unlocked(port, c);
     spin_unlock_irqrestore(&serial_lock, rflags);
+    return ret;
 }
 
-void serial_puts(uint16_t port, const char *s) {
+int serial_puts(uint16_t port, const char *s) {
     uint64_t rflags;
     spin_lock_irqsave(&serial_lock, &rflags);
-    while (*s) { serial_putc_unlocked(port, *s); s++; }
+    while (*s) { serial_putchar_unlocked(port, *s); s++; }
     spin_unlock_irqrestore(&serial_lock, rflags);
+    return 0;
 }
 
 int serial_vprintf(uint16_t port, const char *fmt, va_list args) {
@@ -138,7 +142,7 @@ int serial_vprintf(uint16_t port, const char *fmt, va_list args) {
     uint64_t rflags;
     spin_lock_irqsave(&serial_lock, &rflags);
 
-    #define PUTC(c) do { serial_putc_unlocked(port, c); total_written++; } while(0)
+    #define PUTC(c) do { serial_putchar_unlocked(port, c); total_written++; } while(0)
 
     for (const char *p = fmt; *p != '\0'; p++) {
         if (*p != '%') {

@@ -64,7 +64,7 @@ void put_pixel_fb(uint32_t x, uint32_t y, uint32_t color) {
     }
 }
 
-void putc_fb(char c, int x, int y, uint32_t fg, uint32_t bg) {
+void putchar_fb(char c, int x, int y, uint32_t fg, uint32_t bg) {
     if (!fb_req.response || fb_req.response->framebuffer_count < 1) return; // If there's no framebuffer don't even bother drawing.
     if (!current_font_w || !current_font_h) return; // If there's no font don't even bother drawing.
 

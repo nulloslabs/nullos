@@ -494,7 +494,7 @@ void sys_read(syscall_frame_t *frame) {
             *sbuf_pos = 0;
             spin_unlock_irqrestore(&stdin_lock, irq);
 
-            puts("\033[s");
+            printf("\033[s");
             while (1) {
                 current_task_ptr->state = TASK_READY;
                 spin_unlock(&sched_lock);
@@ -505,13 +505,13 @@ void sys_read(syscall_frame_t *frame) {
 
                 spin_lock_irqsave(&stdin_lock, &irq);
                 if (c == '\b' || c == 127) {
-                    if (*sbuf_len > 0) { (*sbuf_len)--; puts("\b \b"); }
+                    if (*sbuf_len > 0) { (*sbuf_len)--; printf("\b \b"); }
                     spin_unlock_irqrestore(&stdin_lock, irq);
                     continue;
                 }
 
                 if (c == '\n') {
-                    putc(c);
+                    putchar(c);
                     if (*sbuf_len < TASK_STDIN_BUF_SIZE) {
                         sbuf[(*sbuf_len)++] = c;
                     }
@@ -519,7 +519,7 @@ void sys_read(syscall_frame_t *frame) {
                     break;
                 }
 
-                if (*sbuf_len < TASK_STDIN_BUF_SIZE - 1) { putc(c); sbuf[(*sbuf_len)++] = c; }
+                if (*sbuf_len < TASK_STDIN_BUF_SIZE - 1) { putchar(c); sbuf[(*sbuf_len)++] = c; }
 
                 spin_unlock_irqrestore(&stdin_lock, irq);
             }
@@ -630,7 +630,7 @@ void sys_write(syscall_frame_t *frame) {
             if (chunk > sizeof(kbuf)) chunk = sizeof(kbuf);
             read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf + processed, chunk);
             for (uint64_t i = 0; i < chunk; i++) {
-                putc(kbuf[i]);
+                putchar(kbuf[i]);
             }
             processed += chunk;
         }

@@ -134,9 +134,7 @@ static uint64_t read_tty(void* buf, uint64_t count, uint64_t offset) {
 }
 
 static uint64_t write_tty(const void* buf, uint64_t count, uint64_t offset) {
-    for (uint64_t i = 0; i < count; i++) {
-        putc(((const char*)buf)[i]);
-    }
+    for (uint64_t i = 0; i < count; i++) putchar(((const char*)buf)[i]);
     return count;
 }
 
