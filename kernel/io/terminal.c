@@ -519,9 +519,11 @@ void clrscr(void) {
 }
 
 static int putchar_unlocked(int c) {
-    if (state == STATE_NORMAL && is_visible_control((unsigned char)c)) {
+    unsigned char ch = (unsigned char)c;
+
+    if (state == STATE_NORMAL && is_visible_control(ch)) {
         putchar_unlocked('^');
-        putchar_unlocked(visible_control_char((unsigned char)c));
+        putchar_unlocked(visible_control_char(ch));
         return EOF;
     }
 
@@ -670,7 +672,7 @@ static int putchar_unlocked(int c) {
         } else if (ansi_idx < 15) ansi_buffer[ansi_idx++] = c;
     }
     if (cursor_enabled) show_cursor(true);
-    return c;
+    return ch;
 }
 
 int putchar(int c) {
