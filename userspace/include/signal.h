@@ -34,7 +34,20 @@ extern "C" {
 #define SA_RESETHAND 0x80000000
 #define SA_RESTORER  0x04000000
 
+#define SS_ONSTACK    1
+#define SS_DISABLE    2
+#define SS_AUTODISARM 0x80000000U
+
+#define MINSIGSTKSZ 2048
+#define SIGSTKSZ    8192
+
 typedef uint64_t sigset_t;
+
+typedef struct {
+    void   *ss_sp;
+    int     ss_flags;
+    size_t  ss_size;
+} stack_t;
 
 typedef struct {
     int si_signo;
