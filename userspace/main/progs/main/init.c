@@ -11,7 +11,7 @@ static void print_usage(void) {
     printf("  --help: show help dialouge.\n");
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv, char **envp) {
     if (argc > 1) {
         if (strcmp(argv[1], "--help") == 0) { print_usage(); return 0; }
 
@@ -24,8 +24,8 @@ int main(int argc, char **argv) {
     mkdir("/dev/pts", 0755);
     if (mount("devpts", "/dev/pts", "devpts", 0, NULL) < 0) { perror("init: mount(/dev/pts) failed"); return 1; }
 
-    char *login_argv[] = { "/usr/bin/login", NULL }; // 
-    char *login_envp[] = { NULL };
+    static char *login_argv[] = { "/usr/bin/login", NULL };
+    static char *login_envp[] = { NULL };
 
     for (;;) {
         pid_t pid = fork();

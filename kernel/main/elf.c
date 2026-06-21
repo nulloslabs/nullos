@@ -18,8 +18,7 @@ static uint64_t aslr_random_offset(uint64_t max_pages) {
     return (val % max_pages) * PAGE_SIZE;
 }
 
-static uint64_t setup_stack(vmm_context_t *ctx, uint64_t v_rsp,
-                             char **argv, char **envp, elf64_auxv_t *auxv) {
+static uint64_t setup_stack(vmm_context_t *ctx, uint64_t v_rsp, char **argv, char **envp, elf64_auxv_t *auxv) {
     // Count argv and envp
     int argc = 0;
     if (argv) while (argv[argc]) argc++;
@@ -31,6 +30,19 @@ static uint64_t setup_stack(vmm_context_t *ctx, uint64_t v_rsp,
 
     uint64_t arg_ptrs[64];
     uint64_t env_ptrs[64];
+    uint8_t rand_bytes[16];
+
+    get_random_bytes(rand_bytes, sizeof(rand_bytes));
+    v_rsp -= sizeof(rand_bytes);
+    write_vmm(ctx, v_rsp, rand_bytes, sizeof(rand_bytes));
+    if (auxv) {
+        for (int i = 0; auxv[i].type != AT_NULL; i++) {
+            if (auxv[i].type == AT_RANDOM) {
+                auxv[i].un.val = v_rsp;
+                break;
+            }
+        }
+    }
 
     // Push env strings
     for (int i = envc - 1; i >= 0; i--) {
@@ -50,13 +62,27 @@ static uint64_t setup_stack(vmm_context_t *ctx, uint64_t v_rsp,
 
     v_rsp &= ~0xFULL;
 
-    // Push auxv (terminated by AT_NULL)
+    uint64_t ptr_area_size = 8ULL * (1 + argc + 1 + envc + 1);
+    size_t aux_size = 0;
     if (auxv) {
         int auxc = 0;
         while (auxv[auxc].type != AT_NULL) auxc++;
         auxc++; // include AT_NULL
-        v_rsp -= auxc * sizeof(elf64_auxv_t);
-        write_vmm(ctx, v_rsp, auxv, auxc * sizeof(elf64_auxv_t));
+        aux_size = auxc * sizeof(elf64_auxv_t);
+    }
+
+    if ((v_rsp - aux_size - ptr_area_size) & 0xFULL) {
+        v_rsp -= 8;
+    }
+
+    // Push auxv (terminated by AT_NULL). Nothing may be placed between envp's
+    // NULL terminator and auxv; the loader finds auxv by walking past envp.
+    if (auxv) {
+        int auxc = 0;
+        while (auxv[auxc].type != AT_NULL) auxc++;
+        auxc++; // include AT_NULL
+        v_rsp -= aux_size;
+        write_vmm(ctx, v_rsp, auxv, aux_size);
     }
 
     uint64_t zero = 0;
@@ -199,10 +225,11 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
     auxv[a++] = (elf64_auxv_t){AT_ENTRY, {.val = ehdr->entry + base_addr}};
     auxv[a++] = (elf64_auxv_t){AT_BASE, {.val = interp_base}};
     auxv[a++] = (elf64_auxv_t){AT_PAGESZ, {.val = 4096}};
-    auxv[a++] = (elf64_auxv_t){AT_RANDOM, {.val = aslr_random_offset(1)}};
+    auxv[a++] = (elf64_auxv_t){AT_RANDOM, {.val = 0}};
     auxv[a++] = (elf64_auxv_t){AT_NULL, {.val = 0}};
 
-    void *stack = vmalloc_user_ex(ctx, USER_STACK_SIZE);
+    uint64_t stack_vaddr = USER_STACK_BASE - USER_STACK_SIZE;
+    void *stack = vmap_user_at(ctx, stack_vaddr, USER_STACK_SIZE, VMM_USER | VMM_WRITABLE | VMM_NX);
     if (!stack) return -ENOMEM;
 
     char *empty_envp[] = { NULL };
@@ -294,10 +321,11 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     auxv[a++] = (elf64_auxv_t){AT_ENTRY, {.val = ehdr->entry + base_addr}};
     auxv[a++] = (elf64_auxv_t){AT_BASE, {.val = interp_base}};
     auxv[a++] = (elf64_auxv_t){AT_PAGESZ, {.val = 4096}};
-    auxv[a++] = (elf64_auxv_t){AT_RANDOM, {.val = aslr_random_offset(1)}};
+    auxv[a++] = (elf64_auxv_t){AT_RANDOM, {.val = 0}};
     auxv[a++] = (elf64_auxv_t){AT_NULL, {.val = 0}};
 
-    void *stack = vmalloc_user_ex(ctx, USER_STACK_SIZE);
+    uint64_t stack_vaddr = USER_STACK_BASE - USER_STACK_SIZE;
+    void *stack = vmap_user_at(ctx, stack_vaddr, USER_STACK_SIZE, VMM_USER | VMM_WRITABLE | VMM_NX);
     if (!stack) return -ENOMEM;
 
     char *empty_envp[] = { NULL };
@@ -322,6 +350,7 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     switch_vmm_context(ctx);
 
     frame->rcx = entry;
-    frame->r12 = v_rsp;
+    frame->rdx = 0;
+    frame->rsp = v_rsp;
     return 0;
 }

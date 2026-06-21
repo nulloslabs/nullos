@@ -151,5 +151,5 @@ void init_rtc(void) {
     }
 
     time_seed_realtime_us(unix_seconds * 1000000ULL);
-    printf("rtc: seeded realtime clock\n");
+    printf("rtc: initialized rtc\n");
 }

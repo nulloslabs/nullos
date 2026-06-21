@@ -6,6 +6,7 @@
 #include <main/gdt.h>
 #include <main/spinlocks.h>
 #include <main/scheduler.h>
+#include <main/sse.h>
 #include <main/fd.h>
 #include <main/msr.h>
 #include <mm/mm.h>
@@ -65,9 +66,29 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
             tasks[i].egid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->egid;
             tasks[i].fs_base = 0;
             tasks[i].gs_base = 0;
+            tasks[i].ctty_idx = current_task_ptr ? current_task_ptr->ctty_idx : 0;
 
             init_fd_table(&tasks[i].fd_table);
             strcpy(tasks[i].cwd, "/");
+            memset(tasks[i].sigactions, 0, sizeof(tasks[i].sigactions));
+            tasks[i].pgid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->pgid;
+            tasks[i].sid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->sid;
+            tasks[i].term_sig = 0;
+            tasks[i].pending_signals = 0;
+            tasks[i].blocked_signals = 0;
+            tasks[i].on_altstack = false;
+            tasks[i].sas_ss_sp = NULL;
+            tasks[i].sas_ss_size = 0;
+            tasks[i].sas_ss_flags = 0;
+
+            // Per-task FPU area: freshly initialized to a clean state so the
+            // new task starts with sane x87/SSE registers rather than the
+            // previous owner's.  Kernel tasks (ring 0) also get one so any
+            // FP use inside the kernel doesn't leak across tasks.
+            tasks[i].fpu_area = vmalloc(get_fpu_state_size());
+            if (tasks[i].fpu_area) {
+                init_fpu_area(tasks[i].fpu_area);
+            }
 
             uint64_t v_rsp;
             if (ring == 0) {
@@ -126,12 +147,37 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
             tasks[i].ctx = child_ctx;
             strcpy(tasks[i].cwd, current_task_ptr->cwd);
             tasks[i].ppid = current_task_ptr->pid;
+            tasks[i].pgid = current_task_ptr->pgid;
             tasks[i].uid = current_task_ptr->uid;
             tasks[i].euid = current_task_ptr->euid;
             tasks[i].gid = current_task_ptr->gid;
             tasks[i].egid = current_task_ptr->egid;
             tasks[i].fs_base = current_task_ptr->fs_base;
             tasks[i].gs_base = current_task_ptr->gs_base;
+            tasks[i].ctty_idx = current_task_ptr->ctty_idx;
+
+            // Inherit signal dispositions from parent (POSIX fork semantics)
+            memcpy(tasks[i].sigactions, current_task_ptr->sigactions, sizeof(tasks[i].sigactions));
+            tasks[i].blocked_signals = current_task_ptr->blocked_signals;
+            tasks[i].pending_signals = 0;
+            tasks[i].sid = current_task_ptr->sid;
+            tasks[i].term_sig = 0;
+            tasks[i].on_altstack = false;
+            tasks[i].sas_ss_sp = current_task_ptr->sas_ss_sp;
+            tasks[i].sas_ss_size = current_task_ptr->sas_ss_size;
+            tasks[i].sas_ss_flags = current_task_ptr->sas_ss_flags;
+
+            // Per-task FPU area.  The child inherits the parent's current FP
+            // state (POSIX fork: child sees a snapshot of the parent's FPU).
+            // We save the live state into the child's fresh buffer.
+            tasks[i].fpu_area = vmalloc(get_fpu_state_size());
+            if (tasks[i].fpu_area) {
+                init_fpu_area(tasks[i].fpu_area);
+                // Copy the parent's last-saved FPU state into the child.
+                if (current_task_ptr->fpu_area) {
+                    memcpy(tasks[i].fpu_area, current_task_ptr->fpu_area, get_fpu_state_size());
+                }
+            }
 
             void *kstack = vmalloc(KERNEL_STACK_SIZE);
             if (!kstack) {
@@ -155,7 +201,7 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
             } while(0)
 
             PUSH(0x1B);
-            PUSH(frame->r12);
+            PUSH(frame->rsp);
             PUSH(frame->r11);
             PUSH(0x23);
             PUSH(frame->rcx);
@@ -222,11 +268,23 @@ void schedule(void) {
             free(tasks[old_task].kernel_stack);
             tasks[old_task].kernel_stack = NULL;
         }
+        if (tasks[old_task].fpu_area) {
+            vfree(tasks[old_task].fpu_area);
+            tasks[old_task].fpu_area = NULL;
+        }
         tasks[old_task].state = TASK_DEAD;
         tasks[old_task].pid = 0;
     }
 
     if (found) {
+        // Eager FPU save of the outgoing task (before its registers are
+        // clobbered by the incoming task).  Skip if the outgoing task is a
+        // zombie being reaped above — its fpu_area is already gone.
+        if (old_task != next && tasks[old_task].fpu_area &&
+            tasks[old_task].state != TASK_DEAD) {
+            save_fpu_state(tasks[old_task].fpu_area);
+        }
+
         current_task = next;
         tasks[current_task].state = TASK_RUNNING;
         current_task_ptr = &tasks[current_task];
@@ -243,17 +301,32 @@ void schedule(void) {
         write_msr(MSR_FS_BASE, tasks[next].fs_base);
         write_msr(MSR_KERNEL_GS_BASE, tasks[next].gs_base);
         write_msr(MSR_GS_BASE, (uint64_t)current_task_ptr);
+
+        // Eager FPU restore of the incoming task.  clts first so the
+        // xrstor/fxrstor doesn't #NM (TS should already be clear in our
+        // eager model, but be defensive against any path that set it).
+        if (old_task != next && tasks[next].fpu_area) {
+            __asm__ volatile("clts");
+            restore_fpu_state(tasks[next].fpu_area);
+        }
     }
 }
 
 void exit_task(int status) {
     cli();
 
+    wake_clear_child_tid(current_task_ptr);
+
+    // status encodes the exit code; term_sig was already set if killed by signal.
+    // For a voluntary exit (sys_exit/sys_exit_group), term_sig stays 0.
     tasks[current_task].exit_status = status;
     tasks[current_task].state = TASK_ZOMBIE;
     current_task_ptr->exit_status = status;
 
-    pid_t my_pid = current_task_ptr->pid;
+    pid_t my_pid  = current_task_ptr->pid;
+    pid_t my_ppid = current_task_ptr->ppid;
+
+    // Re-parent children and clean up zombies
     for (int i = 1; i < MAX_TASKS; i++) {
         if (tasks[i].state != TASK_DEAD && tasks[i].ppid == my_pid) {
             if (tasks[i].state == TASK_ZOMBIE) {
@@ -267,6 +340,22 @@ void exit_task(int status) {
     for (int i = 0; i < FD_MAX; i++) {
         if (current_task_ptr->fd_table.entries[i].open) {
             free_fd(&current_task_ptr->fd_table, i);
+        }
+    }
+
+    if (current_task_ptr->fpu_area) {
+        vfree(current_task_ptr->fpu_area);
+        current_task_ptr->fpu_area = NULL;
+    }
+
+    // Notify parent with SIGCHLD and wake it if it is waiting
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (tasks[i].state != TASK_DEAD && tasks[i].pid == my_ppid) {
+            tasks[i].pending_signals |= (1ULL << SIGCHLD);
+            // Wake parent if it was sleeping in wait4 (it will re-check)
+            if (tasks[i].state == TASK_STOPPED || tasks[i].state == TASK_READY)
+                tasks[i].state = TASK_READY;
+            break;
         }
     }
 

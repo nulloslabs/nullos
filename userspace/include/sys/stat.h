@@ -49,10 +49,11 @@ extern "C" {
 struct stat {
     dev_t st_dev;
     ino_t st_ino;
-    mode_t st_mode;
     nlink_t st_nlink;
+    mode_t st_mode;
     uid_t st_uid;
     gid_t st_gid;
+    int __pad0;
     dev_t st_rdev;
     int64_t st_size;
     blksize_t st_blksize;
@@ -60,6 +61,7 @@ struct stat {
     union { time_t st_atime; struct timespec st_atim; };
     union { time_t st_mtime; struct timespec st_mtim; };
     union { time_t st_ctime; struct timespec st_ctim; };
+    int64_t __reserved[3];
 };
 
 int stat(const char *path, struct stat *buf);

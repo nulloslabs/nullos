@@ -221,6 +221,8 @@ int64_t read_unix_handle(unix_handle_t *h, void *buf, size_t count, uint32_t fd_
     ch = h->in;
 
     while (done < count) {
+        if (signal_pending()) return -EINTR;
+
         uint64_t flags;
         spin_lock_irqsave(&ch->lock, &flags);
         while (done < count && ch->len > 0) {

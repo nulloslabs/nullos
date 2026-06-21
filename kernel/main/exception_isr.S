@@ -70,71 +70,84 @@ isrrsv:
     jmp isrhdr
 
 isrhdr:
+    push r15
+    push r14
+    push r13
+    push r12
+    push r11
+    push r10
+    push r9
+    push r8
+    push rbp
     push rdi
     push rsi
     push rdx
     push rcx
-    push r8
-    push r9
-    push r10
-    push r11
+    push rbx
+    push rax            // real RAX saved; safe to clobber it below
 
-    // Save segments
+    mov rax, cr3
+    push rax
+    mov rax, cr2
+    push rax
+    mov rax, cr0
+    push rax
+
+    xor eax, eax        // zero-extend cleanly, unlike "mov ax, ds" alone
     mov ax, ds
     push rax
+    xor eax, eax
     mov ax, es
     push rax
 
-    // Swap GS if we came from user space.
-    // Frame layout from RSP:
-    //   +0..+79  = saved regs (r11, r10, r9, r8, rcx, rdx, rsi, rdi, es, ds)
-    //   +80      = vector
-    //   +88      = error code
-    //   +96      = RIP
-    //   +104     = CS
-    //   +112     = RFLAGS
-    //   +120     = RSP (user)
-    mov rax, [rsp + 80 + 24]    // CS
+    // CS now sits at offset 184 (offsetof(exception_frame_t, cs))
+    mov rax, [rsp + 184]
     test al, 3
     jz .no_swap_entry
     swapgs
 .no_swap_entry:
 
-    // Load kernel data segments
     mov ax, 0x10
     mov ds, ax
     mov es, ax
 
-    // exception_panic(vector, rip, rsp, cs)
-    mov rdi, [rsp + 80]         // vector number
-    mov rsi, [rsp + 80 + 16]    // rip
-    mov rdx, [rsp + 80 + 40]    // rsp
-    mov rcx, [rsp + 80 + 24]    // cs
-
+    // exception_panic(exception_frame_t *frame)
+    mov rdi, rsp
+    mov rbx, rsp
+    and rsp, -16
     call exception_panic
+    mov rsp, rbx
 
-    // Swap GS back if returning to user space
-    mov rax, [rsp + 80 + 24]    // cs
+    mov rax, [rsp + 184]
     test al, 3
     jz .no_swap_exit
     swapgs
 .no_swap_exit:
 
-    // Restore segments
     pop rax
     mov es, ax
     pop rax
     mov ds, ax
 
-    pop r11
-    pop r10
-    pop r9
-    pop r8
+    pop rax
+    pop rax
+    pop rax
+
+    pop rax
+    pop rbx
     pop rcx
     pop rdx
     pop rsi
     pop rdi
+    pop rbp
+    pop r8
+    pop r9
+    pop r10
+    pop r11
+    pop r12
+    pop r13
+    pop r14
+    pop r15
 
-    // Clean up vector and error code
-    add rsp, 16
+    add rsp, 16         // discard vector + error_code
     iretq

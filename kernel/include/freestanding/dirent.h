@@ -1,5 +1,7 @@
 #pragma once
 
+#include <freestanding/stddef.h>
+
 #define DT_UNKNOWN 0
 #define DT_FIFO    1
 #define DT_CHR     2
@@ -9,13 +11,24 @@
 #define DT_LNK     10
 #define DT_SOCK    12
 
-typedef struct {
+#define DIRENT64_HEADER_SIZE ((uint16_t)sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint16_t) + sizeof(uint8_t))
+#define DIRENT64_ALIGN(n) (((n) + 7) & ~7)
+
+struct dirent {
     uint64_t d_ino;
     int64_t d_off;
     uint16_t d_reclen;
     uint8_t d_type;
     char d_name[256];
-} dirent_t;
+};
+
+typedef struct {
+    uint64_t d_ino;
+    uint64_t d_off;
+    uint16_t d_reclen;
+    uint8_t  d_type;
+    char     d_name[];
+} linux_dirent64_t;
 
 struct __dirstream {
     int fd;

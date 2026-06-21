@@ -1,9 +1,5 @@
 #pragma once
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #define UTSNAME_LENGTH 65
 
 struct utsname {
@@ -14,9 +10,3 @@ struct utsname {
     char machine[UTSNAME_LENGTH];
     char domainname[UTSNAME_LENGTH];
 };
-
-int uname(struct utsname *buf);
-
-#ifdef __cplusplus
-}
-#endif

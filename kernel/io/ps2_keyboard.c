@@ -3,6 +3,7 @@
 #include <io/ps2_keyboard.h>
 #include <io/keyboard.h>
 #include <io/io.h>
+#include <io/ttys.h>
 
 static uint8_t ps2_repeat_key = 0;
 static int ps2_repeat_timer = 0;
@@ -23,4 +24,6 @@ void handle_ps2_scancode(uint8_t sc) {
         uint32_t next = (key_head + 1) & 127;
         if (next != key_tail) { key_buffer[key_head] = sc; key_head = next; }
     }
+    // Feed the active TTY's ring buffer with the ASCII character
+    tty_process_scancode(sc);
 }

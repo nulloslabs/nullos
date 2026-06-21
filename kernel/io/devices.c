@@ -128,12 +128,24 @@ static uint64_t write_ptmx(const void *buf, uint64_t count, uint64_t offset) {
     return (uint64_t)-EIO;
 }
 
+// Non-blocking read from the active TTY's input ring buffer.
+// Returns whatever bytes are available (0 if empty — the caller, sys_read,
+// handles blocking by yielding to the scheduler). All /dev/ttyN reads go to
+// tty0 today since there is no VT switching.
 static uint64_t read_tty(void* buf, uint64_t count, uint64_t offset) {
-    (void)buf; (void)count; (void)offset;
-    return 0;
+    (void)offset;
+    spinlock_t *lk = get_tty_lock();
+    uint64_t irq;
+    spin_lock_irqsave(lk, &irq);
+    tty_t *t = get_tty(0);
+    int got = 0;
+    if (t) got = read_tty_ring(&t->input, (char *)buf, (int)count);
+    spin_unlock_irqrestore(lk, irq);
+    return (uint64_t)got;
 }
 
 static uint64_t write_tty(const void* buf, uint64_t count, uint64_t offset) {
+    (void)offset;
     for (uint64_t i = 0; i < count; i++) putchar(((const char*)buf)[i]);
     return count;
 }

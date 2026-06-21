@@ -18,7 +18,18 @@ typedef enum {
     CPU_FEATURE_POPCNT,
     CPU_FEATURE_AES,
     CPU_FEATURE_NX,
+    CPU_FEATURE_XSAVE,
+    CPU_FEATURE_OSXSAVE,
 } cpu_feature_t;
+
+// Size (in bytes) of the contiguous XSAVE state area the CPU requires.
+// Valid only when XSAVE is supported (see cpu_has_feature(CPU_FEATURE_XSAVE));
+// callers should fall back to a 512-byte FXSAVE area otherwise.
+size_t xsave_area_size(void);
+
+// Bitmask of XSAVE state components (CPUID leaf 0xD subleaf 0 EDX:EBX) that
+// are supported by the CPU.  Bit 0 = x87, bit 1 = SSE, bit 2 = AVX, etc.
+uint64_t xsave_feature_mask(void);
 
 #define CPUID_VENDOR_INTEL "GenuineIntel"
 #define CPUID_VENDOR_AMD "AuthenticAMD"

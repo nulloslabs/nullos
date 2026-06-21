@@ -10,6 +10,8 @@
 #define SH_LINE_MAX 256
 #define SH_ARG_MAX 32
 
+static inline pid_t getpgrp(void) { return getpgid(0); }
+
 static int read_line(char *line, int size) {
     int n = read(0, line, size - 1);
     if (n <= 0) return n;
@@ -113,6 +115,19 @@ static int run_command(char *line, char **envp, int *exit_shell) {
 
     pid_t pid = fork();
     if (pid == 0) {
+        // Child: reset signals and setup process group
+        struct sigaction csa;
+        csa.sa_handler = SIG_DFL;
+        csa.sa_mask = 0;
+        csa.sa_flags = 0;
+        csa.sa_restorer = NULL;
+        sigaction(SIGINT, &csa, NULL);
+        sigaction(SIGTSTP, &csa, NULL);
+
+        // Put the child in its own process group and give it the terminal
+        setpgid(0, 0);
+        tcsetpgrp(0, getpid());
+
         execve(path, cmd_argv, envp);
         perror(cmd_argv[0]);
         exit(127);
@@ -120,8 +135,15 @@ static int run_command(char *line, char **envp, int *exit_shell) {
 
     if (pid < 0) { perror("fork"); return 1; }
 
+    // Parent: put the child in its own process group (to avoid races)
+    setpgid(pid, pid);
+
     int status;
-    if (waitpid(pid, &status, 0) < 0) { perror("waitpid"); return 1; }
+    // Wait for the child to stop or exit
+    if (waitpid(pid, &status, WUNTRACED) < 0) { perror("waitpid"); return 1; }
+
+    // Restore shell as foreground process group
+    tcsetpgrp(0, getpgrp());
 
     return status;
 }
@@ -143,6 +165,19 @@ int main(int argc, char **argv, char **envp) {
         fprintf(stderr, "sh: unknown argument: %s\n", argv[1]);
         return 2;
     }
+
+    // Interactive shell: become process group leader and take control of the tty
+    setpgid(0, 0);
+    tcsetpgrp(0, getpgrp());
+
+    // Interactive shell ignores SIGINT and SIGTSTP (POSIX shell behavior)
+    struct sigaction sa;
+    sa.sa_handler = SIG_IGN;
+    sa.sa_mask = 0;
+    sa.sa_flags = 0;
+    sa.sa_restorer = NULL;
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTSTP, &sa, NULL);
 
     for (;;) {
         printf("$ ");

@@ -8,6 +8,7 @@ extern "C" {
 #endif
 
 #define WNOHANG 1
+#define WUNTRACED 2
 
 #define WIFEXITED(status) (((status) & 0x7f) == 0)
 #define WEXITSTATUS(status) (((status) & 0xff00) >> 8)

@@ -6,21 +6,22 @@
 syscall_entry:
     // switch to kernel stack
     swapgs
-    mov r12, rsp
+    mov [rip + saved_user_rsp], rsp
     mov rsp, [rip + current_task_ptr]
-    mov rsp, [rsp + 40]
+    mov rsp, [rsp + 48]
     add rsp, 32768
 
     // build syscall_frame_t
     push r15
     push r14
     push r13
-    push r12                       // user RSP
+    push r12
     push r11                       // RFLAGS
     push r10                       // Arg 4
     push r9                        // Arg 6
     push r8                        // Arg 5
     push rbp
+    push qword ptr [rip + saved_user_rsp] // user RSP
     push rdi                       // Arg 1
     push rsi                       // Arg 2
     push rdx                       // Arg 3
@@ -29,10 +30,7 @@ syscall_entry:
     push rax                       // syscall number
 
     mov rdi, rsp           // frame pointer
-    
-    // align RSP to 16 bytes
-    mov rbx, rsp
-    and rsp, -16
+    mov rbx, rsp           // save for later restoration
     
 .Llock_loop:
     lock bts dword ptr [rip + sched_lock], 0
@@ -48,22 +46,22 @@ syscall_entry:
     lock btr dword ptr [rip + sched_lock], 0
     
     mov rsp, rbx           // restore RSP for pops
-
     // restore registers
     pop rax
     pop rbx
     pop rcx
     // Mitigate AMD sysret vulnerability: check if return RIP in RCX is canonical user space.
-    // User canonical addresses must have bits 47-63 as all 0s.
+    // User canonical addresses must have bits 48-63 as all 0s.
     // Use rdx (about to be popped next anyway) as temporary scratch space.
     mov rdx, rcx
-    shr rdx, 47
+    shr rdx, 48
     jz .Lrcx_ok
     xor rcx, rcx           // Force non-canonical/kernel addresses to 0 to safely fault in ring 3
 .Lrcx_ok:
     pop rdx
     pop rsi
     pop rdi
+    add rsp, 8            // skip user RSP
     pop rbp
     pop r8
     pop r9
@@ -74,6 +72,12 @@ syscall_entry:
     pop r14
     pop r15
 
-    mov rsp, r12
-    swapgs                 // Switch kernel GS back to user GS
+    sub rsp, 80           // go back to user RSP location
+    mov rsp, [rsp]        // restore user RSP from syscall_frame_t.rsp
+    swapgs                // Switch kernel GS back to user GS
     sysretq
+
+.section .bss
+.align 8
+saved_user_rsp:
+    .quad 0

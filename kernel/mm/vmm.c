@@ -11,8 +11,11 @@
 
 vmm_context_t kernel_context;
 static uint64_t vmalloc_cursor = 0xffffc00000000000;
-static uint64_t vuser_cursor   = 0x0000700000000000;
+static uint64_t vuser_cursor   = USER_MMAP_BASE;
 static spinlock_t vmm_lock = SPINLOCK_INIT;
+
+#define KERNEL_HEAP_BASE  0xffffb00000000000ULL
+#define KERNEL_HEAP_LIMIT 0xffffc00000000000ULL
 
 // Helper: Get virtual address of a physical page using HHDM
 void* phys_to_virt(uint64_t phys) { return (void*)(phys + hhdm_req.response->offset); }
@@ -24,6 +27,8 @@ uint64_t virt_to_phys(void* virt) {
     if (addr >= 0xffffffff80000000) { if (eaddr_req.response) { return addr - eaddr_req.response->virtual_base + eaddr_req.response->physical_base; }
     }
     
+    if (addr >= KERNEL_HEAP_BASE && addr < KERNEL_HEAP_LIMIT) { return get_vmm_phys(&kernel_context, addr); }
+
     // Check if it's in the vmalloc range (e.g. malloc buffers pushing into controllers)
     if (addr >= 0xffffc00000000000 && addr < 0xffffffff80000000) { return get_vmm_phys(&kernel_context, addr); }
     
@@ -367,6 +372,23 @@ void* vmalloc_ex(vmm_context_t* ctx, size_t size, uint64_t flags) {
 
 void* vmalloc_user_ex(vmm_context_t* ctx, size_t size) { return vmalloc_ex(ctx, size, VMM_WRITABLE | VMM_USER | VMM_NX); }
 
+void* vmap_user_range(vmm_context_t* ctx, size_t size, uint64_t flags) {
+    if (size == 0) return NULL;
+
+    uint64_t num_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint64_t map_size = num_pages * PAGE_SIZE;
+
+    uint64_t flags_irq;
+    spin_lock_irqsave(&vmm_lock, &flags_irq);
+
+    uint64_t start_addr = vuser_cursor;
+    vuser_cursor += map_size;
+
+    spin_unlock_irqrestore(&vmm_lock, flags_irq);
+
+    return vmap_user_at(ctx, start_addr, map_size, flags);
+}
+
 void* vmap_mmio(uint64_t phys, size_t num_pages) {
     if (num_pages == 0) return NULL;
     
@@ -447,8 +469,9 @@ void vfree(void* ptr) {
 
     vmalloc_header_t* header = (vmalloc_header_t*)((uintptr_t)ptr - sizeof(vmalloc_header_t));
     uint64_t virt = (uintptr_t)header;
+    uint64_t count = header->page_count;
 
-    for (uint64_t i = 0; i < header->page_count; i++) { unmap_vmm(&kernel_context, virt + (i * PAGE_SIZE)); }
+    for (uint64_t i = 0; i < count; i++) { unmap_vmm(&kernel_context, virt + (i * PAGE_SIZE)); }
 }
 
 void init_vmm(void) {
@@ -463,7 +486,14 @@ void init_vmm(void) {
     uint64_t current_cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(current_cr3));
     
-    // Use Limine's existing page tables as kernel_context
     kernel_context.pml4 = (uint64_t*)phys_to_virt(current_cr3);
+
+    // Pre-allocate all kernel half PDPTs (indices 256 to 511) so they are shared
+    // across all cloned user contexts. This prevents synchronization issues where
+    // a vmalloc in one context isn't visible in another because the PML4 entry was empty.
+    for (int i = 256; i < 512; i++) {
+        get_vmm_next_level(kernel_context.pml4, i, true, VMM_WRITABLE);
+    }
+
     printf("vmm: initialized vmm\n");
 }

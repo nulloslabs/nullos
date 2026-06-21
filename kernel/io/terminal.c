@@ -603,6 +603,12 @@ static int putchar_unlocked(int c) {
             ansi_buffer[ansi_idx] = '\0';
             if (c == 'm') {
                 char *p = ansi_buffer;
+                if (*p == '\0') {
+                    // SGR with no params (e.g. \033[m) → reset all (equivalent to \033[0m])
+                    fg_color = default_color;
+                    bg_color = 0;
+                    is_bold = false;
+                }
                 while (*p) {
                     int val = 0;
                     while (*p >= '0' && *p <= '9') val = (val * 10) + (*p++ - '0');

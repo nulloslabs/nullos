@@ -51,6 +51,16 @@
 #define ELF64_R_SYM(i) ((i) >> 32)
 #define ELF64_R_TYPE(i) ((i) & 0xffffffffL)
 
+#define AT_NULL   0
+#define AT_PHDR   3
+#define AT_PHENT  4
+#define AT_PHNUM  5
+#define AT_PAGESZ 6
+#define AT_BASE   7
+#define AT_FLAGS  8
+#define AT_ENTRY  9
+#define AT_RANDOM 25
+
 typedef struct {
     uint32_t magic;
     uint8_t class;
@@ -121,24 +131,12 @@ typedef struct {
     int64_t addend;
 } __attribute__((packed)) elf64_rela_t;
 
-#define AT_NULL   0
-#define AT_PHDR   3
-#define AT_PHENT  4
-#define AT_PHNUM  5
-#define AT_PAGESZ 6
-#define AT_BASE   7
-#define AT_FLAGS  8
-#define AT_ENTRY  9
-#define AT_RANDOM 25
-
 typedef struct {
     uint64_t type;
     union {
         uint64_t val;
     } un;
 } __attribute__((packed)) elf64_auxv_t;
-
-
 
 pid_t execute_elf(const char *path, char **argv, char **envp);
 int execve_elf(const char *path, char **argv, char **envp, void* raw_frame);

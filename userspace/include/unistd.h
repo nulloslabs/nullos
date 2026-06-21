@@ -36,6 +36,12 @@ pid_t fork(void);
 pid_t waitpid(pid_t pid, int *wstatus, int options);
 pid_t getpid(void);
 pid_t getppid(void);
+pid_t getpgid(pid_t pid);
+int   setpgid(pid_t pid, pid_t pgid);
+pid_t getsid(pid_t pid);
+pid_t setsid(void);
+pid_t tcgetpgrp(int fd);
+int   tcsetpgrp(int fd, pid_t pgrp);
 uid_t getuid(void);
 gid_t getgid(void);
 uid_t geteuid(void);
@@ -49,7 +55,7 @@ int brk(void *addr);
 void *sbrk(intptr_t increment);
 int gethostname(char *name, size_t size);
 int sethostname(const char *name, size_t size);
-int reboot(int how);
+int reboot(int howto);
 int64_t lseek(int fd, int64_t offset, int whence);
 ssize_t readlink(const char *path, char *buf, size_t bufsiz);
 int unlink(const char *path);
@@ -60,6 +66,7 @@ int unlinkat(int dirfd, const char *pathname, int flags);
 int symlinkat(const char *target, int newdirfd, const char *linkpath);
 int dup(int oldfd);
 int dup2(int oldfd, int newfd);
+unsigned int sleep(unsigned int seconds);
 
 #ifdef __cplusplus
 }

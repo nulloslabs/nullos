@@ -6,6 +6,8 @@
 
 int getdents(int fd, struct dirent *buf, int count) { return (int)syscall(SYS_getdents, fd, buf, count); }
 
+int getdents64(int fd, struct dirent *buf, size_t count) { return (int)syscall(SYS_getdents64, fd, buf, count); }
+
 DIR *fdopendir(int fd) {
     if (fd < 0) return NULL;
 

@@ -19,6 +19,8 @@ int get_pts_idx(const char *name) {
 }
 
 bool devpts_device_exists(const char* name) {
+    if (strcmp(name, "ptmx") == 0) return true;
+
     int idx = get_pts_idx(name);
     if (idx < 0) return false;
     
@@ -30,7 +32,7 @@ bool devpts_device_exists(const char* name) {
     return exists;
 }
 
-const char *devpts_get_device_name(int index) {
+const char *devpts_get_slave_name(int index) {
     if (index < 0 || index >= NUM_PTYS) return NULL;
     
     static char names[NUM_PTYS][4];
@@ -52,4 +54,9 @@ const char *devpts_get_device_name(int index) {
         names[index][2] = '\0';
     }
     return names[index];
+}
+
+const char *devpts_get_device_name(int index) {
+    if (index == 0) return "ptmx";
+    return devpts_get_slave_name(index - 1);
 }

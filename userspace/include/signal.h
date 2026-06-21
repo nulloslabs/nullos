@@ -21,6 +21,19 @@ extern "C" {
 #define SIGSTOP 19
 #define SIGTSTP 20
 
+#define SIG_DFL ((void (*)(int))0)
+#define SIG_IGN ((void (*)(int))1)
+#define SIG_ERR ((void (*)(int))-1)
+
+#define SA_NOCLDSTOP 1
+#define SA_NOCLDWAIT 2
+#define SA_SIGINFO   4
+#define SA_ONSTACK   0x08000000
+#define SA_RESTART   0x10000000
+#define SA_NODEFER   0x40000000
+#define SA_RESETHAND 0x80000000
+#define SA_RESTORER  0x04000000
+
 typedef uint64_t sigset_t;
 
 typedef struct {
@@ -34,22 +47,13 @@ struct sigaction {
         void (*sa_handler)(int);
         void (*sa_sigaction)(int, siginfo_t *, void *);
     } __sigaction_handler;
-    sigset_t sa_mask;
     int sa_flags;
     void (*sa_restorer)(void);
+    sigset_t sa_mask;
 };
 
 #define sa_handler   __sigaction_handler.sa_handler
 #define sa_sigaction __sigaction_handler.sa_sigaction
-
-#define SA_NOCLDSTOP 1
-#define SA_NOCLDWAIT 2
-#define SA_SIGINFO   4
-#define SA_ONSTACK   0x08000000
-#define SA_RESTART   0x10000000
-#define SA_NODEFER   0x40000000
-#define SA_RESETHAND 0x80000000
-#define SA_RESTORER  0x04000000
 
 int kill(pid_t pid, int sig);
 int raise(int sig);

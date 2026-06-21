@@ -5,23 +5,14 @@
 #include <io/terminal.h>
 #include <main/halt.h>
 
-// ============================================================================
-// Shared scancode ring buffer
-// Both PS/2 (via ISR) and USB (via HID report processing) write scancodes here.
-// ============================================================================
 uint8_t key_buffer[128] = {0};
 volatile uint32_t key_head = 0;
 volatile uint32_t key_tail = 0;
 
-// ============================================================================
-// Modifier state (updated from both PS/2 and USB scancodes)
-// ============================================================================
 static bool shift_pressed = false;
 static bool caps_lock = false;
+static bool ctrl_pressed = false;
 
-// ============================================================================
-// get_scancode — non-blocking, returns 0 if buffer empty
-// ============================================================================
 uint8_t get_scancode(void) {
     if (key_head == key_tail) return 0;
     uint8_t sc = key_buffer[key_tail];
@@ -29,10 +20,6 @@ uint8_t get_scancode(void) {
     return sc;
 }
 
-// ============================================================================
-// scancode_to_ascii — converts PS/2-style scancode to ASCII (US QWERTY)
-// Handles shift/caps state. Returns 0 for non-printable keys.
-// ============================================================================
 char scancode_to_ascii(uint8_t sc) {
     if (sc & 0x80) { // key release
         uint8_t released = sc & 0x7F;
@@ -40,6 +27,10 @@ char scancode_to_ascii(uint8_t sc) {
         // Handle shift release
         if (released == 0x2A || released == 0x36) {
             shift_pressed = false;
+        }
+        // Handle Ctrl release
+        if (released == 0x1D) {
+            ctrl_pressed = false;
         }
         return 0;
     }
@@ -55,6 +46,9 @@ char scancode_to_ascii(uint8_t sc) {
             return 0;
         case 0x2A: case 0x36:
             shift_pressed = true;
+            return 0;
+        case 0x1D:
+            ctrl_pressed = true;
             return 0;
     }
 
@@ -87,6 +81,13 @@ char scancode_to_ascii(uint8_t sc) {
         c = upper[sc];  // Caps Lock only affects letters
     } else {
         c = lower[sc];  // Normal lowercase/numbers
+    }
+    
+    // Ctrl+letter -> control character (Ctrl+A=0x01, ..., Ctrl+Z=0x1A)
+    if (ctrl_pressed && c >= 'a' && c <= 'z') {
+        c = c - 'a' + 1;  // a->0x01, b->0x02, c->0x03, ..., z->0x1A
+    } else if (ctrl_pressed && c >= 'A' && c <= 'Z') {
+        c = c - 'A' + 1;
     }
     
     return c;

@@ -1,12 +1,14 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdarg.h>
+#include <sys/reboot.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <errno.h>
 #include <limits.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 #include <sys/uio.h>
 
 // Variables, structs etc. for functions
@@ -60,7 +62,7 @@ __attribute__((naked)) int64_t syscall(int64_t num, ...) {
 }
 
 __attribute__((noreturn)) void _exit(int status) {
-    syscall(SYS_exit, status);
+    syscall(SYS_exit_group, status);
     __builtin_unreachable();
 }
 
@@ -101,15 +103,11 @@ char *getcwd(char *buf, size_t size) {
     int64_t ret = syscall(SYS_getcwd, buf, size);
 
     if (ret < 0) {
-        // ONLY free the buffer if WE allocated it. 
-        // If the user provided it, leave it alone!
-        if (allocated) {
-            free(buf);
-        }
+        if (allocated) free(buf);
         return NULL;
     }
 
-    return (char *)ret; 
+    return buf; 
 }
 
 int chdir(const char *path) {
@@ -181,6 +179,33 @@ pid_t getppid(void) {
     return (pid_t)syscall(SYS_getppid, 0, 0, 0, 0, 0, 0);
 }
 
+pid_t getpgid(pid_t pid) {
+    return (pid_t)syscall(SYS_getpgid, (int64_t)pid);
+}
+
+int setpgid(pid_t pid, pid_t pgid) {
+    return (int)syscall(SYS_setpgid, (int64_t)pid, (int64_t)pgid);
+}
+
+pid_t setsid(void) {
+    return (pid_t)syscall(SYS_setsid);
+}
+
+pid_t getsid(pid_t pid) {
+    return (pid_t)syscall(SYS_getsid, (int64_t)pid);
+}
+
+pid_t tcgetpgrp(int fd) {
+    pid_t pgrp = 0;
+    if (syscall(SYS_ioctl, (int64_t)fd, (int64_t)0x540F /* TIOCGPGRP */, (int64_t)&pgrp) < 0)
+        return -1;
+    return pgrp;
+}
+
+int tcsetpgrp(int fd, pid_t pgrp) {
+    return (int)syscall(SYS_ioctl, (int64_t)fd, (int64_t)0x5410 /* TIOCSPGRP */, (int64_t)&pgrp);
+}
+
 uid_t getuid(void) {
     return (uid_t)syscall(SYS_getuid, 0, 0, 0, 0, 0, 0);
 }
@@ -233,10 +258,8 @@ int sethostname(const char *name, size_t size) {
     return (int)syscall(SYS_sethostname, name, size);
 }
 
-int reboot(int how) {
-    // NOTE: Shouldn't return anything if it was successful, only if we got an error.
-    // NOTE 2: This dosen't match POSIX, mostly matches BSD but not exactly.
-    return (int)syscall(SYS_reboot, how);
+int reboot(int howto) {
+    return (int)syscall(SYS_reboot, LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2, howto, 0);
 }
 
 int64_t lseek(int fd, int64_t offset, int whence) {
@@ -277,4 +300,14 @@ int dup(int oldfd) {
 
 int dup2(int oldfd, int newfd) {
     return (int)syscall(SYS_dup2, oldfd, newfd);
+}
+
+unsigned int sleep(unsigned int seconds) {
+    struct timespec req, rem;
+    req.tv_sec = seconds;
+    req.tv_nsec = 0;
+    if (syscall(SYS_nanosleep, (int64_t)&req, (int64_t)&rem) < 0) {
+        return rem.tv_sec;
+    }
+    return 0;
 }

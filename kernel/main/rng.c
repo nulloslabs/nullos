@@ -23,9 +23,14 @@ void regen_rng(void) {
     tsc_entropy = read_tsc() - tsc_entropy;
     pit_entropy = (uint64_t)read_pit_counter() - pit_entropy;
 
-    uint64_t rax, rbx, rcx, rdx, rsp, rbp;
+    // Get entropy from registers
+    uint64_t rax, rbx, rcx, rdx, rip, rsp, rbp;
 
-    __asm__ volatile(
+    // RIP is special, it's static so we will use __builtin_return_address(0)
+    rip = (uint64_t)__builtin_return_address(0);
+
+    // Other registers we can get from mov X, Y
+    __asm__ volatile (
         "mov %%rax, %0\n"
         "mov %%rbx, %1\n"
         "mov %%rcx, %2\n"
@@ -45,6 +50,7 @@ void regen_rng(void) {
     reg_entropy = reg_entropy * GOLDEN_RATIO ^ rbx;
     reg_entropy = reg_entropy * GOLDEN_RATIO ^ rcx;
     reg_entropy = reg_entropy * GOLDEN_RATIO ^ rdx;
+    reg_entropy = reg_entropy * GOLDEN_RATIO ^ rip;
     reg_entropy = reg_entropy * GOLDEN_RATIO ^ rsp;
     reg_entropy = reg_entropy * GOLDEN_RATIO ^ rbp;
 

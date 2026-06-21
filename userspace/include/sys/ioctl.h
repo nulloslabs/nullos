@@ -12,6 +12,7 @@ extern "C" {
 #define TIOCSWINSZ 0x5414
 #define TIOCGPGRP 0x540F
 #define TIOCSPGRP 0x5410
+#define TIOCSCTTY 0x540E
 #define FIONREAD 0x541B
 #define TIOCEXCL 0x540C
 #define TIOCNXCL 0x540D

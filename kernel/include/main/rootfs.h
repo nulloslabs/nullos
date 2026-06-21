@@ -42,6 +42,10 @@ typedef struct {
     uid_t uid;
     gid_t gid;
     bool is_active;
+    // Tombstone: marks a path as deleted so read/stat don't fall through to
+    // the tar archive. Set when a tar-backed entry is removed (unlink/rmdir);
+    // overlay entries are simply marked inactive instead.
+    bool is_tombstone;
 } modified_file_t;
 
 typedef struct {
@@ -51,9 +55,14 @@ typedef struct {
 
 // Some public helpers
 void get_absolute_path(const char *in, char *out_abs, size_t out_size);
+void resolve_link_target(const char *base_path_abs, const char *link_target, char *out_abs, size_t out_size);
 
 rootfs_file_t read_rootfs(const char *path);
+// stat_rootfs: like stat(), resolves all symlinks in the path (including the
+// final component). Use stat_rootfs_nofollow() for lstat()/readlink()/
+// unlink()-of-a-symlink semantics, which leaves the final component alone.
 rootfs_file_t stat_rootfs(const char *path);
+rootfs_file_t stat_rootfs_nofollow(const char *path);
 int write_rootfs(const char *path, const void *data, uint64_t size, uint32_t mode, uid_t uid, gid_t gid);
 int delete_rootfs(const char *path);
 int mkdir_rootfs(const char *path, mode_t mode, uid_t uid, gid_t gid);

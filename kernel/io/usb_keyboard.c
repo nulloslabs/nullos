@@ -5,6 +5,7 @@
 #include <io/keyboard.h>
 #include <io/terminal.h>
 #include <io/hpet.h>
+#include <io/ttys.h>
 #include <mm/mm.h>
 #include <main/string.h>
 
@@ -140,12 +141,14 @@ void usb_keyboard_process_report(uint8_t *report, int kbd_index) {
             key_buffer[key_head] = 0x2A;
             key_head = next;
         }
+        tty_process_scancode(0x2A);
     } else if (!curr_shift && prev_shift) {
         uint32_t next = (key_head + 1) & 127;
         if (next != key_tail) {
             key_buffer[key_head] = 0xAA;
             key_head = next;
         }
+        tty_process_scancode(0xAA);
     }
 
     // Newly pressed keys
@@ -166,6 +169,7 @@ void usb_keyboard_process_report(uint8_t *report, int kbd_index) {
                     key_buffer[key_head] = scancode;
                     key_head = next;
                 }
+                tty_process_scancode(scancode);
             }
         }
     }
@@ -188,6 +192,7 @@ void usb_keyboard_process_report(uint8_t *report, int kbd_index) {
                     key_buffer[key_head] = scancode | 0x80;
                     key_head = next;
                 }
+                tty_process_scancode(scancode | 0x80);
             }
         }
     }
@@ -217,6 +222,7 @@ void poll_usb_keyboard(void) {
                             key_buffer[key_head] = scancode;
                             key_head = next;
                         }
+                        tty_process_scancode(scancode);
                     }
                 }
             }

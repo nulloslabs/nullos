@@ -1,11 +1,12 @@
-#include <fcntl.h>
 #include <stdint.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/utsname.h>
-#include <sys/wait.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <sys/ioctl.h>
+#include <sys/utsname.h>
+#include <sys/wait.h>
 
 /* A simple unix-like login program. */
 
@@ -429,6 +430,9 @@ int main(int argc, char **argv, char **envp) {
                 exit(126);
             }
 
+            // Start a new session for the user's shell
+            setsid();
+            ioctl(0, TIOCSCTTY, 0);
             char *sh_argv[] = { user_info.shell, NULL };
             execve(user_info.shell, sh_argv, envp);
             perror("\nLogin: execve() failed");

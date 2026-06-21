@@ -65,7 +65,7 @@ void init_pmm(void) {
     }
 
     max_pages = highest_addr / PAGE_SIZE;
-    uint64_t bitmap_size = max_pages / 8;
+    uint64_t bitmap_size = (max_pages + 7) / 8;
     uint64_t refcount_size = max_pages;
 
     // find usable hole for bitmap

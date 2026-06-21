@@ -5,6 +5,8 @@
 #include <freestanding/stdbool.h>
 
 #define PAGE_SIZE 4096
+#define USER_MMAP_BASE  0x0000100000000000ULL
+#define USER_STACK_BASE 0x0000700000000000ULL
 
 // Page Table Entry Flags
 #define VMM_PRESENT  (1ULL << 0)
@@ -21,6 +23,7 @@ typedef struct {
 
 typedef struct {
     uint64_t page_count;
+    uint8_t padding[56];
 } vmalloc_header_t;
 
 extern vmm_context_t kernel_context;
@@ -42,6 +45,7 @@ vmm_context_t* create_vmm_context(void);
 vmm_context_t* clone_vmm_context(vmm_context_t* parent);
 void* vmalloc_ex(vmm_context_t* ctx, size_t size, uint64_t flags);
 void* vmalloc_user_ex(vmm_context_t* ctx, size_t size);
+void* vmap_user_range(vmm_context_t* ctx, size_t size, uint64_t flags);
 void* vmap_mmio(uint64_t phys, size_t num_pages);
 void* vmap_user_at(vmm_context_t* ctx, uint64_t virt, size_t size, uint64_t flags);
 void* vmalloc(size_t size);

@@ -2,22 +2,11 @@
 
 #include <stdint.h>
 
-typedef uint32_t tcflag_t;
-typedef uint8_t cc_t;
-typedef uint32_t speed_t;
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define NCCS 32
-
-struct termios {
-    tcflag_t c_iflag;
-    tcflag_t c_oflag;
-    tcflag_t c_cflag;
-    tcflag_t c_lflag;
-    cc_t c_line;
-    cc_t c_cc[NCCS];
-    speed_t c_ispeed;
-    speed_t c_ospeed;
-};
 
 // c_iflag bits
 #define IGNBRK  0000001
@@ -66,6 +55,25 @@ struct termios {
 #define TOSTOP  0000400
 #define IEXTEN  0010000
 
+// c_cc indices
+#define VINTR   0   // Ctrl+C  (SIGINT)
+#define VQUIT   1   // Ctrl+\  (SIGQUIT)
+#define VERASE  2   // Backspace
+#define VKILL   3   // Ctrl+U  (kill line)
+#define VEOF    4   // Ctrl+D  (EOF)
+#define VTIME   5
+#define VMIN    6
+#define VSWTC   7
+#define VSTART  8   // Ctrl+Q  (resume)
+#define VSTOP   9   // Ctrl+S  (stop)
+#define VSUSP  10   // Ctrl+Z  (SIGTSTP)
+#define VEOL   11
+#define VREPRINT 12
+#define VDISCARD 13
+#define VWERASE  14
+#define VLNEXT   15
+#define VEOL2    16
+
 // tcsetattr optional_actions
 #define TCSANOW   0
 #define TCSADRAIN 1
@@ -82,6 +90,10 @@ struct termios {
 #define TCIOFF 2
 #define TCION  3
 
+typedef uint32_t tcflag_t;
+typedef uint8_t cc_t;
+typedef uint32_t speed_t;
+
 typedef struct {
     uint16_t ws_row;
     uint16_t ws_col;
@@ -89,9 +101,16 @@ typedef struct {
     uint16_t ws_ypixel;
 } winsize_t;
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+struct termios {
+    tcflag_t c_iflag;
+    tcflag_t c_oflag;
+    tcflag_t c_cflag;
+    tcflag_t c_lflag;
+    cc_t c_line;
+    cc_t c_cc[NCCS];
+    speed_t c_ispeed;
+    speed_t c_ospeed;
+};
 
 int tcgetattr(int fd, struct termios *termios_p);
 int tcsetattr(int fd, int optional_actions, const struct termios *termios_p);

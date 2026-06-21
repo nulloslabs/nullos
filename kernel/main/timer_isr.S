@@ -56,10 +56,10 @@ isr32:
     mov rsp, rbx
 
     mov rbx, [rip + current_task_ptr]
-    mov [rbx + 24], rsp
+    mov [rbx + 32], rsp
     call schedule
     mov rbx, [rip + current_task_ptr]
-    mov rsp, [rbx + 24]
+    mov rsp, [rbx + 32]
 
 .skip_switch:
     // send EOI

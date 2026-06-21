@@ -21,10 +21,10 @@ __attribute__((noreturn)) void panic(const char *reason) {
     halt();
 }
 
-__attribute__((noreturn)) void exception_panic(uint64_t vector, uint64_t rip, uint64_t rsp, uint64_t cs) {
+__attribute__((noreturn)) void exception_panic(exception_frame_t *frame) {
     const char *reason = "";
 
-    switch (vector) {
+    switch (frame->vector) {
         case 0: reason = "a division error occurred"; break;
         case 4: reason = "a signed arithmetic overflow occurred"; break;
         case 5: reason = "an instruction that exceeded the bound range occurred"; break;
@@ -39,11 +39,16 @@ __attribute__((noreturn)) void exception_panic(uint64_t vector, uint64_t rip, ui
     }
 
     // Check if the fault came from user mode (Ring 3)
-    if ((cs & 3) != 0) {
+    if ((frame->cs & 3) != 0) {
         printf("userspace fault (pid %d): %s\n", current_task_ptr->pid, reason);
         printf("\nregisters:\n");
-        printf(" rip: %p\n", rip);
-        printf(" rsp: %p\n", rsp);
+        printf(" rip: %p\n", frame->rip);
+        printf(" rsp: %p\n", frame->rsp);
+        printf(" r12: %p\n", frame->r12);
+        printf(" r15: %p\n", frame->r15);
+        printf(" cr0: %p\n", frame->cr0);
+        printf(" cr2: %p\n", frame->cr2);
+        printf(" cr3: %p\n", frame->cr3);
         sti();
         exit_task(128 + SIGSEGV);
         __builtin_unreachable();
@@ -53,7 +58,7 @@ __attribute__((noreturn)) void exception_panic(uint64_t vector, uint64_t rip, ui
     cli();
     printf("kernel panic: %s\n", reason);
     printf("\nregisters:\n");
-    printf(" rip: %p\n", rip);
-    printf(" rsp: %p\n", rsp);
+    printf(" rip: %p\n", frame->rip);
+    printf(" rsp: %p\n", frame->rsp);
     halt();
 }

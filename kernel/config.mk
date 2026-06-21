@@ -1,3 +1,4 @@
+DEBUG := 0
 KERNEL := $(shell uname -s)
 ARCH := $(shell uname -m)
 
@@ -10,6 +11,9 @@ else
 endif
 
 CFLAGS = -Wall -m64 -I../include/ -ffreestanding -nostdlib -nostdinc -fno-builtin -nodefaultlibs -nostartfiles -fno-stack-protector -fno-pic -fno-pie -no-pie -fno-lto -fno-stack-check -mno-red-zone -mcmodel=kernel -mno-red-zone -mcmodel=kernel -mno-80387 -mno-mmx -mabi=sysv -MMD -MP -std=c99 -mfpmath=sse -march=x86-64 -mtune=generic
+ifeq ($(DEBUG),1)
+	CFLAGS := -g $(CFLAGS)
+endif
 
 # No need for if checks here...
 AS = $(CC)
@@ -31,6 +35,9 @@ else ifeq ($(KERNEL),Darwin)
 	STRIP = x86_64-elf-strip
 else
 	STRIP = x86_64-linux-gnu-strip
+endif
+ifeq ($(DEBUG),1)
+	STRIP := true
 endif
 
 STRIPFLAGS = 

@@ -147,8 +147,43 @@ bool cpu_has_feature(cpu_feature_t feature) {
         case CPU_FEATURE_POPCNT: return (ecx1 >> 23) & 1;
         case CPU_FEATURE_AES:    return (ecx1 >> 25) & 1;
         case CPU_FEATURE_NX:     return (edx_ext1 >> 20) & 1;
+        // CPUID leaf 1 ECX bit 26: XSAVE/XRSTOR supported.
+        case CPU_FEATURE_XSAVE:  return (ecx1 >> 26) & 1;
+        // CPUID leaf 1 ECX bit 27: the OS has enabled XSAVE (CR4.OSXSAVE set).
+        case CPU_FEATURE_OSXSAVE: return (ecx1 >> 27) & 1;
         default: return false;
     }
+}
+
+// Cached XSAVE geometry from CPUID leaf 0xD.
+//   subleaf 0: EBX = size of the contiguous XSAVE area for the enabled
+//              feature set, ECX = max size the CPU could ever need,
+//              EDX:EBX (EBX is the lower half) = supported feature bitmap.
+// We report EBX (the actual required size for this feature set) so the
+// kernel never allocates an undersized buffer.
+size_t xsave_area_size(void) {
+    static size_t cached = 0;
+    if (cached) return cached;
+    if (!cpu_has_feature(CPU_FEATURE_XSAVE)) {
+        // No XSAVE: a 512-byte FXSAVE area is the legacy layout.
+        cached = 512;
+        return cached;
+    }
+    uint32_t eax, ebx, ecx, edx;
+    __cpuid_count(0xD, 0, eax, ebx, ecx, edx);
+    cached = ebx;
+    if (cached < 512) cached = 512;  // never smaller than the FXSAVE legacy region
+    return cached;
+}
+
+uint64_t xsave_feature_mask(void) {
+    if (!cpu_has_feature(CPU_FEATURE_XSAVE)) {
+        // FXSAVE covers x87 + SSE state only.
+        return 0x3;
+    }
+    uint32_t eax, ebx, ecx, edx;
+    __cpuid_count(0xD, 0, eax, ebx, ecx, edx);
+    return ((uint64_t)edx << 32) | (uint64_t)ebx;
 }
 
 uint64_t get_total_ram(void) {
