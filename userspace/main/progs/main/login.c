@@ -7,6 +7,24 @@
 #include <sys/ioctl.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
+#include <signal.h>
+#include <termios.h>
+
+static void setup_login_tty(void) {
+    setsid();
+    ioctl(0, TIOCSCTTY, 0);
+    setpgid(0, 0);
+    tcsetpgrp(0, getpgid(0));
+    tcflush(0, TCIFLUSH);
+}
+
+static void ignore_job_control_signals(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = SIG_IGN;
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTSTP, &sa, NULL);
+}
 
 /* A simple unix-like login program. */
 
@@ -320,6 +338,8 @@ int main(int argc, char **argv, char **envp) {
     }
 
     gethostname(hostname, sizeof(hostname));
+    setup_login_tty();
+    ignore_job_control_signals();
 
     if (read_file("/etc/passwd", passwd_buf, sizeof(passwd_buf)) < 0) {
         fprintf(stderr, "login: cannot read /etc/passwd\n");
@@ -425,14 +445,13 @@ int main(int argc, char **argv, char **envp) {
 
         pid_t pid = fork();
         if (pid == 0) {
+            setpgid(0, 0);
+            tcsetpgrp(0, getpid());
             if (setgid(user_info.gid) < 0 || setuid(user_info.uid) < 0) {
                 perror("\nlogin: set credentials failed");
                 exit(126);
             }
 
-            // Start a new session for the user's shell
-            setsid();
-            ioctl(0, TIOCSCTTY, 0);
             char *sh_argv[] = { user_info.shell, NULL };
             execve(user_info.shell, sh_argv, envp);
             perror("\nLogin: execve() failed");
@@ -446,6 +465,8 @@ int main(int argc, char **argv, char **envp) {
 
         int status;
         waitpid(pid, &status, 0);
+        tcsetpgrp(0, getpgid(0));
+        tcflush(0, TCIFLUSH);
         printf("\n");
         show_issue = 1;
     }
