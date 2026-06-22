@@ -70,6 +70,8 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
 
             init_fd_table(&tasks[i].fd_table);
             strcpy(tasks[i].cwd, "/");
+            tasks[i].exe[0] = '\0';
+            vma_init(&tasks[i].vmas);
             memset(tasks[i].sigactions, 0, sizeof(tasks[i].sigactions));
             tasks[i].pgid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->pgid;
             tasks[i].sid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->sid;
@@ -146,6 +148,10 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
             tasks[i].ring = current_task_ptr->ring;
             tasks[i].ctx = child_ctx;
             strcpy(tasks[i].cwd, current_task_ptr->cwd);
+            strcpy(tasks[i].exe, current_task_ptr->exe);
+            // A forked child shares an identical address space, so its VMA
+            // layout is a copy of the parent's at this instant.
+            memcpy(&tasks[i].vmas, &current_task_ptr->vmas, sizeof(vma_table_t));
             tasks[i].ppid = current_task_ptr->pid;
             tasks[i].pgid = current_task_ptr->pgid;
             tasks[i].uid = current_task_ptr->uid;
@@ -379,4 +385,12 @@ void init_scheduler(void) {
     current_task_ptr = &tasks[0];
 
     printf("scheduler: initialized scheduler\n");
+}
+
+// Accessor used by procfs to read a task's VMA table without reaching into
+// the tasks[] array directly from another translation unit.
+const vma_table_t *task_vma_table(int pid_idx) {
+    if (pid_idx < 0 || pid_idx >= MAX_TASKS) return NULL;
+    if (tasks[pid_idx].state == TASK_DEAD) return NULL;
+    return &tasks[pid_idx].vmas;
 }

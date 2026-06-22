@@ -18,7 +18,7 @@ rootfs:
 	@if [ ! -f rootfs.tar.gz ] || [ ! -d main ] || [ Makefile -nt rootfs.tar.gz ] || [ config.mk -nt rootfs.tar.gz ] || $(foreach dep,$(DEP),[ $(dep) -nt rootfs.tar.gz ] ||) false; then \
 		printf "  %-7s %s\n" "TAR" "$(SUBDIR)/rootfs.tar.gz" && \
 		# Create folders && \
-			mkdir -p main/dev main/etc main/usr/bin main/usr/sbin main/usr/lib main/usr/include && \
+			mkdir -p main/dev main/proc main/etc main/usr/bin main/usr/sbin main/usr/lib main/usr/include && \
 			ln -snf usr/bin main/bin && \
 			ln -snf usr/sbin main/sbin && \
 			ln -snf usr/lib main/lib && \

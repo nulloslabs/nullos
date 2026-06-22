@@ -49,6 +49,8 @@
 #include <mm/mm.h>
 #include <mm/vmm.h>
 #include <mm/pmm.h>
+#include <mm/vma.h>
+#include <io/procfs.h>
 #include <syscalls/syscalls.h>
 #include <syscalls/syscall_impls.h>
 
@@ -309,8 +311,6 @@ static int ptm_path_idx(const char *path) {
 
 static void free_strarray(char **arr, int count) { if (!arr) return; for (int i = 0; i < count; i++) free(arr[i]); free(arr); }
 
-extern bool is_mounted_under(const char *path, const char *filesystemtype, char *relative_out);
-
 // Find the Nth direct child mount under parent_path.
 // E.g., if /dev/pts is mounted, get_sub_mount_name("/dev", 0, ...) returns "pts".
 static const char *get_sub_mount_name(const char *parent_path, int n, char *name_buf, size_t buf_size) {
@@ -377,6 +377,58 @@ static bool stat_virtual_device(const char *abs_path, struct stat *kst) {
         return true;
     }
     return false;
+}
+
+static int proc_self_idx(void) {
+    if (!current_task_ptr) return -1;
+    return current_task;  // current_task is the running task's index
+}
+
+static bool stat_proc(const char *abs_path, struct stat *kst) {
+    if (!procfs_is_proc_path(abs_path)) return false;
+    int self = proc_self_idx();
+    proc_node_t n;
+    if (!procfs_resolve(abs_path, self, &n)) return false;
+
+    kst->st_uid = current_task_ptr ? current_task_ptr->euid : 0;
+    kst->st_gid = current_task_ptr ? current_task_ptr->egid : 0;
+    kst->st_blocks = 0; kst->st_blksize = 4096; kst->st_nlink = 1;
+
+    if (procfs_is_dir(&n)) {
+        kst->st_mode = 0040555;  // dr-xr-xr-x
+        kst->st_size = 0;
+    } else if (n.type == PROC_NODE_SYMLINK) {
+        kst->st_mode = 0120777;  // lrwxrwxrwx (symlink)
+        kst->st_size = 0;
+    } else {
+        // Regular procfs file (maps, mounts): size is the content length.
+        kst->st_mode = 0100444;  // -r--r--r--
+        char tmp[PROCFS_MAX_CONTENT];
+        kst->st_size = procfs_content(&n, tmp);
+    }
+    return true;
+}
+
+static int proc_open_common(const char *abs_path, uint32_t flags) {
+    if (!procfs_is_proc_path(abs_path)) return 1;  // not procfs
+    int self = proc_self_idx();
+    proc_node_t n;
+    if (!procfs_resolve(abs_path, self, &n)) return -ENOENT;
+
+    // Directories open as regular directory fds (offset-tracked for getdents).
+    if (procfs_is_dir(&n)) {
+        return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_PROC, flags);
+    }
+    // Symlink nodes are openable but reads aren't meaningful;
+    // we still allow open so readlink/stat work, matching Linux behavior.
+    if (n.type == PROC_NODE_SYMLINK) {
+        return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_PROC, flags);
+    }
+    // Regular procfs files (maps, mounts) are readable.
+    if (n.entry == PROC_FILE_MAPS || n.entry == PROC_FILE_MOUNTS) {
+        return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_PROC, flags);
+    }
+    return -EACCES;
 }
 
 static uint64_t futex_resolve_key(uint32_t *uaddr, syscall_frame_t *frame) {
@@ -524,157 +576,122 @@ static int fill_rlimit(int resource, rlimit_t *lim) {
     }
 }
 
-int copy_from_user(void *kdest, const void *usrc, size_t size) {
-    if (!usrc || !user_ptr_ok(usrc, size)) return -EFAULT;
-    if (!kdest || size == 0) return 0;
-    read_vmm(current_task_ptr->ctx, kdest, (uint64_t)usrc, size);
-    return 0;
+static uint16_t emit_dirent64(uint64_t bufp, uint64_t *written, uint64_t buflen, uint64_t ino, uint64_t off, uint8_t type, const char *name) {
+    size_t namelen = strlen(name);
+    uint16_t reclen = DIRENT64_ALIGN(DIRENT64_HEADER_SIZE + namelen + 1);
+    if (*written + reclen > buflen) return 0;
+
+    // Build the record in a stack buffer (max ~270 bytes — safe).
+    uint8_t rec[512];
+    memset(rec, 0, sizeof(rec));
+    memcpy(rec, &ino, 8);
+    memcpy(rec + 8, &off, 8);
+    memcpy(rec + 16, &reclen, 2);
+    rec[18] = type;
+    memcpy(rec + DIRENT64_HEADER_SIZE, name, namelen);
+    // null terminator and padding already zeroed
+
+    write_vmm(current_task_ptr->ctx, bufp + *written, rec, reclen);
+    *written += reclen;
+    return reclen;
 }
 
-int copy_to_user(const void *udest, const void *ksrc, size_t size) {
-    if (!udest || !user_ptr_ok(udest, size)) return -EFAULT;
-    if (!ksrc || size == 0) return 0;
-    write_vmm(current_task_ptr->ctx, (uint64_t)udest, ksrc, size);
-    return 0;
+static uint16_t emit_dirent(uint64_t bufp, uint64_t *written, uint64_t buflen, uint64_t ino, uint64_t off, uint8_t type, const char *name) {
+    size_t namelen = strlen(name);
+    // d_type is the last byte of the record; total = 19 + namelen + 1, aligned to 8
+    uint16_t raw = (uint16_t)(19 + namelen + 1);
+    uint16_t reclen = DIRENT64_ALIGN(raw);
+    if (*written + reclen > buflen) return 0;
+
+    uint8_t rec[512];
+    memset(rec, 0, sizeof(rec));
+    memcpy(rec, &ino, 8);
+    memcpy(rec + 8, &off, 8);
+    memcpy(rec + 16, &reclen, 2);
+    memcpy(rec + 19, name, namelen);
+    rec[reclen - 1] = type;  // d_type is the very last byte
+
+    write_vmm(current_task_ptr->ctx, bufp + *written, rec, reclen);
+    *written += reclen;
+    return reclen;
 }
 
-bool is_mounted_under(const char *path, const char *filesystemtype, char *relative_out) {
-    uint64_t irq;
-    spin_lock_irqsave(&vfs_lock, &irq);
-    bool found = false;
+static void resolve_dir_for_readdir(const char *fd_path, char *prefix_out, size_t prefix_size, char *abs_out, size_t abs_size) {
+    // Follow symlinks by reading through read_rootfs and tracing the chain.
+    char resolved[256];
+    strncpy(resolved, fd_path, sizeof(resolved) - 1);
+    resolved[sizeof(resolved) - 1] = '\0';
 
-    for (int i = 0; i < MAX_MOUNTS; i++) {
-        if (!mounts[i].active) continue;
-        if (strcmp(mounts[i].filesystemtype, filesystemtype) != 0) continue;
+    for (int depth = 0; depth < 8; depth++) {
+        rootfs_file_t file = stat_rootfs_nofollow(resolved);
+        if (!file.mode) break; // doesn't exist at all
+        if ((file.mode & 0xF000) != 0xA000) break; // not a symlink, done
 
-        size_t mlen = strlen(mounts[i].path);
-        if (strncmp(path, mounts[i].path, mlen) == 0 &&
-            (path[mlen] == '/' || path[mlen] == '\0')) {
-            if (relative_out) {
-                const char *rel = path + mlen;
-                if (*rel == '/') rel++;
-                strcpy(relative_out, rel);
-            }
-            found = true;
-            break;
-        }
+        // Resolve symlink target relative to the symlink's parent directory
+        const char *target = (const char *)file.data;
+        if (!target) break;
+
+        char link_abs[256];
+        resolve_link_target(resolved, target, link_abs, sizeof(link_abs));
+        strncpy(resolved, link_abs, sizeof(resolved) - 1);
+        resolved[sizeof(resolved) - 1] = '\0';
+
+        // Normalize the resolved path
+        normalize_path_str(resolved);
     }
 
-    spin_unlock_irqrestore(&vfs_lock, irq);
-    return found;
+    // Hand back the absolute path (next_rootfs_child builds its own prefix).
+    if (abs_out) {
+        strncpy(abs_out, resolved, abs_size - 1);
+        abs_out[abs_size - 1] = '\0';
+    }
+    strncpy(prefix_out, resolved, prefix_size - 1);
+    prefix_out[prefix_size - 1] = '\0';
 }
 
-void check_signals(syscall_frame_t *frame) {
-    if (!current_task_ptr) return;
-    if (current_task_ptr->pending_signals == 0) return;
+static int next_rootfs_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size, uint8_t *child_type) {
+    char prefix[258];
+    strncpy(prefix, dir_norm, sizeof(prefix) - 2);
+    prefix[sizeof(prefix) - 2] = '\0';
+    if (strcmp(dir_norm, "/") != 0) strcat(prefix, "/");
+    size_t prefix_len = strlen(prefix);
 
-    for (int i = 1; i < 32; i++) {
-        if (current_task_ptr->pending_signals & (1ULL << i)) {
-            // Field order matches the Linux kernel struct sigaction as passed
-            // over the rt_sigaction syscall:
-            //   sa[0] = sa_handler   (offset 0)
-            //   sa[1] = sa_flags     (offset 8)
-            //   sa[2] = sa_restorer  (offset 16)
-            //   sa[3] = sa_mask      (offset 24)
-            uint64_t *sa = &current_task_ptr->sigactions[i * 4];
-            uint64_t handler = sa[0];
-            uint64_t flags = sa[1];
-            uint64_t restorer = sa[2];
+    for (;;) {
+        directory_entry_t de;
+        if (get_rootfs_entry(*index, &de) != 0) return 1;
 
-            if (handler == 0 ) {
-                // Default action depends on signal
-                if (i == SIGTSTP || i == SIGSTOP) {
-                    // Default action: stop the process
-                    current_task_ptr->state = TASK_STOPPED;
-                    current_task_ptr->stop_reported = 0;
-                    current_task_ptr->pending_signals &= ~(1ULL << i);
-                    // Notify parent so waitpid(WUNTRACED) wakes up
-                    for (int _j = 0; _j < MAX_TASKS; _j++) {
-                        if (tasks[_j].state != TASK_DEAD && tasks[_j].pid == current_task_ptr->ppid) {
-                            tasks[_j].pending_signals |= (1ULL << SIGCHLD);
-                            break;
-                        }
-                    }
-                    // Yield to scheduler
-                    __asm__ volatile("int $32");
-                    continue;
-                } else if (i == SIGCONT) {
-                    // Default action: continue (already running, just clear)
-                    current_task_ptr->pending_signals &= ~(1ULL << i);
-                    continue;
-                } else if (i == SIGCHLD) {
-                    // Default action: ignore
-                    current_task_ptr->pending_signals &= ~(1ULL << i);
-                    continue;
-                }
-                // Default action: terminate
-                current_task_ptr->pending_signals = 0;
-                exit_task(128 + i);
-            } else if (handler == 1 ) {
-                current_task_ptr->pending_signals &= ~(1ULL << i);
-                continue;
-            }
+        const char *name = de.name;
+        if (name[0] == '.' && name[1] == '/') name += 2;
 
-            current_task_ptr->pending_signals &= ~(1ULL << i);
+        char name_clean[256];
+        strncpy(name_clean, name, sizeof(name_clean) - 1);
+        name_clean[sizeof(name_clean) - 1] = '\0';
+        size_t nlen = strlen(name_clean);
+        if (nlen > 1 && name_clean[nlen - 1] == '/') name_clean[--nlen] = '\0';
 
-            uint64_t user_rsp = frame->rsp - 128; // red zone
-            user_rsp -= sizeof(syscall_frame_t);
-            user_rsp &= ~15ULL;
+        char abs_entry[256];
+        abs_entry[0] = '/';
+        strncpy(abs_entry + 1, name_clean, sizeof(abs_entry) - 2);
+        abs_entry[sizeof(abs_entry) - 1] = '\0';
 
-            write_vmm(current_task_ptr->ctx, user_rsp, frame, sizeof(syscall_frame_t));
+        if (strncmp(abs_entry, prefix, prefix_len) != 0) { (*index)++; continue; }
 
-            frame->rcx = handler;
-            frame->rdi = i;
+        const char *child = abs_entry + prefix_len;
+        if (!*child || strchr(child, '/')) { (*index)++; continue; }
 
-            if (flags & 4 ) {
-                user_rsp -= 16; // siginfo_t is 12 bytes, align to 16
-                uint32_t sinfo[4] = {i, 0, 0, 0};
-                write_vmm(current_task_ptr->ctx, user_rsp, &sinfo, sizeof(sinfo));
-                frame->rsi = user_rsp; // siginfo_t*
-                frame->rdx = 0; // ucontext_t*
-            }
+        // "." and ".." are virtual entries we synthesize in getdents; a tar
+        // entry for the directory itself (e.g. "./") collapses to "." here and
+        // must not be emitted as a real child.
+        if (strcmp(child, ".") == 0 || strcmp(child, "..") == 0) { (*index)++; continue; }
 
-            user_rsp -= 8;
-            write_vmm(current_task_ptr->ctx, user_rsp, &restorer, sizeof(uint64_t));
-            frame->rsp = user_rsp;
-
-            break;
-        }
+        strncpy(child_name, child, child_name_size - 1);
+        child_name[child_name_size - 1] = '\0';
+        *child_type = (de.type == FT_DIRECTORY) ? DT_DIR :
+                      (de.type == FT_SYMLINK) ? DT_LNK : DT_REG;
+        return 0;
     }
 }
 
-void futex_check_timeouts(void) {
-    uint64_t now = time_get_realtime_us();
-
-    for (int i = 0; i < MAX_FUTEX_WAITERS; i++) {
-        if (futex_waiters[i].state != FW_WAITING) continue;
-
-        int idx = futex_waiters[i].task_idx;
-        if (idx < 0 || idx >= MAX_TASKS) continue;
-
-        if (futex_waiters[i].deadline_us != 0 &&
-            now >= futex_waiters[i].deadline_us) {
-            futex_waiters[i].state = FW_TIMED_OUT;
-            if (tasks[idx].state == TASK_STOPPED)
-                tasks[idx].state = TASK_READY;
-            continue;
-        }
-
-        if (tasks[idx].pending_signals && tasks[idx].state == TASK_STOPPED) {
-            futex_waiters[i].state = FW_WOKEN;
-            tasks[idx].state = TASK_READY;
-        }
-    }
-}
-
-// Read from a tty device (/dev/tty, /dev/tty0, etc.) with line discipline.
-// Called from sys_read's FD_DEV branch.  Handles:
-//   - Blocking until at least one byte is available (releasing sched_lock)
-//   - ICANON: line buffering until \n
-//   - ISIG:   signal generation on VINTR (Ctrl+C) / VSUSP (Ctrl+Z)
-//   - ECHO:   echoing characters to the console
-// Returns bytes read into kbuf, or a negative errno (only -EINTR is possible
-// here, when an ISIG character triggers a real handler).
 static int64_t read_dev_tty(char *kbuf, uint64_t count) {
     // There is no VT switching yet, so all ttys share tty0's termios + ring.
     tty_t *t = get_tty(0);
@@ -735,10 +752,6 @@ static int64_t read_dev_tty(char *kbuf, uint64_t count) {
         return (int64_t)total;
     }
 
-    // ----- Canonical (cooked) mode: buffer a full line -----
-    // Per-task cooked line buffer, mirroring the fd==0 path.  We reuse the
-    // task's stdin_buf since a process won't mix fd==0 and /dev/tty cooked
-    // reads simultaneously in practice.
     char *sbuf = current_task_ptr->stdin_buf;
     int *sbuf_len = &current_task_ptr->stdin_buf_len;
     int *sbuf_pos = &current_task_ptr->stdin_buf_pos;
@@ -840,6 +853,216 @@ static int64_t read_dev_tty(char *kbuf, uint64_t count) {
     return (int64_t)to_copy;
 }
 
+int copy_from_user(void *kdest, const void *usrc, size_t size) {
+    if (!usrc || !user_ptr_ok(usrc, size)) return -EFAULT;
+    if (!kdest || size == 0) return 0;
+    read_vmm(current_task_ptr->ctx, kdest, (uint64_t)usrc, size);
+    return 0;
+}
+
+int copy_to_user(const void *udest, const void *ksrc, size_t size) {
+    if (!udest || !user_ptr_ok(udest, size)) return -EFAULT;
+    if (!ksrc || size == 0) return 0;
+    write_vmm(current_task_ptr->ctx, (uint64_t)udest, ksrc, size);
+    return 0;
+}
+
+bool is_mounted_under(const char *path, const char *filesystemtype, char *relative_out) {
+    uint64_t irq;
+    spin_lock_irqsave(&vfs_lock, &irq);
+    bool found = false;
+
+    for (int i = 0; i < MAX_MOUNTS; i++) {
+        if (!mounts[i].active) continue;
+        if (strcmp(mounts[i].filesystemtype, filesystemtype) != 0) continue;
+
+        size_t mlen = strlen(mounts[i].path);
+        if (strncmp(path, mounts[i].path, mlen) == 0 &&
+            (path[mlen] == '/' || path[mlen] == '\0')) {
+            if (relative_out) {
+                const char *rel = path + mlen;
+                if (*rel == '/') rel++;
+                strcpy(relative_out, rel);
+            }
+            found = true;
+            break;
+        }
+    }
+
+    spin_unlock_irqrestore(&vfs_lock, irq);
+    return found;
+}
+
+void register_vfs_mount(const char *path, const char *fstype) {
+    if (!path || !fstype) return;
+    uint64_t irq;
+    spin_lock_irqsave(&vfs_lock, &irq);
+    // No-op if this exact (path, fstype) is already registered.
+    for (int i = 0; i < MAX_MOUNTS; i++) {
+        if (mounts[i].active &&
+            strcmp(mounts[i].path, path) == 0 &&
+            strcmp(mounts[i].filesystemtype, fstype) == 0) {
+            spin_unlock_irqrestore(&vfs_lock, irq);
+            return;
+        }
+    }
+    for (int i = 0; i < MAX_MOUNTS; i++) {
+        if (!mounts[i].active) {
+            strncpy(mounts[i].path, path, sizeof(mounts[i].path) - 1);
+            mounts[i].path[sizeof(mounts[i].path) - 1] = '\0';
+            strncpy(mounts[i].filesystemtype, fstype, sizeof(mounts[i].filesystemtype) - 1);
+            mounts[i].filesystemtype[sizeof(mounts[i].filesystemtype) - 1] = '\0';
+            mounts[i].active = true;
+            break;
+        }
+    }
+    spin_unlock_irqrestore(&vfs_lock, irq);
+}
+
+int enumerate_vfs_mounts(int index, char *out_line, size_t line_size) {
+    if (!out_line || line_size == 0) return 0;
+    out_line[0] = '\0';
+
+    uint64_t irq;
+    spin_lock_irqsave(&vfs_lock, &irq);
+
+    int count = 0;
+    int ret = 0;
+    for (int i = 0; i < MAX_MOUNTS; i++) {
+        if (!mounts[i].active) continue;
+        if (count != index) { count++; continue; }
+
+        // Build "<dev> <mountpoint> <fstype> rw 0 0".
+        // Device name is "none" for virtual filesystems; mountpoint and fstype
+        // come from the mount entry.  Assemble manually (no snprintf freestanding).
+        const char *dev = "none";
+        const char *mp  = mounts[i].path;
+        const char *ft  = mounts[i].filesystemtype;
+        size_t w = 0;
+        for (const char *s = dev; *s && w + 1 < line_size; ) out_line[w++] = *s++;
+        if (w + 1 < line_size) out_line[w++] = ' ';
+        for (const char *s = mp;  *s && w + 1 < line_size; ) out_line[w++] = *s++;
+        if (w + 1 < line_size) out_line[w++] = ' ';
+        for (const char *s = ft;  *s && w + 1 < line_size; ) out_line[w++] = *s++;
+        if (w + 3 < line_size) { out_line[w++] = ' '; out_line[w++] = 'r'; out_line[w++] = 'w'; }
+        if (w + 4 < line_size) { out_line[w++] = ' '; out_line[w++] = '0'; out_line[w++] = ' '; out_line[w++] = '0'; }
+        out_line[w] = '\0';
+        ret = (int)w;
+        break;
+    }
+
+    spin_unlock_irqrestore(&vfs_lock, irq);
+    return ret;
+}
+
+void check_signals(syscall_frame_t *frame) {
+    if (!current_task_ptr) return;
+    if (current_task_ptr->pending_signals == 0) return;
+
+    for (int i = 1; i < 32; i++) {
+        if (current_task_ptr->pending_signals & (1ULL << i)) {
+            uint64_t *sa = &current_task_ptr->sigactions[i * 4];
+            uint64_t handler = sa[0];
+            uint64_t flags = sa[1];
+            uint64_t restorer = sa[2];
+
+            if (handler == 0 ) {
+                // Default action depends on signal
+                if (i == SIGTSTP || i == SIGSTOP) {
+                    // Default action: stop the process
+                    current_task_ptr->state = TASK_STOPPED;
+                    current_task_ptr->stop_reported = 0;
+                    current_task_ptr->pending_signals &= ~(1ULL << i);
+                    // Notify parent so waitpid(WUNTRACED) wakes up
+                    for (int _j = 0; _j < MAX_TASKS; _j++) {
+                        if (tasks[_j].state != TASK_DEAD && tasks[_j].pid == current_task_ptr->ppid) {
+                            tasks[_j].pending_signals |= (1ULL << SIGCHLD);
+                            break;
+                        }
+                    }
+                    // Yield to scheduler
+                    __asm__ volatile("int $32");
+                    continue;
+                } else if (i == SIGCONT) {
+                    // Default action: continue (already running, just clear)
+                    current_task_ptr->pending_signals &= ~(1ULL << i);
+                    continue;
+                } else if (i == SIGCHLD) {
+                    // Default action: ignore
+                    current_task_ptr->pending_signals &= ~(1ULL << i);
+                    continue;
+                }
+                // Default action: terminate
+                current_task_ptr->pending_signals = 0;
+                exit_task(128 + i);
+            } else if (handler == 1 ) {
+                current_task_ptr->pending_signals &= ~(1ULL << i);
+                continue;
+            }
+
+            current_task_ptr->pending_signals &= ~(1ULL << i);
+
+            uint64_t user_rsp = frame->rsp - 128; // red zone
+            user_rsp -= sizeof(syscall_frame_t);
+            user_rsp &= ~15ULL;
+
+            write_vmm(current_task_ptr->ctx, user_rsp, frame, sizeof(syscall_frame_t));
+
+            frame->rcx = handler;
+            frame->rdi = i;
+
+            if (flags & 4 ) {
+                user_rsp -= 16; // siginfo_t is 12 bytes, align to 16
+                uint32_t sinfo[4] = {i, 0, 0, 0};
+                write_vmm(current_task_ptr->ctx, user_rsp, &sinfo, sizeof(sinfo));
+                frame->rsi = user_rsp; // siginfo_t*
+                frame->rdx = 0; // ucontext_t*
+            }
+
+            user_rsp -= 8;
+            write_vmm(current_task_ptr->ctx, user_rsp, &restorer, sizeof(uint64_t));
+            frame->rsp = user_rsp;
+
+            break;
+        }
+    }
+}
+
+void futex_check_timeouts(void) {
+    uint64_t now = time_get_realtime_us();
+
+    for (int i = 0; i < MAX_FUTEX_WAITERS; i++) {
+        if (futex_waiters[i].state != FW_WAITING) continue;
+
+        int idx = futex_waiters[i].task_idx;
+        if (idx < 0 || idx >= MAX_TASKS) continue;
+
+        if (futex_waiters[i].deadline_us != 0 &&
+            now >= futex_waiters[i].deadline_us) {
+            futex_waiters[i].state = FW_TIMED_OUT;
+            if (tasks[idx].state == TASK_STOPPED)
+                tasks[idx].state = TASK_READY;
+            continue;
+        }
+
+        if (tasks[idx].pending_signals && tasks[idx].state == TASK_STOPPED) {
+            futex_waiters[i].state = FW_WOKEN;
+            tasks[idx].state = TASK_READY;
+        }
+    }
+}
+
+void wake_clear_child_tid(task_t *task) {
+    if (task->clear_child_tid) {
+        int zero = 0;
+        write_vmm(task->ctx, (uint64_t)task->clear_child_tid, &zero, sizeof(int));
+        uint64_t phys = get_vmm_phys(task->ctx, (uint64_t)task->clear_child_tid);
+        if (phys) {
+            futex_wake(phys, 1, 0xFFFFFFFFU);
+        }
+    }
+}
+
 void sys_read(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     uint8_t *buf = (uint8_t *)frame->rsi;
@@ -922,6 +1145,26 @@ void sys_read(syscall_frame_t *frame) {
         }
         free(kbuf);
         frame->rax = (uint64_t)got;
+        return;
+    }
+
+    if (entry->type == FD_PROC) {
+        int self = proc_self_idx();
+        proc_node_t n;
+        if (!procfs_resolve(entry->path, self, &n)) { frame->rax = (uint64_t)-ENOENT; return; }
+        // Directories and symlinks have no readable byte stream.
+        if (procfs_is_dir(&n) || n.type == PROC_NODE_SYMLINK) {
+            frame->rax = 0;
+            return;
+        }
+        char tmp[PROCFS_MAX_CONTENT];
+        size_t len = procfs_content(&n, tmp);
+        if (entry->offset >= len) { frame->rax = 0; return; }
+        uint64_t avail = len - entry->offset;
+        uint64_t to_read = (count < avail) ? count : avail;
+        write_vmm(current_task_ptr->ctx, (uint64_t)buf, (uint8_t *)tmp + entry->offset, to_read);
+        entry->offset += to_read;
+        frame->rax = to_read;
         return;
     }
 
@@ -1115,6 +1358,12 @@ void sys_open(syscall_frame_t *frame) {
         return;
     }
 
+    // procfs: /proc, /proc/self, /proc/<pid>, /proc/<pid>/{maps,mounts,exe,...}
+    {
+        int pr = proc_open_common(abs_path, flags);
+        if (pr != 1) { frame->rax = (uint64_t)pr; return; }
+    }
+
     rootfs_file_t file = read_rootfs(abs_path);
 
     if (!file.mode && !(flags & O_CREAT)) { frame->rax = (uint64_t)-ENOENT; return; }
@@ -1159,6 +1408,11 @@ void sys_stat(syscall_frame_t *frame) {
         frame->rax = 0;
         return;
     }
+    if (stat_proc(abs_path, &kst)) {
+        write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
+        frame->rax = 0;
+        return;
+    }
 
     rootfs_file_t file = read_rootfs(abs_path);
     if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
@@ -1175,8 +1429,6 @@ void sys_stat(syscall_frame_t *frame) {
     frame->rax = 0;
 }
 
-// lstat(): like stat() but does NOT follow the final component, so a symlink
-// is reported as a symlink rather than its target.
 void sys_lstat(syscall_frame_t *frame) {
     const char *user_path = (const char *)frame->rdi;
     struct stat *st = (struct stat *)frame->rsi;
@@ -1193,6 +1445,11 @@ void sys_lstat(syscall_frame_t *frame) {
 
     struct stat kst = {0};
     if (stat_virtual_device(abs_path, &kst)) {
+        write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
+        frame->rax = 0;
+        return;
+    }
+    if (stat_proc(abs_path, &kst)) {
         write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
         frame->rax = 0;
         return;
@@ -1257,6 +1514,14 @@ void sys_fstat(syscall_frame_t *frame) {
         frame->rax = 0;
         return;
     }
+    if (entry->type == FD_PROC) {
+        struct stat kst = {0};
+        if (stat_proc(entry->path, &kst)) {
+            write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
+            frame->rax = 0;
+            return;
+        }
+    }
     frame->rax = (uint64_t)-EBADF;
 }
 
@@ -1279,6 +1544,11 @@ void sys_fstatat(syscall_frame_t *frame) {
 
     struct stat kst = {0};
     if (stat_virtual_device(abs_path, &kst)) {
+        write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
+        frame->rax = 0;
+        return;
+    }
+    if (stat_proc(abs_path, &kst)) {
         write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
         frame->rax = 0;
         return;
@@ -1313,6 +1583,24 @@ void sys_lseek(syscall_frame_t *frame) {
     if (!entry || !entry->open) { frame->rax = -EBADF; return; }
     if (entry->type == FD_STREAM || entry->type == FD_PIPE || entry->type == FD_SOCKET) { frame->rax = -ESPIPE; return; }
 
+    // Compute the file size for SEEK_END.  Proc files have no rootfs backing.
+    int64_t file_size = -1;
+    if (entry->type == FD_PROC) {
+        int self = proc_self_idx();
+        proc_node_t n;
+        if (procfs_resolve(entry->path, self, &n) && !procfs_is_dir(&n) &&
+            n.type != PROC_NODE_SYMLINK) {
+            char tmp[PROCFS_MAX_CONTENT];
+            file_size = (int64_t)procfs_content(&n, tmp);
+        } else {
+            file_size = 0;  // dirs and symlinks: SEEK_END lands at 0
+        }
+    } else {
+        rootfs_file_t file = read_rootfs(entry->path);
+        if (!file.data) { frame->rax = -ENOENT; return; }
+        file_size = (int64_t)file.size;
+    }
+
     switch (whence) {
         case 0: // SEEK_SET
             // Reject negative absolute positions
@@ -1329,9 +1617,7 @@ void sys_lseek(syscall_frame_t *frame) {
             break;
         }
         case 2: { // SEEK_END
-            rootfs_file_t file = read_rootfs(entry->path);
-            if (!file.data) { frame->rax = -ENOENT; return; }
-            int64_t new_off = (int64_t)file.size + offset;
+            int64_t new_off = file_size + offset;
             if (new_off < 0) { frame->rax = -EINVAL; return; }
             entry->offset = (uint64_t)new_off;
             break;
@@ -1391,6 +1677,29 @@ void sys_mmap(syscall_frame_t *frame) {
         frame->rax = (uint64_t)-ENOMEM; return;
     }
 
+    // Record the VMA so /proc/<pid>/maps can describe this mapping.
+    {
+        int vprot = 0;
+        if (prot & PROT_READ)  vprot |= VMA_PROT_READ;
+        if (prot & PROT_WRITE) vprot |= VMA_PROT_WRITE;
+        if (prot & PROT_EXEC)  vprot |= VMA_PROT_EXEC;
+        int vflags = 0;
+        if (flags & MAP_ANONYMOUS) vflags |= VMA_FLAG_ANON;
+        if (flags & MAP_SHARED)    vflags |= VMA_FLAG_SHARED;
+        const char *name = NULL;
+        char namebuf[256];
+        if (!(flags & MAP_ANONYMOUS) && fd >= 0) {
+            fd_entry_t *mentry = get_current_fd(fd);
+            if (mentry) {
+                strncpy(namebuf, mentry->path, sizeof(namebuf) - 1);
+                namebuf[sizeof(namebuf) - 1] = '\0';
+                name = namebuf;
+            }
+        }
+        vma_add(&current_task_ptr->vmas, (uint64_t)ptr,
+                (uint64_t)ptr + num_pages * PAGE_SIZE, vprot, vflags, offset, name);
+    }
+
     // File-backed mapping: copy data if not anonymous
     if (!(flags & MAP_ANONYMOUS) && fd >= 0) {
         fd_entry_t *entry = get_current_fd(fd);
@@ -1443,6 +1752,15 @@ void sys_mprotect(syscall_frame_t *frame) {
         map_vmm(current_task_ptr->ctx, a, phys, vmm_flags);
     }
 
+    // Reflect the protection change in the VMA table.
+    {
+        int vprot = 0;
+        if (prot & PROT_READ)  vprot |= VMA_PROT_READ;
+        if (prot & PROT_WRITE) vprot |= VMA_PROT_WRITE;
+        if (prot & PROT_EXEC)  vprot |= VMA_PROT_EXEC;
+        vma_protect(&current_task_ptr->vmas, start, end, vprot);
+    }
+
     frame->rax = 0;
 }
 
@@ -1460,6 +1778,9 @@ void sys_munmap(syscall_frame_t *frame) {
     for (uint64_t a = start; a < end; a += PAGE_SIZE) {
         unmap_vmm(current_task_ptr->ctx, a);
     }
+
+    // Drop the now-unmapped range from the VMA table.
+    vma_remove(&current_task_ptr->vmas, start, end);
 
     frame->rax = 0;
 }
@@ -1512,6 +1833,8 @@ void sys_brk(syscall_frame_t *frame) {
     }
 
     current_task_ptr->brk = addr;
+    // Keep the [heap] VMA in sync with the break so /proc/<pid>/maps is accurate.
+    vma_set_heap(&current_task_ptr->vmas, current_task_ptr->brk_start, current_task_ptr->brk);
     frame->rax = current_task_ptr->brk;
 }
 
@@ -2688,133 +3011,6 @@ retry:;
     frame->rax = 0;
 }
 
-// Helper: emit one getdents64 record into the userspace buffer.
-// Returns the record size written, or 0 if it wouldn't fit.
-static uint16_t emit_dirent64(uint64_t bufp, uint64_t *written, uint64_t buflen,
-                               uint64_t ino, uint64_t off, uint8_t type, const char *name) {
-    size_t namelen = strlen(name);
-    uint16_t reclen = DIRENT64_ALIGN(DIRENT64_HEADER_SIZE + namelen + 1);
-    if (*written + reclen > buflen) return 0;
-
-    // Build the record in a stack buffer (max ~270 bytes — safe).
-    uint8_t rec[512];
-    __builtin_memset(rec, 0, sizeof(rec));
-    __builtin_memcpy(rec, &ino, 8);
-    __builtin_memcpy(rec + 8, &off, 8);
-    __builtin_memcpy(rec + 16, &reclen, 2);
-    rec[18] = type;
-    __builtin_memcpy(rec + DIRENT64_HEADER_SIZE, name, namelen);
-    // null terminator and padding already zeroed
-
-    write_vmm(current_task_ptr->ctx, bufp + *written, rec, reclen);
-    *written += reclen;
-    return reclen;
-}
-
-// Helper: emit one getdents (old format) record into the userspace buffer.
-// Layout: d_ino(8) d_off(8) d_reclen(2) d_name[] padding d_type(1)
-static uint16_t emit_dirent(uint64_t bufp, uint64_t *written, uint64_t buflen,
-                              uint64_t ino, uint64_t off, uint8_t type, const char *name) {
-    size_t namelen = strlen(name);
-    // d_type is the last byte of the record; total = 19 + namelen + 1, aligned to 8
-    uint16_t raw = (uint16_t)(19 + namelen + 1);
-    uint16_t reclen = DIRENT64_ALIGN(raw);
-    if (*written + reclen > buflen) return 0;
-
-    uint8_t rec[512];
-    __builtin_memset(rec, 0, sizeof(rec));
-    __builtin_memcpy(rec, &ino, 8);
-    __builtin_memcpy(rec + 8, &off, 8);
-    __builtin_memcpy(rec + 16, &reclen, 2);
-    __builtin_memcpy(rec + 19, name, namelen);
-    rec[reclen - 1] = type;  // d_type is the very last byte
-
-    write_vmm(current_task_ptr->ctx, bufp + *written, rec, reclen);
-    *written += reclen;
-    return reclen;
-}
-
-// Resolve the directory path stored in an fd entry, following symlinks so that
-// listing through a symlinked directory (e.g. /bin -> usr/bin) enumerates the
-// target's children. Writes the canonical absolute path into `prefix_out`
-// (and optionally a second copy into `abs_out`); next_rootfs_child expects an
-// absolute path like "/usr" and builds its own "/usr/" filter prefix from it.
-static void resolve_dir_for_readdir(const char *fd_path, char *prefix_out, size_t prefix_size, char *abs_out, size_t abs_size) {
-    // Follow symlinks by reading through read_rootfs and tracing the chain.
-    char resolved[256];
-    strncpy(resolved, fd_path, sizeof(resolved) - 1);
-    resolved[sizeof(resolved) - 1] = '\0';
-
-    for (int depth = 0; depth < 8; depth++) {
-        rootfs_file_t file = stat_rootfs_nofollow(resolved);
-        if (!file.mode) break; // doesn't exist at all
-        if ((file.mode & 0xF000) != 0xA000) break; // not a symlink, done
-
-        // Resolve symlink target relative to the symlink's parent directory
-        const char *target = (const char *)file.data;
-        if (!target) break;
-
-        char link_abs[256];
-        resolve_link_target(resolved, target, link_abs, sizeof(link_abs));
-        strncpy(resolved, link_abs, sizeof(resolved) - 1);
-        resolved[sizeof(resolved) - 1] = '\0';
-
-        // Normalize the resolved path
-        normalize_path_str(resolved);
-    }
-
-    // Hand back the absolute path (next_rootfs_child builds its own prefix).
-    if (abs_out) {
-        strncpy(abs_out, resolved, abs_size - 1);
-        abs_out[abs_size - 1] = '\0';
-    }
-    strncpy(prefix_out, resolved, prefix_size - 1);
-    prefix_out[prefix_size - 1] = '\0';
-}
-
-static int next_rootfs_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size, uint8_t *child_type) {
-    char prefix[258];
-    strncpy(prefix, dir_norm, sizeof(prefix) - 2);
-    prefix[sizeof(prefix) - 2] = '\0';
-    if (strcmp(dir_norm, "/") != 0) strcat(prefix, "/");
-    size_t prefix_len = strlen(prefix);
-
-    for (;;) {
-        directory_entry_t de;
-        if (get_rootfs_entry(*index, &de) != 0) return 1;
-
-        const char *name = de.name;
-        if (name[0] == '.' && name[1] == '/') name += 2;
-
-        char name_clean[256];
-        strncpy(name_clean, name, sizeof(name_clean) - 1);
-        name_clean[sizeof(name_clean) - 1] = '\0';
-        size_t nlen = strlen(name_clean);
-        if (nlen > 1 && name_clean[nlen - 1] == '/') name_clean[--nlen] = '\0';
-
-        char abs_entry[256];
-        abs_entry[0] = '/';
-        strncpy(abs_entry + 1, name_clean, sizeof(abs_entry) - 2);
-        abs_entry[sizeof(abs_entry) - 1] = '\0';
-
-        if (strncmp(abs_entry, prefix, prefix_len) != 0) { (*index)++; continue; }
-
-        const char *child = abs_entry + prefix_len;
-        if (!*child || strchr(child, '/')) { (*index)++; continue; }
-
-        // "." and ".." are virtual entries we synthesize in getdents; a tar
-        // entry for the directory itself (e.g. "./") collapses to "." here and
-        // must not be emitted as a real child.
-        if (strcmp(child, ".") == 0 || strcmp(child, "..") == 0) { (*index)++; continue; }
-
-        strncpy(child_name, child, child_name_size - 1);
-        child_name[child_name_size - 1] = '\0';
-        *child_type = (de.type == FT_DIRECTORY) ? DT_DIR :
-                      (de.type == FT_SYMLINK) ? DT_LNK : DT_REG;
-        return 0;
-    }
-}
-
 void sys_getdents(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     uint64_t bufp = frame->rsi;
@@ -2897,6 +3093,38 @@ void sys_getdents(syscall_frame_t *frame) {
             if (!emit_dirent(bufp, &written, buflen, (uint64_t)(index + 1), (uint64_t)(index + 1), DT_DIR, sub_name)) break;
             sub_idx++;
             index++;
+            entry->offset = index;
+        }
+        frame->rax = written;
+        return;
+    }
+
+    // procfs directory enumeration: /proc, /proc/<pid>, /proc/<pid>/fd
+    if (entry->type == FD_PROC || procfs_is_proc_path(resolved_path)) {
+        int self = proc_self_idx();
+        proc_node_t n;
+        if (!procfs_resolve(resolved_path, self, &n) || !procfs_is_dir(&n)) {
+            frame->rax = (uint64_t)-ENOTDIR;
+            return;
+        }
+        if (index == 0) {
+            if (!emit_dirent(bufp, &written, buflen, 1, 1, DT_DIR, ".")) { frame->rax = written; return; }
+            index = 1;
+            entry->offset = index;
+        }
+        if (index == 1) {
+            if (!emit_dirent(bufp, &written, buflen, 2, 2, DT_DIR, "..")) { frame->rax = written; return; }
+            index = 2;
+            entry->offset = index;
+        }
+        int child_index = index - 2;
+        while (1) {
+            char child[64];
+            uint8_t child_type = DT_REG;
+            if (!procfs_get_dirent(&n, self, child_index, child, sizeof(child), &child_type)) break;
+            if (!emit_dirent(bufp, &written, buflen, (uint64_t)(child_index + 1), (uint64_t)(child_index + 1), child_type, child)) break;
+            child_index++;
+            index = child_index + 2;
             entry->offset = index;
         }
         frame->rax = written;
@@ -3011,6 +3239,38 @@ void sys_getdents64(syscall_frame_t *frame) {
             if (!emit_dirent64(bufp, &written, buflen, (uint64_t)(index + 1), (uint64_t)(index + 1), DT_DIR, sub_name)) break;
             sub_idx++;
             index++;
+            entry->offset = index;
+        }
+        frame->rax = written;
+        return;
+    }
+
+    // procfs directory enumeration: /proc, /proc/<pid>, /proc/<pid>/fd
+    if (entry->type == FD_PROC || procfs_is_proc_path(resolved_path)) {
+        int self = proc_self_idx();
+        proc_node_t n;
+        if (!procfs_resolve(resolved_path, self, &n) || !procfs_is_dir(&n)) {
+            frame->rax = (uint64_t)-ENOTDIR;
+            return;
+        }
+        if (index == 0) {
+            if (!emit_dirent64(bufp, &written, buflen, 1, 1, DT_DIR, ".")) { frame->rax = written; return; }
+            index = 1;
+            entry->offset = index;
+        }
+        if (index == 1) {
+            if (!emit_dirent64(bufp, &written, buflen, 2, 2, DT_DIR, "..")) { frame->rax = written; return; }
+            index = 2;
+            entry->offset = index;
+        }
+        int child_index = index - 2;
+        while (1) {
+            char child[64];
+            uint8_t child_type = DT_REG;
+            if (!procfs_get_dirent(&n, self, child_index, child, sizeof(child), &child_type)) break;
+            if (!emit_dirent64(bufp, &written, buflen, (uint64_t)(child_index + 1), (uint64_t)(child_index + 1), child_type, child)) break;
+            child_index++;
+            index = child_index + 2;
             entry->offset = index;
         }
         frame->rax = written;
@@ -3219,6 +3479,25 @@ void sys_readlink(syscall_frame_t *frame) {
 
     char abs_path[256];
     build_abs_path(path, abs_path, sizeof(abs_path));
+
+    // procfs symlinks: /proc/<pid>/exe, /proc/<pid>/cwd, /proc/<pid>/fd/<n>
+    if (procfs_is_proc_path(abs_path)) {
+        int self = proc_self_idx();
+        proc_node_t n;
+        if (!procfs_resolve(abs_path, self, &n)) { frame->rax = (uint64_t)-ENOENT; return; }
+        if (n.type != PROC_NODE_SYMLINK) {
+            frame->rax = (uint64_t)-EINVAL;  // not a symlink
+            return;
+        }
+        char target[256];
+        int tlen = procfs_readlink(&n, self, target, sizeof(target));
+        if (tlen < 0) { frame->rax = (uint64_t)-EINVAL; return; }
+        size_t ulen = (size_t)tlen;
+        if (ulen > bufsiz) ulen = bufsiz;
+        write_vmm(current_task_ptr->ctx, (uint64_t)buf, target, ulen);
+        frame->rax = (uint64_t)ulen;
+        return;
+    }
 
     // Must inspect the symlink itself, not its target.
     rootfs_file_t file = stat_rootfs_nofollow(abs_path);
@@ -3641,6 +3920,18 @@ void sys_mount(syscall_frame_t *frame) {
 
     uint64_t irq;
     spin_lock_irqsave(&vfs_lock, &irq);
+    // Dedup: an identical (path, fstype) already registered (e.g. /proc was
+    // pre-registered at boot and init mounts it again) is a no-op success,
+    // not a duplicate row.
+    for (int i = 0; i < MAX_MOUNTS; i++) {
+        if (mounts[i].active &&
+            strcmp(mounts[i].path, target_buf) == 0 &&
+            strcmp(mounts[i].filesystemtype, fstype_buf) == 0) {
+            spin_unlock_irqrestore(&vfs_lock, irq);
+            frame->rax = 0;
+            return;
+        }
+    }
     for (int i = 0; i < MAX_MOUNTS; i++) {
         if (!mounts[i].active) {
             strncpy(mounts[i].path, target_buf, 63); mounts[i].path[63] = '\0';
@@ -3817,6 +4108,12 @@ void sys_openat(syscall_frame_t *frame) {
             release_pty_slave(pty_idx);
         frame->rax = (uint64_t)fd;
         return;
+    }
+
+    // procfs: /proc, /proc/self, /proc/<pid>, /proc/<pid>/{maps,mounts,exe,...}
+    {
+        int pr = proc_open_common(abs_path, flags);
+        if (pr != 1) { frame->rax = (uint64_t)pr; return; }
     }
 
     rootfs_file_t file = read_rootfs(abs_path);
@@ -4336,15 +4633,4 @@ void sys_set_tid_address(syscall_frame_t *frame) {
     int *tidptr = (int *)frame->rdi;
     current_task_ptr->clear_child_tid = tidptr;
     frame->rax = current_task_ptr->pid;
-}
-
-void wake_clear_child_tid(task_t *task) {
-    if (task->clear_child_tid) {
-        int zero = 0;
-        write_vmm(task->ctx, (uint64_t)task->clear_child_tid, &zero, sizeof(int));
-        uint64_t phys = get_vmm_phys(task->ctx, (uint64_t)task->clear_child_tid);
-        if (phys) {
-            futex_wake(phys, 1, 0xFFFFFFFFU);
-        }
-    }
 }

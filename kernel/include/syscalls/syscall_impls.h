@@ -1,8 +1,9 @@
 #pragma once
 
-#include <syscalls/syscalls.h>
 #include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
+#include <main/scheduler.h>
+#include <syscalls/syscalls.h>
 
 // Actual implementations
 void sys_read(syscall_frame_t *frame);
@@ -101,12 +102,12 @@ void sys_getsockopt(syscall_frame_t *frame);
 void sys_setsockopt(syscall_frame_t *frame);
 void sys_getrandom(syscall_frame_t *frame);
 
-#include <main/scheduler.h>
-void wake_clear_child_tid(task_t *task);
-
 // Some public helpers
+void wake_clear_child_tid(task_t *task);
 int copy_from_user(void *kdest, const void *usrc, size_t size);
 int copy_to_user(const void *udest, const void *ksrc, size_t size);
 bool is_mounted_under(const char* path, const char* fstype, char* relative_out);
+void register_vfs_mount(const char *path, const char *fstype);
+int enumerate_vfs_mounts(int index, char *out_line, size_t line_size);
 void check_signals(syscall_frame_t *frame);
 void futex_check_timeouts(void);

@@ -3,6 +3,7 @@
 #include <io/devtmpfs.h>
 #include <freestanding/errno.h>
 #include <main/string.h>
+#include <mm/vma.h>
 #include <io/terminal.h>
 #include <mm/mm.h>
 #include <mm/pmm.h>
@@ -110,7 +111,8 @@ static uint64_t setup_stack(vmm_context_t *ctx, uint64_t v_rsp, char **argv, cha
 
 static int load_elf_segments(vmm_context_t *ctx, uint8_t *data,
                               elf64_ehdr_t *ehdr, uint64_t base_addr,
-                              elf64_dyn_t **dynamic_out) {
+                              elf64_dyn_t **dynamic_out, vma_table_t *vmas,
+                              const char *name) {
     elf64_phdr_t *phdrs = (elf64_phdr_t *)(data + ehdr->phoff);
 
     for (int i = 0; i < ehdr->phnum; i++) {
@@ -156,6 +158,14 @@ static int load_elf_segments(vmm_context_t *ctx, uint8_t *data,
                 if (phys) map_vmm(ctx, a, phys, final_flags);
             }
 
+            // Record this PT_LOAD segment as a VMA for /proc/<pid>/maps.
+            if (vmas) {
+                int vprot = VMA_PROT_READ;  // PT_LOAD is always readable
+                if (ph->flags & PF_W) vprot |= VMA_PROT_WRITE;
+                if (ph->flags & PF_X) vprot |= VMA_PROT_EXEC;
+                vma_add(vmas, page_start, page_end, vprot, 0, ph->offset, name);
+            }
+
         } else if (ph->type == PT_DYNAMIC && dynamic_out) {
             *dynamic_out = (elf64_dyn_t *)(base_addr + ph->vaddr);
         }
@@ -192,7 +202,12 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
         }
     }
 
-    load_elf_segments(ctx, data, ehdr, base_addr, NULL);
+    // Record VMAs as we load segments; the task doesn't exist yet, so we
+    // accumulate into a local table and splice it into tasks[pid] below.
+    vma_table_t local_vmas;
+    vma_init(&local_vmas);
+
+    load_elf_segments(ctx, data, ehdr, base_addr, NULL, &local_vmas, path);
 
     uint64_t phdr_addr = 0;
     for (int i = 0; i < ehdr->phnum; i++) {
@@ -212,7 +227,7 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
             elf64_ehdr_t *iehdr = (elf64_ehdr_t *)idata;
             // ASLR: randomize interpreter base
             interp_base = (iehdr->type == ET_DYN) ? (0x5000000000ULL + aslr_random_offset(0x40000)) : 0;
-            load_elf_segments(ctx, idata, iehdr, interp_base, NULL);
+            load_elf_segments(ctx, idata, iehdr, interp_base, NULL, &local_vmas, interp_path);
             entry = iehdr->entry + interp_base;
         }
     }
@@ -231,6 +246,8 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
     uint64_t stack_vaddr = USER_STACK_BASE - USER_STACK_SIZE;
     void *stack = vmap_user_at(ctx, stack_vaddr, USER_STACK_SIZE, VMM_USER | VMM_WRITABLE | VMM_NX);
     if (!stack) return -ENOMEM;
+    vma_add(&local_vmas, stack_vaddr, stack_vaddr + USER_STACK_SIZE,
+            VMA_PROT_READ | VMA_PROT_WRITE, VMA_FLAG_ANON | VMA_FLAG_STACK, 0, "[stack]");
 
     char *empty_envp[] = { NULL };
     char **actual_envp = envp ? envp : empty_envp;
@@ -252,6 +269,10 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
         tasks[pid].stack_base = stack;
         tasks[pid].brk = heap_start;
         tasks[pid].brk_start = heap_start;
+        strncpy(tasks[pid].exe, path, sizeof(tasks[pid].exe) - 1);
+        tasks[pid].exe[sizeof(tasks[pid].exe) - 1] = '\0';
+        // Hand off the VMA table we accumulated during loading.
+        memcpy(&tasks[pid].vmas, &local_vmas, sizeof(vma_table_t));
     }
 
     return pid;
@@ -288,7 +309,12 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
         }
     }
 
-    load_elf_segments(ctx, data, ehdr, base_addr, NULL);
+    // On exec, the old address space is replaced; reset the VMA table and
+    // repopulate it as we load the new image.
+    vma_table_t local_vmas;
+    vma_init(&local_vmas);
+
+    load_elf_segments(ctx, data, ehdr, base_addr, NULL, &local_vmas, path);
 
     uint64_t phdr_addr = 0;
     for (int i = 0; i < ehdr->phnum; i++) {
@@ -308,7 +334,7 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
             elf64_ehdr_t *iehdr = (elf64_ehdr_t *)idata;
             // ASLR: randomize interpreter base
             interp_base = (iehdr->type == ET_DYN) ? (0x5000000000ULL + aslr_random_offset(0x40000)) : 0;
-            load_elf_segments(ctx, idata, iehdr, interp_base, NULL);
+            load_elf_segments(ctx, idata, iehdr, interp_base, NULL, &local_vmas, interp_path);
             entry = iehdr->entry + interp_base;
         }
     }
@@ -327,6 +353,8 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     uint64_t stack_vaddr = USER_STACK_BASE - USER_STACK_SIZE;
     void *stack = vmap_user_at(ctx, stack_vaddr, USER_STACK_SIZE, VMM_USER | VMM_WRITABLE | VMM_NX);
     if (!stack) return -ENOMEM;
+    vma_add(&local_vmas, stack_vaddr, stack_vaddr + USER_STACK_SIZE,
+            VMA_PROT_READ | VMA_PROT_WRITE, VMA_FLAG_ANON | VMA_FLAG_STACK, 0, "[stack]");
 
     char *empty_envp[] = { NULL };
     char **actual_envp = (envp) ? envp : empty_envp;
@@ -344,6 +372,11 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     heap_start = (heap_start + 0xFFF) & ~0xFFFULL; // page align
     current_task_ptr->brk = heap_start;
     current_task_ptr->brk_start = heap_start;
+
+    // Record the new exe path and splice in the freshly-built VMA table.
+    strncpy(current_task_ptr->exe, path, sizeof(current_task_ptr->exe) - 1);
+    current_task_ptr->exe[sizeof(current_task_ptr->exe) - 1] = '\0';
+    memcpy(&current_task_ptr->vmas, &local_vmas, sizeof(vma_table_t));
 
     current_task_ptr->ctx = ctx;
     current_task_ptr->stack_base = stack;

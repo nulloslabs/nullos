@@ -7,6 +7,7 @@
 #include <main/fd.h>
 #include <main/spinlocks.h>
 #include <mm/vmm.h>
+#include <mm/vma.h>
 #include <syscalls/syscalls.h>
 
 #define MAX_TASKS 64
@@ -34,6 +35,8 @@ typedef struct {
     gid_t egid;
     fd_table_t fd_table;
     char cwd[256];
+    char exe[256];          // path of the executable backing this task (for /proc/<pid>/exe)
+    vma_table_t vmas;       // tracked virtual memory areas (for /proc/<pid>/maps)
     int exit_status;
     int term_sig;              // signal that terminated us (0 = normal exit)
     uint64_t fs_base;

@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#define LOG_ERROR(x) perror("init: #x failed")
+
 static void print_usage(void) {
     printf("Usage for init:\n");
     printf("  init [OPTIONS]\n\n");
@@ -20,9 +22,10 @@ int main(int argc, char **argv, char **envp) {
     }
 
     printf("\033[2J\033[H");
-    if (mount("devtmpfs", "/dev", "devtmpfs", 0, NULL) < 0) { perror("init: mount(/dev) failed"); return 1; }
-    mkdir("/dev/pts", 0755);
-    if (mount("devpts", "/dev/pts", "devpts", 0, NULL) < 0) { perror("init: mount(/dev/pts) failed"); return 1; }
+    if (mount("devtmpfs", "/dev", "devtmpfs", 0, NULL) < 0) { LOG_ERROR("mount(\"/dev\")"); return 1; }
+    if (mkdir("/dev/pts", 0755) < 0) { LOG_ERROR("mkdir(\"/dev/pts\")"); return 1; }
+    if (mount("devpts", "/dev/pts", "devpts", 0, NULL) < 0) { LOG_ERROR("mount(\"/dev/pts\")");; return 1; }
+    if (mount("proc", "/proc", "proc", 0, NULL) < 0) { LOG_ERROR("mount(\"/proc\")");; return 1; }
 
     static char *login_argv[] = { "/usr/bin/login", NULL };
     static char *login_envp[] = { NULL };

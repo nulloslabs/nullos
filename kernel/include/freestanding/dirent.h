@@ -1,6 +1,6 @@
 #pragma once
 
-#include <freestanding/stddef.h>
+#include <freestanding/stdint.h>
 
 #define DT_UNKNOWN 0
 #define DT_FIFO    1

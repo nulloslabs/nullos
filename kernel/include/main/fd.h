@@ -16,6 +16,7 @@ typedef enum {
     FD_PTY_MASTER = 4,  // open pty master (path encodes index as "ptm:N")
     FD_PIPE = 5,
     FD_SOCKET = 6,
+    FD_PROC = 7,        // /proc node (regular file: maps, mounts; offset-tracked)
 } fd_type_t;
 
 typedef struct {
