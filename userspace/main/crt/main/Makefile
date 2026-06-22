@@ -26,6 +26,10 @@ all: $(OBJ)
 ../../../%.o: %.S
 	@printf "  %-7s %s\n" "AS" "userspace/$(@F)"
 	@$(AS) $(AFLAGS) -fno-stack-protector -MF $*.d -c $< -o $@
+ifeq ($(DEBUG),0)
+	@printf "  %-7s %s\n" "STRIP" "userspace/$(@F)"
+	@$(STRIP) $(STRIPFLAGS) --strip-debug $@
+endif
 
 clean:
 	@rm -f ../../../crt*.o ../../../Scrt*.o *.d

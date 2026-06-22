@@ -20,6 +20,10 @@ tools:
 		(cd limine && $(CC) $(CFLAGS) -c limine.c -o limine.o) && \
 		printf "  %-7s %s\n" "LD" "$(SUBDIR)/limine/limine" && \
 		(cd limine && $(LD) $(LDFLAGS) limine.o -o limine); \
+		if [ "$(DEBUG)" -eq 0 ]; then \
+			printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/limine/limine" && \
+			(cd limine && $(STRIP) $(STRIPFLAGS) limine); \
+		fi; \
 	else \
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/limine/ is already up to date"; \
 	fi

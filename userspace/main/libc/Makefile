@@ -29,14 +29,18 @@ libc: $(SUBDIRS)
 	if [ $$needs_build_so -eq 1 ]; then \
 		printf "  %-7s %s\n" "LD" "$(SUBDIR)/libc.so" && \
 		$(LD) $(LDFLAGS) -shared $$OBJ -o ../../libc.so -Wl,-soname,libc.so && \
-		printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/libc.so" && \
-		$(STRIP) $(STRIPFLAGS) ../../libc.so; \
+		if [ "$(DEBUG)" -eq 0 ]; then \
+			printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/libc.so" && \
+			$(STRIP) $(STRIPFLAGS) ../../libc.so; \
+		fi; \
 	fi; \
 	if [ $$needs_build_a -eq 1 ]; then \
 		printf "  %-7s %s\n" "AR" "$(SUBDIR)/libc.a" && \
 		$(AR) $(ARFLAGS) rcs ../../libc.a $$OBJ && \
-		printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/libc.a" && \
-		$(STRIP) $(STRIPFLAGS) --strip-debug ../../libc.a; \
+		if [ "$(DEBUG)" -eq 0 ]; then \
+			printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/libc.a" && \
+			$(STRIP) $(STRIPFLAGS) --strip-debug ../../libc.a; \
+		fi; \
 	fi; \
 	if [ $$needs_build_so -eq 0 ] && [ $$needs_build_a -eq 0 ]; then \
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/libc.so $(SUBDIR)/libc.a are already up to date"; \

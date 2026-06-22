@@ -42,8 +42,10 @@ kernel: config.mk linker.ld Makefile $(SUBDIRS)
 	if [ $$needs_link -eq 1 ]; then \
 		printf "  %-7s %s\n" "LD" "$(KERNELFILE)"; \
 		$(LD) $(LDFLAGS) -o $(KERNELFILE) $(OBJ); \
-		printf "  %-7s %s\n" "STRIP" "$(KERNELFILE)"; \
-		$(STRIP) $(STRIPFLAGS) $(KERNELFILE); \
+		if [ "$(DEBUG)" -eq 0 ]; then \
+			printf "  %-7s %s\n" "STRIP" "$(KERNELFILE)"; \
+			$(STRIP) $(STRIPFLAGS) $(KERNELFILE); \
+		fi; \
 	else \
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/$(KERNELFILE) is already up to date"; \
 	fi

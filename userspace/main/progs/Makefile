@@ -35,8 +35,10 @@ define PROG_rule
 ../../$(1): main/$(1).o ../../Scrt1.o ../../crti.o ../../crtn.o ../../libc.so ../../libc.a ../../ld.so Makefile ../../config.mk
 	@printf "  %-7s %s\n" "LD" "$(SUBDIR)/$(1)"
 	$(LD) $(LDFLAGS) ../../Scrt1.o ../../crti.o main/$(1).o ../../crtn.o -o $$@ -L../.. -Wl,--dynamic-linker=/usr/lib/ld.so -l:libc.so
+ifeq ($(DEBUG),0)
 	@printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/$(1)"
 	$(STRIP) $(STRIPFLAGS) $$@
+endif
 endef
 $(foreach p,$(PROGS),$(eval $(call PROG_rule,$(p))))
 
