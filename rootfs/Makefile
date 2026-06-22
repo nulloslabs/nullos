@@ -16,7 +16,6 @@ all: rootfs
 rootfs:
 	@$(MAKE) -C ../userspace
 	@if [ ! -f rootfs.tar.gz ] || [ ! -d main ] || [ Makefile -nt rootfs.tar.gz ] || [ config.mk -nt rootfs.tar.gz ] || $(foreach dep,$(DEP),[ $(dep) -nt rootfs.tar.gz ] ||) false; then \
-		printf "  %-7s %s\n" "TAR" "$(SUBDIR)/rootfs.tar.gz" && \
 		# Create folders && \
 			mkdir -p main/dev main/proc main/etc main/usr/bin main/usr/sbin main/usr/lib main/usr/include && \
 			ln -snf usr/bin main/bin && \
@@ -36,6 +35,7 @@ rootfs:
 		chmod 644 main/etc/passwd main/etc/group && \
 		chmod 600 main/etc/shadow && \
 		printf "Welcome to NullOS!\\n\\nAn OS that's fast, secure and private.\\n" > main/etc/motd && \
+		printf "  %-7s %s\n" "TAR" "$(SUBDIR)/rootfs.tar.gz" && \
 		$(TAR) $(TARFLAGS) -f rootfs.tar.gz -C main .; \
 	else \
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/rootfs.tar.gz is already up to date"; \

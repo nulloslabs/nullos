@@ -24,9 +24,11 @@ tools:
 iso:
 	@$(MAKE) -C iso
 
-run:
-	@printf "  %-7s %s\n" "RUN" "$(ISOFILE)"
+qemu:
+	@printf "  %-7s %s\n" "QEMU" "$(ISOFILE)"
 	@$(QEMU) $(QEMUFLAGS) -cdrom $(ISOFILE)
+
+run: qemu
 
 clean:
 	@$(MAKE) -C kernel clean
@@ -42,4 +44,4 @@ mrproper:
 	@$(MAKE) -C iso mrproper
 	@$(MAKE) -C userspace mrproper
 
-.PHONY: all tools kernel rootfs userspace iso run clean mrproper
+.PHONY: all tools kernel rootfs userspace iso qemu run clean mrproper
