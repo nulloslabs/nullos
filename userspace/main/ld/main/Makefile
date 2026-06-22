@@ -18,11 +18,11 @@ DEP = $(OBJ:.o=.d)
 
 all: $(OBJ)
 
-%.o: %.c ../../../config.mk
+%.o: %.c Makefile ../../../config.mk
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/main/ld/main/$@"
 	@$(CC) $(CFLAGS) -fno-stack-protector -c $< -o $@
 
-%.o: %.S ../../../config.mk
+%.o: %.S Makefile ../../../config.mk
 	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/main/ld/main/$@"
 	@$(AS) $(AFLAGS) -fno-stack-protector -c $< -o $@
 

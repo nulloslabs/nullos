@@ -19,11 +19,11 @@ DEP = $(filter %.c,$(SRC):.c=.d)
 
 all: $(OBJ)
 
-../../../%.o: %.c
+../../../%.o: %.c Makefile ../../../config.mk
 	@printf "  %-7s %s\n" "CC" "userspace/$(@F)"
 	@$(CC) $(CFLAGS) -fno-stack-protector -MF $*.d -c $< -o $@
 
-../../../%.o: %.S
+../../../%.o: %.S Makefile ../../../config.mk
 	@printf "  %-7s %s\n" "AS" "userspace/$(@F)"
 	@$(AS) $(AFLAGS) -fno-stack-protector -MF $*.d -c $< -o $@
 ifeq ($(DEBUG),0)

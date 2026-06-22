@@ -32,7 +32,7 @@ limine_header: Makefile config.mk
 $(SUBDIRS): config.mk Makefile limine_header
 	@$(MAKE) -C $@
 
-kernel: config.mk linker.ld Makefile $(SUBDIRS)
+kernel: linker.ld config.mk Makefile $(SUBDIRS)
 	@needs_link=0; \
 	for obj in $(OBJ); do \
 		if [ ! -f "$(KERNELFILE)" ] || [ "config.mk" -nt "$(KERNELFILE)" ] || [ "linker.ld" -nt "$(KERNELFILE)" ] || [ "Makefile" -nt "$(KERNELFILE)" ] || [ "$$obj" -nt "$(KERNELFILE)" ]; then \

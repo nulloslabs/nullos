@@ -8,7 +8,7 @@ all:
 	@needs_build=0; \
 	for src in $(SRC); do \
 		obj=$$(echo $$src | sed 's|main/|../../|; s|\.[cS]$$|.o|'); \
-		if [ ! -f $$obj ] || [ $$src -nt $$obj ]; then \
+		if [ ! -f $$obj ] || [ $$src -nt $$obj ] || [ main/Makefile -nt $$obj ] || [ ../../config.mk -nt $$obj ]; then \
 			needs_build=1; \
 			break; \
 		fi; \

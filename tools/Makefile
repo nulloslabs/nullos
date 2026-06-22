@@ -9,7 +9,7 @@ include config.mk
 
 all: tools
 
-tools:
+tools: Makefile config.mk
 	@if [ ! -d limine/.git ]; then \
 		mkdir -p limine && \
 		printf "  %-7s %s\n" "FETCH" "$(SUBDIR)/limine/" && \
