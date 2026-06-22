@@ -197,7 +197,7 @@ bool procfs_is_proc_path(const char *abs_path) {
     return starts_with(abs_path, "/proc/");
 }
 
-bool procfs_resolve(const char *abs_path, int self, proc_node_t *out) {
+static bool procfs_resolve_impl(const char *abs_path, const char *orig_path, int self, proc_node_t *out, bool follow_self) {
     out->type   = PROC_NODE_NONE;
     out->entry  = PROC_NONE;
     out->pid    = -1;
@@ -209,9 +209,12 @@ bool procfs_resolve(const char *abs_path, int self, proc_node_t *out) {
     const char *rel = abs_path + 5;
     if (strcmp(rel, "/") == 0) rel = "";  // treat "/proc/" same as "/proc"
 
-    // Resolve /proc/self -> /proc/<pid> so that all <pid> patterns work.
+    // build_abs_path_at() normalizes trailing slashes away, so use the original
+    // user path as a hint that /proc/self/ must follow the link even for lstat().
+    const char *orig_rel = (orig_path && starts_with(orig_path, "/proc")) ? orig_path + 5 : rel;
     char resolved[256];
-    if (starts_with(rel, "/self/") || strcmp(rel, "/self") == 0) {
+    if (starts_with(orig_rel, "/self/") || starts_with(rel, "/self/") ||
+        (follow_self && strcmp(rel, "/self") == 0)) {
         char pidbuf[16];
         fmt_int(tasks[self].pid, pidbuf, sizeof(pidbuf));
         const char *rest = rel + 5;  // skip "/self"
@@ -248,6 +251,18 @@ bool procfs_resolve(const char *abs_path, int self, proc_node_t *out) {
         return true;
     }
     return false;
+}
+
+bool procfs_resolve(const char *abs_path, int self, proc_node_t *out) {
+    return procfs_resolve_impl(abs_path, NULL, self, out, true);
+}
+
+bool procfs_resolve_nofollow(const char *abs_path, int self, proc_node_t *out) {
+    return procfs_resolve_impl(abs_path, NULL, self, out, false);
+}
+
+bool procfs_resolve_nofollow_orig(const char *abs_path, const char *orig_path, int self, proc_node_t *out) {
+    return procfs_resolve_impl(abs_path, orig_path, self, out, false);
 }
 
 bool procfs_is_dir(const proc_node_t *node) {

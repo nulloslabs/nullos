@@ -384,11 +384,15 @@ static int proc_self_idx(void) {
     return current_task;  // current_task is the running task's index
 }
 
-static bool stat_proc(const char *abs_path, struct stat *kst) {
+static bool stat_proc(const char *abs_path, const char *orig_path, struct stat *kst, bool follow_self) {
     if (!procfs_is_proc_path(abs_path)) return false;
     int self = proc_self_idx();
     proc_node_t n;
-    if (!procfs_resolve(abs_path, self, &n)) return false;
+    if (follow_self) {
+        if (!procfs_resolve(abs_path, self, &n)) return false;
+    } else {
+        if (!procfs_resolve_nofollow_orig(abs_path, orig_path, self, &n)) return false;
+    }
 
     kst->st_uid = current_task_ptr ? current_task_ptr->euid : 0;
     kst->st_gid = current_task_ptr ? current_task_ptr->egid : 0;
@@ -1408,7 +1412,7 @@ void sys_stat(syscall_frame_t *frame) {
         frame->rax = 0;
         return;
     }
-    if (stat_proc(abs_path, &kst)) {
+    if (stat_proc(abs_path, path, &kst, true)) {
         write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
         frame->rax = 0;
         return;
@@ -1449,7 +1453,7 @@ void sys_lstat(syscall_frame_t *frame) {
         frame->rax = 0;
         return;
     }
-    if (stat_proc(abs_path, &kst)) {
+    if (stat_proc(abs_path, path, &kst, false)) {
         write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
         frame->rax = 0;
         return;
@@ -1516,7 +1520,7 @@ void sys_fstat(syscall_frame_t *frame) {
     }
     if (entry->type == FD_PROC) {
         struct stat kst = {0};
-        if (stat_proc(entry->path, &kst)) {
+        if (stat_proc(entry->path, NULL, &kst, true)) {
             write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
             frame->rax = 0;
             return;
@@ -1548,7 +1552,7 @@ void sys_fstatat(syscall_frame_t *frame) {
         frame->rax = 0;
         return;
     }
-    if (stat_proc(abs_path, &kst)) {
+    if (stat_proc(abs_path, path, &kst, (flags & AT_SYMLINK_NOFOLLOW) == 0)) {
         write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
         frame->rax = 0;
         return;
@@ -3484,7 +3488,7 @@ void sys_readlink(syscall_frame_t *frame) {
     if (procfs_is_proc_path(abs_path)) {
         int self = proc_self_idx();
         proc_node_t n;
-        if (!procfs_resolve(abs_path, self, &n)) { frame->rax = (uint64_t)-ENOENT; return; }
+        if (!procfs_resolve_nofollow(abs_path, self, &n)) { frame->rax = (uint64_t)-ENOENT; return; }
         if (n.type != PROC_NODE_SYMLINK) {
             frame->rax = (uint64_t)-EINVAL;  // not a symlink
             return;

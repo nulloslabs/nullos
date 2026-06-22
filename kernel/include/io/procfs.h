@@ -52,6 +52,8 @@ extern const dirent_static_t root_children[];
 extern const dirent_static_t pid_children[];
 
 bool procfs_resolve(const char *abs_path, int self, proc_node_t *out);
+bool procfs_resolve_nofollow(const char *abs_path, int self, proc_node_t *out);
+bool procfs_resolve_nofollow_orig(const char *abs_path, const char *orig_path, int self, proc_node_t *out);
 bool procfs_is_proc_path(const char *abs_path);
 bool procfs_is_dir(const proc_node_t *node);
 bool procfs_get_dirent(const proc_node_t *dir, int self, int index, char *name, size_t name_size, uint8_t *type_out);
