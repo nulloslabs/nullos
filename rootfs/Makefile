@@ -15,7 +15,8 @@ all: rootfs
 
 rootfs:
 	@if [ ! -f rootfs.tar.gz ] || [ ! -d main ] || [ Makefile -nt rootfs.tar.gz ] || [ config.mk -nt rootfs.tar.gz ] || $(foreach dep,$(DEP),[ $(dep) -nt rootfs.tar.gz ] ||) false; then \
-		mkdir -p main/root main/dev main/proc main/etc main/etc/init.d main/usr/bin main/usr/sbin main/usr/lib main/usr/include && \
+		mkdir -p main/home main/root main/dev main/proc main/etc main/usr && \
+		mkdir -p main/home/user main/etc/init.d main/usr/bin main/usr/sbin main/usr/lib main/usr/include && \
 		ln -snf usr/bin main/bin && \
 		ln -snf usr/sbin main/sbin && \
 		ln -snf usr/lib main/lib && \
