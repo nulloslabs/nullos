@@ -645,17 +645,24 @@ static int putchar_unlocked(int c) {
                     if (*p == ';') p++; else break;
                 }
             } else if (c == 'J') {
-                if (ansi_buffer[0] == '2') {
-                    // Clear entire screen - use back buffer if available, otherwise direct FB
+                int param = (ansi_buffer[0] >= '0' && ansi_buffer[0] <= '9') ? (ansi_buffer[0] - '0') : 0;
+                if (param == 0 || param == 3) {
+                    // Erase from cursor to end of screen, don't move cursor
+                    if (back_buffer_available) {
+                        fill_rect_backbuffer(cursor_x, cursor_y, fb->width - cursor_x, current_font_h, bg_color);
+                        if (cursor_y + current_font_h < fb->height)
+                            fill_rect_backbuffer(0, cursor_y + current_font_h, fb->width, fb->height - cursor_y - current_font_h, bg_color);
+                        flush_backbuffer(fb);
+                    }
+                } else if (param == 2) {
+                    // Clear entire screen and reset cursor
                     if (back_buffer_available) {
                         fill_rect_backbuffer(0, 0, fb->width, fb->height, bg_color);
                         flush_backbuffer(fb);
                     } else {
-                        for (uint64_t y = 0; y < fb->height; y++) {
-                            for (uint64_t x = 0; x < fb->width; x++) {
+                        for (uint64_t y = 0; y < fb->height; y++)
+                            for (uint64_t x = 0; x < fb->width; x++)
                                 put_pixel_fb(x, y, bg_color);
-                            }
-                        }
                     }
                     cursor_x = 0;
                     cursor_y = 0;

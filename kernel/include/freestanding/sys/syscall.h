@@ -38,6 +38,7 @@
 #define SYS_listen 50
 #define SYS_socketpair 53
 #define SYS_fork 57
+#define SYS_vfork 58
 #define SYS_execve 59
 #define SYS_exit 60
 #define SYS_wait4 61

@@ -8,7 +8,7 @@
 #define SIGILL 4
 #define SIGTRAP 5
 #define SIGABRT 6
-#define SIGFPE  8
+#define SIGFPE 8
 #define SIGKILL 9
 #define SIGSEGV 11
 #define SIGTERM 15
@@ -16,6 +16,7 @@
 #define SIGCONT 18
 #define SIGSTOP 19
 #define SIGTSTP 20
+#define SIGTTIN 21
 
 #define SIG_DFL ((void (*)(int))0)
 #define SIG_IGN ((void (*)(int))1)
@@ -30,7 +31,6 @@
 #define SA_RESETHAND 0x80000000
 #define SA_RESTORER  0x04000000
 
-/* Signal stack flags and sizes (POSIX). */
 #define SS_ONSTACK    1
 #define SS_DISABLE    2
 #define SS_AUTODISARM 0x80000000U

@@ -30,7 +30,6 @@ syscall_entry:
     push rax                       // syscall number
 
     mov rdi, rsp           // frame pointer
-    mov rbx, rsp           // save for later restoration
     
 .Llock_loop:
     lock bts dword ptr [rip + sched_lock], 0
@@ -45,14 +44,10 @@ syscall_entry:
     
     lock btr dword ptr [rip + sched_lock], 0
     
-    mov rsp, rbx           // restore RSP for pops
     // restore registers
     pop rax
     pop rbx
     pop rcx
-    // Mitigate AMD sysret vulnerability: check if return RIP in RCX is canonical user space.
-    // User canonical addresses must have bits 48-63 as all 0s.
-    // Use rdx (about to be popped next anyway) as temporary scratch space.
     mov rdx, rcx
     shr rdx, 48
     jz .Lrcx_ok

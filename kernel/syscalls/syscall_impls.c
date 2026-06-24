@@ -1,6 +1,5 @@
 #include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
-#include <freestanding/sys/futex.h>
 #include <freestanding/stddef.h>
 #include <freestanding/signal.h>
 #include <freestanding/fcntl.h>
@@ -11,6 +10,7 @@
 #include <freestanding/wait.h>
 #include <freestanding/termios.h>
 #include <freestanding/limits.h>
+#include <freestanding/poll.h>
 #include <freestanding/errno.h>
 #include <freestanding/asm/prctl.h>
 #include <freestanding/sys/ioctl.h>
@@ -19,6 +19,7 @@
 #include <freestanding/sys/fb.h>
 #include <freestanding/sys/stat.h>
 #include <freestanding/sys/resource.h>
+#include <freestanding/sys/futex.h>
 #include <freestanding/sys/reboot.h>
 #include <freestanding/sys/random.h>
 #include <freestanding/sys/uio.h>
@@ -46,6 +47,7 @@
 #include <io/ptys.h>
 #include <io/hpet.h>
 #include <io/sockets.h>
+#include <io/serial.h>
 #include <mm/mm.h>
 #include <mm/vmm.h>
 #include <mm/pmm.h>
@@ -150,10 +152,6 @@ static void normalize_path_str(char *path) {
     path[255] = '\0';
 }
 
-// Resolve symlinks in a path component-by-component, like Linux does:
-// walk left-to-right, resolve each symlink in place, cap total resolutions
-// at MAXSYMLINKS to break cycles.  When follow_final is false, the last
-// path component is left unresolved (lstat/readlink semantics).
 static void resolve_path_symlinks_ex(const char *path, char *out, size_t out_size, bool follow_final) {
     char work[256];
     strncpy(work, path, sizeof(work) - 1);
@@ -435,6 +433,73 @@ static int proc_open_common(const char *abs_path, uint32_t flags) {
     return -EACCES;
 }
 
+static void deliver_sig_to_task(int i, int sig) {
+    if (sig == SIGKILL) {
+        // SIGKILL cannot be ignored or caught
+        if (tasks[i].pid == current_task_ptr->pid) {
+            exit_task(128 + sig);
+        }
+        tasks[i].term_sig = sig;
+        tasks[i].state = TASK_ZOMBIE;
+        for (int j = 1; j < MAX_TASKS; j++) {
+            if (tasks[j].state != TASK_DEAD && tasks[j].ppid == tasks[i].pid) {
+                if (tasks[j].state == TASK_ZOMBIE) tasks[j].state = TASK_DEAD;
+                else tasks[j].ppid = 1;
+            }
+        }
+        for (int j = 0; j < FD_MAX; j++) {
+            if (tasks[i].fd_table.entries[j].open) free_fd(&tasks[i].fd_table, j);
+        }
+        // Notify parent
+        for (int j = 0; j < MAX_TASKS; j++) {
+            if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
+                tasks[j].pending_signals |= (1ULL << SIGCHLD);
+                if (tasks[j].state == TASK_STOPPED) tasks[j].state = TASK_READY;
+                break;
+            }
+        }
+        return;
+    }
+    switch (sig) {
+        case SIGSTOP:
+        case SIGTSTP:
+            if (tasks[i].state == TASK_RUNNING || tasks[i].state == TASK_READY) {
+                tasks[i].state = TASK_STOPPED;
+                tasks[i].stop_reported = 0;
+                // Notify parent so waitpid(WUNTRACED) wakes up
+                for (int j = 0; j < MAX_TASKS; j++) {
+                    if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
+                        tasks[j].pending_signals |= (1ULL << SIGCHLD);
+                        if (tasks[j].state == TASK_READY || tasks[j].state == TASK_RUNNING)
+                            ; // already awake, will see the stopped child on next waitpid loop
+                        break;
+                    }
+                }
+                if (tasks[i].pid == current_task_ptr->pid) __asm__ volatile("int $32");
+            }
+            break;
+        case SIGCONT:
+            if (tasks[i].state == TASK_STOPPED) {
+                tasks[i].state = TASK_READY;
+                tasks[i].stop_reported = 0;
+                // Notify parent of the continue event
+                for (int j = 0; j < MAX_TASKS; j++) {
+                    if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
+                        tasks[j].pending_signals |= (1ULL << SIGCHLD);
+                        break;
+                    }
+                }
+            }
+            tasks[i].pending_signals &= ~((1ULL << SIGSTOP) | (1ULL << SIGTSTP));
+            break;
+        default:
+            tasks[i].pending_signals |= (1ULL << sig);
+            if (tasks[i].state == TASK_STOPPED)
+                tasks[i].state = TASK_READY;
+            break;
+    }
+}
+
 static uint64_t futex_resolve_key(uint32_t *uaddr, syscall_frame_t *frame) {
     if (!uaddr || !user_ptr_ok(uaddr, sizeof(uint32_t))) {
         frame->rax = (uint64_t)-EFAULT;
@@ -696,22 +761,24 @@ static int next_rootfs_child(int *index, const char *dir_norm, char *child_name,
     }
 }
 
-static int64_t read_dev_tty(char *kbuf, uint64_t count) {
-    // There is no VT switching yet, so all ttys share tty0's termios + ring.
-    tty_t *t = get_tty(0);
+static int64_t read_dev_tty(char *kbuf, uint64_t count, int tty_idx) {
+    tty_t *t = get_tty(tty_idx);
     if (!t) return (int64_t)-ENODEV;
+    if (t->fg_pgrp > 0 && current_task_ptr->pgid != t->fg_pgrp) {
+        tty_signal_pgrp(tty_idx, SIGTTIN);
+        return (int64_t)-EINTR;
+    }
 
     tcflag_t lflags = t->termios.c_lflag;
     cc_t vintr = t->termios.c_cc[VINTR];
     cc_t vsusp = t->termios.c_cc[VSUSP];
     uint64_t irq;
 
-    // ----- Non-canonical (raw) mode: deliver bytes as they arrive -----
     if (!(lflags & ICANON)) {
         uint64_t total = 0;
         while (total < count) {
             // Try to grab whatever bytes are in the ring buffer right now.
-            spinlock_t *lk = get_tty_lock();
+            spinlock_t *lk = &tty_lock;
             spin_lock_irqsave(lk, &irq);
             int to_read = (int)(count - total);
             if (lflags & ISIG) to_read = 1; // Read 1 byte at a time so we can check for signals properly
@@ -723,14 +790,14 @@ static int64_t read_dev_tty(char *kbuf, uint64_t count) {
                     char c = kbuf[total];
                     if (vintr && c == (char)vintr) {
                         uint64_t handler = current_task_ptr->sigactions[SIGINT * 4];
-                        if (handler == 1 /* SIG_IGN */) continue;
+                        if (handler == 1) continue;
                         if (lflags & ECHO) { printf("^C"); putchar('\n'); }
                         if (total > 0) return (int64_t)total;
                         return (int64_t)-EINTR;
                     }
                     if (vsusp && c == (char)vsusp) {
                         uint64_t handler = current_task_ptr->sigactions[SIGTSTP * 4];
-                        if (handler == 1 /* SIG_IGN */) continue;
+                        if (handler == 1) continue;
                         if (lflags & ECHO) { printf("^Z"); putchar('\n'); }
                         if (total > 0) return (int64_t)total;
                         return (int64_t)-EINTR;
@@ -745,13 +812,11 @@ static int64_t read_dev_tty(char *kbuf, uint64_t count) {
 
             if (signal_pending()) return (int64_t)-EINTR;
 
-            // Nothing available: yield to the scheduler until a key arrives.
-            current_task_ptr->state = TASK_READY;
-            spin_unlock(&sched_lock);
-            // sti via wfi so the keyboard ISR can fire and fill the ring
-            __asm__ volatile("sti; pause; hlt" ::: "memory");
-            spin_lock(&sched_lock);
-            current_task_ptr->state = TASK_RUNNING;
+            // Nothing available: re-enter the scheduler IRQ (which checks
+            // sched_lock and skips if held).  Interrupts stay enabled (the
+            // syscall handler did sti), so the keyboard ISR fires here,
+            // fills the TTY ring, and the next loop iteration reads it.
+            __asm__ volatile ("int $32");
         }
         return (int64_t)total;
     }
@@ -779,18 +844,13 @@ static int64_t read_dev_tty(char *kbuf, uint64_t count) {
         // Get one character from the ring buffer, blocking if needed.
         char c = 0;
         while (1) {
-            spinlock_t *lk = get_tty_lock();
+            spinlock_t *lk = &tty_lock;
             spin_lock_irqsave(lk, &irq);
             int got = read_tty_ring(&t->input, &c, 1);
             spin_unlock_irqrestore(lk, irq);
             if (got > 0) break;
             if (signal_pending()) return (int64_t)-EINTR;
-
-            current_task_ptr->state = TASK_READY;
-            spin_unlock(&sched_lock);
-            __asm__ volatile("sti; pause; hlt" ::: "memory");
-            spin_lock(&sched_lock);
-            current_task_ptr->state = TASK_RUNNING;
+            __asm__ volatile ("int $32");
         }
 
         spin_lock_irqsave(&stdin_lock, &irq);
@@ -1082,7 +1142,20 @@ void sys_read(syscall_frame_t *frame) {
         if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
         uint8_t *kbuf = malloc(count);
         if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
-        int64_t got = read_dev_tty((char *)kbuf, count);
+        // For FD_STREAM, use the process's controlling terminal if set
+        // This handles cases where a process has been assigned a TTY via TIOCSCTTY
+        int tty_idx = current_task_ptr->ctty_idx >= 0 ? current_task_ptr->ctty_idx : 0;
+        // If ctty_idx not set, try to parse from path (e.g., /dev/tty1 -> 1, /dev/tty0 -> 0)
+        if (tty_idx == 0) {
+            const char *path = entry->path;
+            if (strstr(path, "tty")) {
+                const char *p = strstr(path, "tty");
+                if (p && p[3] >= '0' && p[3] <= '7') {
+                    tty_idx = p[3] - '0';
+                }
+            }
+        }
+        int64_t got = read_dev_tty((char *)kbuf, count, tty_idx);
         if (got >= 0) { write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, (uint64_t)got); }
         free(kbuf);
         frame->rax = (uint64_t)got;
@@ -1095,13 +1168,15 @@ void sys_read(syscall_frame_t *frame) {
         if (is_mounted_under(entry->path, "devtmpfs", rel)) {
             if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
 
-            // tty devices (/dev/tty, /dev/ttyN) go through the line discipline
-            // (ICANON/ISIG/ECHO) and block for keyboard input.  Other devtmpfs
-            // devices (null, zero, fb, urandom...) use the generic path.
             if (strncmp(rel, "tty", 3) == 0 || strcmp(rel, "console") == 0) {
                 uint8_t *kbuf = malloc(count);
                 if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
-                int64_t got = read_dev_tty((char *)kbuf, count);
+                // Parse TTY index from rel (e.g., "tty1" -> 1, "tty0" -> 0)
+                int tty_idx = 0;
+                if (strlen(rel) > 3 && rel[3] >= '0' && rel[3] <= '7') {
+                    tty_idx = rel[3] - '0';
+                }
+                int64_t got = read_dev_tty((char *)kbuf, count, tty_idx);
                 if (got >= 0) { write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, (uint64_t)got); }
                 free(kbuf);
                 frame->rax = (uint64_t)got;
@@ -1585,7 +1660,10 @@ void sys_lseek(syscall_frame_t *frame) {
 
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry || !entry->open) { frame->rax = -EBADF; return; }
-    if (entry->type == FD_STREAM || entry->type == FD_PIPE || entry->type == FD_SOCKET) { frame->rax = -ESPIPE; return; }
+    if (entry->type == FD_STREAM || entry->type == FD_PIPE || entry->type == FD_SOCKET || entry->type == FD_DEV) { 
+        frame->rax = -ESPIPE; 
+        return; 
+    }
 
     // Compute the file size for SEEK_END.  Proc files have no rootfs backing.
     int64_t file_size = -1;
@@ -1601,7 +1679,7 @@ void sys_lseek(syscall_frame_t *frame) {
         }
     } else {
         rootfs_file_t file = read_rootfs(entry->path);
-        if (!file.data) { frame->rax = -ENOENT; return; }
+        if (!file.mode) { frame->rax = -ENOENT; return; }
         file_size = (int64_t)file.size;
     }
 
@@ -1916,8 +1994,7 @@ void sys_ioctl(syscall_frame_t *frame) {
         if (entry && entry->type == FD_DEV) {
             char rel[256];
             if (is_mounted_under(entry->path, "devtmpfs", rel)) {
-                if (strncmp(rel, "tty", 3) == 0 || strncmp(rel, "pts/", 4) == 0 || strcmp(rel, "console") == 0)
-                    is_tty = 1;
+                if (strncmp(rel, "tty", 3) == 0 || strncmp(rel, "pts/", 4) == 0 || strcmp(rel, "console") == 0) is_tty = 1;
             } else if (is_mounted_under(entry->path, "devpts", rel)) {
                 is_tty = 1;
             }
@@ -1925,177 +2002,217 @@ void sys_ioctl(syscall_frame_t *frame) {
     }
 
     switch (req) {
-    case TIOCGWINSZ: {
-        winsize_t ws = { .ws_row = 25, .ws_col = 80, .ws_xpixel = 0, .ws_ypixel = 0 };
-        write_vmm(current_task_ptr->ctx, argp, &ws, sizeof(ws));
-        frame->rax = 0;
-        return;
-    }
-    case TIOCSWINSZ:
-        // Accept but ignore window size sets
-        frame->rax = 0;
-        return;
-    case TCGETS: {
-        struct termios t = {0};
-        int idx = current_task_ptr->ctty_idx; // Dynamically grab the task's assigned TTY
-
-        // FD_STREAM fds (init's stdin/stdout/stderr) point at tty0 but
-        // carry a literal path; resolve them to tty0 so tcgetattr() works.
-        if (entry && (entry->type == FD_DEV || entry->type == FD_STREAM)) {
-            char rel[256];
-            if (entry->type == FD_STREAM) {
-                idx = 0;
-            } else if (is_mounted_under(entry->path, "devtmpfs", rel) && strncmp(rel, "tty", 3) == 0) {
-                 int path_idx = rel[3] - '0';
-                 if (path_idx >= 0 && path_idx < NUM_TTYS) { idx = path_idx; }
-            }
+        case TIOCGWINSZ: {
+            winsize_t ws = { .ws_row = 25, .ws_col = 80, .ws_xpixel = 0, .ws_ypixel = 0 };
+            write_vmm(current_task_ptr->ctx, argp, &ws, sizeof(ws));
+            frame->rax = 0;
+            return;
         }
-        
-        // Grab the actual, live configuration instead of a hardcoded constant mask
-        tty_t *tty_tcgets = get_tty(idx);
-        if (!tty_tcgets) { frame->rax = -ENOTTY; return; }
-        t = tty_tcgets->termios;
-        
-        write_vmm(current_task_ptr->ctx, argp, &t, sizeof(t));
-        frame->rax = 0;
-        return;
-    }
-    
-    case TCSETS:
-    case TCSETSW:
-    case TCSETSF:
-        int idx = current_task_ptr->ctty_idx; // Default to the process's controlling terminal
+        case TIOCSWINSZ:
+            // Accept but ignore window size sets
+            frame->rax = 0;
+            return;
+        case TCGETS: {
+            struct termios t = {0};
+            int idx = current_task_ptr->ctty_idx; // Dynamically grab the task's assigned TTY
 
-        // FD_STREAM fds behave as /dev/tty0 (see TCGETS above).
-        if (entry && (entry->type == FD_DEV || entry->type == FD_STREAM)) {
-            char rel[256];
-            if (entry->type == FD_STREAM) {
-                idx = 0;
-            } else if (is_mounted_under(entry->path, "devtmpfs", rel) && strncmp(rel, "tty", 3) == 0) {
-                int path_idx = rel[3] - '0';
-                if (path_idx >= 0 && path_idx < NUM_TTYS) { idx = path_idx; }
-            }
-        }
-        
-        // Save the modifications to the exact terminal state this task uses
-        tty_t *tty_tcsets = get_tty(idx);
-        if (!tty_tcsets) { frame->rax = -ENOTTY; return; }
-        read_vmm(current_task_ptr->ctx, &tty_tcsets->termios, argp, sizeof(struct termios));
-        
-        frame->rax = 0;
-        return;
-    case TCFLSH:
-        if (entry && entry->type == FD_DEV) {
-            char rel[256];
-            if (is_mounted_under(entry->path, "devtmpfs", rel)) {
-                if (strncmp(rel, "tty", 3) == 0) {
-                     int idx = rel[3] - '0';
-                     if (idx >= 0 && idx < NUM_TTYS) {
-                         if (argp == 0  || argp == 2 ) {
-                             get_tty(idx)->input.head = get_tty(idx)->input.tail = 0;
-                         }
-                     }
-                } else if (strncmp(rel, "pts/", 4) == 0) {
-                     int idx = 0;
-                     const char *p = rel + 4;
-                     while (*p >= '0' && *p <= '9') { idx = idx * 10 + (*p - '0'); p++; }
-                     if (idx >= 0 && idx < NUM_PTYS) {
-                         if (argp == 0 || argp == 2) {
-                             get_pty(idx)->m2s.head = get_pty(idx)->m2s.tail = 0;
-                         }
-                     }
+            // FD_STREAM fds (init's stdin/stdout/stderr) point at tty0 but
+            // carry a literal path; resolve them to tty0 so tcgetattr() works.
+            if (entry && (entry->type == FD_DEV || entry->type == FD_STREAM)) {
+                char rel[256];
+                if (entry->type == FD_STREAM) {
+                    idx = 0;
+                } else if (is_mounted_under(entry->path, "devtmpfs", rel) && strncmp(rel, "tty", 3) == 0) {
+                     int path_idx = rel[3] - '0';
+                     if (path_idx >= 0 && path_idx < NUM_TTYS) { idx = path_idx; }
                 }
-            } else if (is_mounted_under(entry->path, "devpts", rel)) {
-                 int idx = 0;
-                 const char *p = rel;
-                 while (*p >= '0' && *p <= '9') { idx = idx * 10 + (*p - '0'); p++; }
-                 if (idx >= 0 && idx < NUM_PTYS) {
-                     if (argp == 0 || argp == 2) {
-                     }
-                 }
             }
+        
+            // Grab the actual, live configuration instead of a hardcoded constant mask
+            tty_t *tty_tcgets = get_tty(idx);
+            if (!tty_tcgets) { frame->rax = -ENOTTY; return; }
+            t = tty_tcgets->termios;
+        
+            write_vmm(current_task_ptr->ctx, argp, &t, sizeof(t));
+            frame->rax = 0;
+            return;
         }
-        frame->rax = 0;
-        return;
-    case TCSBRK:
-    case TCXONC:
-        frame->rax = 0;
-        return;
+    
+        case TCSETS:
+        case TCSETSW:
+        case TCSETSF:
+            int idx = current_task_ptr->ctty_idx; // Default to the process's controlling terminal
 
-    case 0x540F: { // TIOCGPGRP
-        // Return the foreground process group of the controlling tty
-        tty_t *tty_fg = get_tty(current_task_ptr->ctty_idx >= 0 ? current_task_ptr->ctty_idx : 0);
-        pid_t pgrp = tty_fg ? tty_fg->fg_pgrp : current_task_ptr->pgid;
-        if (pgrp == 0) pgrp = current_task_ptr->pgid;
-        write_vmm(current_task_ptr->ctx, argp, &pgrp, sizeof(pid_t));
-        frame->rax = 0;
-        return;
-    }
-    case 0x5410: { // TIOCSPGRP
-        // Set the foreground process group of the controlling tty
-        pid_t new_pgrp = 0;
-        read_vmm(current_task_ptr->ctx, &new_pgrp, argp, sizeof(pid_t));
-        int tidx = current_task_ptr->ctty_idx >= 0 ? current_task_ptr->ctty_idx : 0;
-        tty_t *tty_sp = get_tty(tidx);
-        if (tty_sp) tty_sp->fg_pgrp = new_pgrp;
-        frame->rax = 0;
-        return;
-    }
-    case 0x540E: { // TIOCSCTTY
-        // Claim this tty as the calling process's controlling terminal
-        // Only session leaders can do this
-        int tidx = 0;  // all ttys are tty0 for now
-        tty_t *tty_ct = get_tty(tidx);
-        if (tty_ct) {
-            current_task_ptr->ctty_idx = tidx;
-            // Become the foreground process group if none set
-            if (tty_ct->fg_pgrp == 0)
+            // FD_STREAM fds behave as /dev/tty0 (see TCGETS above).
+            if (entry && (entry->type == FD_DEV || entry->type == FD_STREAM)) {
+                char rel[256];
+                if (entry->type == FD_STREAM) {
+                    idx = 0;
+                } else if (is_mounted_under(entry->path, "devtmpfs", rel) && strncmp(rel, "tty", 3) == 0) {
+                    int path_idx = rel[3] - '0';
+                    if (path_idx >= 0 && path_idx < NUM_TTYS) { idx = path_idx; }
+                }
+            }
+        
+            // Save the modifications to the exact terminal state this task uses
+            tty_t *tty_tcsets = get_tty(idx);
+            if (!tty_tcsets) { frame->rax = -ENOTTY; return; }
+            read_vmm(current_task_ptr->ctx, &tty_tcsets->termios, argp, sizeof(struct termios));
+        
+            frame->rax = 0;
+            return;
+        case TCFLSH:
+            if (entry && entry->type == FD_DEV) {
+                char rel[256];
+                if (is_mounted_under(entry->path, "devtmpfs", rel)) {
+                    if (strncmp(rel, "tty", 3) == 0) {
+                        int idx = rel[3] - '0';
+                        if (idx >= 0 && idx < NUM_TTYS) {
+                            if (argp == 0  || argp == 2 ) {
+                                get_tty(idx)->input.head = get_tty(idx)->input.tail = 0;
+                            }
+                        }
+                    }
+                } else if (is_mounted_under(entry->path, "devpts", rel)) {
+                    int idx = 0;
+                    const char *p = rel;
+                    while (*p >= '0' && *p <= '9') { idx = idx * 10 + (*p - '0'); p++; }
+                        if (idx >= 0 && idx < NUM_PTYS) {
+                            if (argp == 0 || argp == 2) {
+                            }
+                        }
+                    }
+                }
+            frame->rax = 0;
+            return;
+        case TCSBRK:
+        case TCXONC:
+            frame->rax = 0;
+            return;
+
+        case TIOCSCTTY: {
+            // Claim this tty as the calling process's controlling terminal
+            // Only session leaders can do this
+            // Determine TTY index from the fd
+            int tidx = 0;
+            if (entry) {
+                if (entry->type == FD_STREAM) {
+                    // Parse from path
+                    const char *p = strstr(entry->path, "tty");
+                    if (p && p[3] >= '0' && p[3] <= '7') {
+                        tidx = p[3] - '0';
+                    }
+                } else if (entry->type == FD_DEV) {
+                    char rel[256];
+                    if (is_mounted_under(entry->path, "devtmpfs", rel) && strncmp(rel, "tty", 3) == 0) {
+                        if (strlen(rel) > 3 && rel[3] >= '0' && rel[3] <= '7') {
+                            tidx = rel[3] - '0';
+                        }
+                    }
+                }
+            }
+            tty_t *tty_ct = get_tty(tidx);
+            if (tty_ct) {
+                current_task_ptr->ctty_idx = tidx;
+                // POSIX: when acquiring a controlling terminal, the process group
+                // of the calling process becomes the foreground process group
                 tty_ct->fg_pgrp = current_task_ptr->pgid;
+                // Set keyboard input to go to this TTY
+                set_keyboard_tty(tidx);
+            }
+            frame->rax = 0;
+            return;
         }
-        frame->rax = 0;
-        return;
-    }
 
-    case FIONREAD: {
-        // Report bytes available in per-task stdin buffer; 0 for everything else
-        uint64_t irq;
-        spin_lock_irqsave(&stdin_lock, &irq);
-        int avail = (fd == 0) ? (current_task_ptr->stdin_buf_len - current_task_ptr->stdin_buf_pos) : 0;
-        spin_unlock_irqrestore(&stdin_lock, irq);
-        write_vmm(current_task_ptr->ctx, argp, &avail, sizeof(int));
-        frame->rax = 0;
-        return;
-    }
-    case TIOCEXCL:
-    case TIOCNXCL:
-        // Exclusive mode — no-op
-        frame->rax = 0;
-        return;
+        case TIOCGPGRP: {
+            // Return the foreground process group of the controlling tty
+            if (current_task_ptr->ctty_idx < 0) {
+                frame->rax = (uint64_t)-ENOTTY;
+                return;
+            }
+            tty_t *tty_fg = get_tty(current_task_ptr->ctty_idx);
+            pid_t pgrp = tty_fg ? tty_fg->fg_pgrp : current_task_ptr->pgid;
+            if (pgrp == 0) pgrp = current_task_ptr->pgid;
+            write_vmm(current_task_ptr->ctx, argp, &pgrp, sizeof(pid_t));
+            frame->rax = 0;
+            return;
+        }
 
-    case TIOCGPTN: {
-        if (!entry || entry->type != FD_PTY_MASTER) { frame->rax = (uint64_t)-ENOTTY; return; }
-        int idx = ptm_path_idx(entry->path);
-        unsigned int uidx = (unsigned int)idx;
-        write_vmm(current_task_ptr->ctx, argp, &uidx, sizeof(unsigned int));
-        frame->rax = 0;
-        return;
-    }
-    case TIOCSPTLCK: {
-        if (!entry || entry->type != FD_PTY_MASTER) { frame->rax = (uint64_t)-ENOTTY; return; }
-        int idx = ptm_path_idx(entry->path);
-        pty_t *p = get_pty(idx);
-        if (!p) { frame->rax = (uint64_t)-EBADF; return; }
-        int val = 0;
-        read_vmm(current_task_ptr->ctx, &val, argp, sizeof(int));
-        p->locked = (val != 0);
-        frame->rax = 0;
-        return;
-    }
+        case TIOCSPGRP: {
+            // Set the foreground process group of the controlling tty
+            pid_t new_pgrp = 0;
+            read_vmm(current_task_ptr->ctx, &new_pgrp, argp, sizeof(pid_t));
+        
+            // Must have a controlling terminal
+            if (current_task_ptr->ctty_idx < 0) {
+                frame->rax = (uint64_t)-ENOTTY;
+                return;
+            }
+        
+            tty_t *tty_sp = get_tty(current_task_ptr->ctty_idx);
+            if (!tty_sp) {
+                frame->rax = (uint64_t)-ENOTTY;
+                return;
+            }
+        
+            // POSIX: only session leader or process with matching pgid can set fg_pgrp
+            if (current_task_ptr->pid != current_task_ptr->sid && 
+                new_pgrp != current_task_ptr->pgid) {
+                frame->rax = (uint64_t)-EPERM;
+                return;
+            }
+        
+            tty_sp->fg_pgrp = new_pgrp;
+            frame->rax = 0;
+            return;
+        }
 
-    default:
-        (void)is_tty;
-        frame->rax = (uint64_t)-EINVAL;
-        return;
+        case FIONREAD: {
+            // Report bytes available in per-task stdin buffer; 0 for everything else
+            uint64_t irq;
+            spin_lock_irqsave(&stdin_lock, &irq);
+            int avail = (fd == 0) ? (current_task_ptr->stdin_buf_len - current_task_ptr->stdin_buf_pos) : 0;
+            spin_unlock_irqrestore(&stdin_lock, irq);
+            write_vmm(current_task_ptr->ctx, argp, &avail, sizeof(int));
+            frame->rax = 0;
+            return;
+        }
+
+        case TIOCEXCL:
+        case TIOCNXCL:
+            // Exclusive mode, no-op
+            frame->rax = 0;
+            return;
+
+        case TIOCNOTTY:
+            current_task_ptr->ctty_idx = -1;
+            frame->rax = 0;
+            return;
+
+        case TIOCGPTN: {
+            if (!entry || entry->type != FD_PTY_MASTER) { frame->rax = (uint64_t)-ENOTTY; return; }
+            int idx = ptm_path_idx(entry->path);
+            unsigned int uidx = (unsigned int)idx;
+            write_vmm(current_task_ptr->ctx, argp, &uidx, sizeof(unsigned int));
+            frame->rax = 0;
+            return;
+        }
+        case TIOCSPTLCK: {
+            if (!entry || entry->type != FD_PTY_MASTER) { frame->rax = (uint64_t)-ENOTTY; return; }
+            int idx = ptm_path_idx(entry->path);
+            pty_t *p = get_pty(idx);
+            if (!p) { frame->rax = (uint64_t)-EBADF; return; }
+            int val = 0;
+            read_vmm(current_task_ptr->ctx, &val, argp, sizeof(int));
+            p->locked = (val != 0);
+            frame->rax = 0;
+            return;
+        }
+
+        default:
+            (void)is_tty;
+            frame->rax = (uint64_t)-EINVAL;
+            return;
     }
 }
 
@@ -2344,6 +2461,7 @@ void sys_dup2(syscall_frame_t *frame) {
 void sys_nanosleep(syscall_frame_t *frame) {
     struct timespec *req = (struct timespec *)frame->rdi;
     struct timespec *rem = (struct timespec *)frame->rsi;
+    
     if (!req) { frame->rax = (uint64_t)-EINVAL; return; }
     if (!user_ptr_ok(req, sizeof(struct timespec))) { frame->rax = (uint64_t)-EFAULT; return; }
 
@@ -2354,22 +2472,36 @@ void sys_nanosleep(syscall_frame_t *frame) {
     if (ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000L || ts.tv_sec < 0) {
         frame->rax = (uint64_t)-EINVAL; return;
     }
+    
     // Cap sleep at ~292 years to prevent integer overflow in µs calculation
     if (ts.tv_sec > 9000000000LL) { ts.tv_sec = 9000000000LL; }
+    
     uint64_t total_us = ((uint64_t)ts.tv_sec * 1000000ULL) + (uint64_t)(ts.tv_nsec / 1000);
     uint64_t start_time = hpet_elapsed_us();
+
+    // Loop until the requested time has actually elapsed
     while (hpet_elapsed_us() - start_time < total_us) {
         if (signal_pending()) {
             if (rem) {
                 uint64_t elapsed = hpet_elapsed_us() - start_time;
                 uint64_t remaining_us = total_us > elapsed ? total_us - elapsed : 0;
-                struct timespec r = { .tv_sec = remaining_us / 1000000, .tv_nsec = (remaining_us % 1000000) * 1000 };
-                write_vmm(current_task_ptr->ctx, (uint64_t)rem, &r, sizeof(struct timespec));
+                struct timespec r = { 
+                    .tv_sec = remaining_us / 1000000, 
+                    .tv_nsec = (remaining_us % 1000000) * 1000 
+                };
+                if (user_ptr_ok(rem, sizeof(struct timespec))) {
+                    write_vmm(current_task_ptr->ctx, (uint64_t)rem, &r, sizeof(struct timespec));
+                }
             }
             frame->rax = (uint64_t)-EINTR;
             return;
         }
-        __asm__ volatile("sti; pause; hlt" ::: "memory");
+
+        current_task_ptr->state = TASK_READY;
+        
+        spin_unlock(&sched_lock);
+        __asm__ volatile("int $32"); 
+        spin_lock(&sched_lock);
     }
 
     if (rem) {
@@ -2585,9 +2717,7 @@ void sys_reboot(syscall_frame_t *frame) {
 }
 
 void sys_fork(syscall_frame_t *frame) {
-    if (!current_task_ptr || !current_task_ptr->ctx) {
-        frame->rax = (uint64_t)-EFAULT; return;
-    }
+    if (!current_task_ptr || !current_task_ptr->ctx) { frame->rax = (uint64_t)-EFAULT; return; }
 
     vmm_context_t *child_ctx = clone_vmm_context(current_task_ptr->ctx);
     if (!child_ctx) { frame->rax = (uint64_t)-ENOMEM; return; }
@@ -2598,56 +2728,130 @@ void sys_fork(syscall_frame_t *frame) {
     frame->rax = (uint64_t)child_pid;
 }
 
+void sys_vfork(syscall_frame_t *frame) {
+    if (!current_task_ptr || !current_task_ptr->ctx) { frame->rax = (uint64_t)-EFAULT; return; }
+
+    vmm_context_t *child_ctx = clone_vmm_context(current_task_ptr->ctx);
+    if (!child_ctx) { frame->rax = (uint64_t)-ENOMEM; return; }
+
+    pid_t child_pid = clone_task(frame, child_ctx);
+    if (child_pid < 0) { frame->rax = (uint64_t)-EAGAIN; return; }
+
+    current_task_ptr->state = TASK_STOPPED;
+    current_task_ptr->waiting_for = child_pid;
+
+    frame->rax = (uint64_t)child_pid;
+
+    spin_unlock(&sched_lock);
+    sti();
+    __asm__ volatile ("int $32");
+    spin_lock(&sched_lock);
+    cli();
+}
+
 void sys_execve(syscall_frame_t *frame) {
     const char *user_path = (const char *)frame->rdi;
     char **user_argv = (char **)frame->rsi;
     char **user_envp = (char **)frame->rdx;
-
     if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
-
     char path_buf[256];
-    if (copy_from_user(path_buf, user_path, sizeof(path_buf)) < 0) {
-        frame->rax = (uint64_t)-EFAULT; return;
+
+    if (copy_from_user(path_buf, user_path, sizeof(path_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+
+    // Check for shebang
+    rootfs_file_t probe = read_rootfs(path_buf);
+    if (probe.data && probe.size >= 2 &&
+        ((char *)probe.data)[0] == '#' && ((char *)probe.data)[1] == '!') {
+        // Parse interpreter from shebang line
+        char *p = (char *)probe.data + 2;
+        while (*p == ' ' || *p == '\t') p++;
+        char interp[256] = {0};
+        int ii = 0;
+        while (*p && *p != '\n' && *p != '\r' && *p != ' ' && ii < 255)
+            interp[ii++] = *p++;
+        interp[ii] = '\0';
+
+        if (ii > 0) {
+            char **orig_argv = NULL;
+            int orig_argc = copy_from_user_strarray(&orig_argv, (const char **)user_argv, 63);
+            if (orig_argc < 0) { frame->rax = (uint64_t)orig_argc; return; }
+            int new_argc = orig_argc + 1;
+            char **new_argv = vmalloc((new_argc + 1) * sizeof(char *));
+            if (!new_argv) {
+                free_strarray(orig_argv, orig_argc);
+                frame->rax = (uint64_t)-ENOMEM; return;
+            }
+            new_argv[0] = malloc(256);
+            new_argv[1] = malloc(256);
+            if (!new_argv[0] || !new_argv[1]) {
+                if (new_argv[0]) free(new_argv[0]);
+                if (new_argv[1]) free(new_argv[1]);
+                free_strarray(orig_argv, orig_argc);
+                vfree(new_argv);
+                frame->rax = (uint64_t)-ENOMEM; return;
+            }
+            memcpy(new_argv[0], interp, ii + 1);
+            memcpy(new_argv[1], path_buf, strlen(path_buf) + 1);
+            for (int i = 1; i < orig_argc; i++) new_argv[i + 1] = orig_argv[i];
+            new_argv[new_argc] = NULL;
+            // Copy envp
+            char **envp_ptrs = NULL;
+            int envc = copy_from_user_strarray(&envp_ptrs, (const char **)user_envp, 63);
+            if (envc < 0) {
+                free_strarray(orig_argv, orig_argc);
+                vfree(new_argv);
+                frame->rax = (uint64_t)envc; return;
+            }
+            int res = execve_elf(new_argv[0], new_argv, envp_ptrs, frame);
+            if (res == 0) {
+                current_task_ptr->fs_base = 0;
+                current_task_ptr->gs_base = 0;
+                write_msr(MSR_FS_BASE, 0);
+                write_msr(MSR_GS_BASE, 0);
+                for (int i = 1; i < 32; i++) {
+                    uint64_t *sa = &current_task_ptr->sigactions[i * 4];
+                    if (sa[0] != 0 && sa[0] != 1) {
+                        sa[0] = 0; sa[1] = 0; sa[2] = 0; sa[3] = 0;
+                    }
+                }
+                current_task_ptr->pending_signals = 0;
+            }
+            free_strarray(orig_argv, orig_argc);
+            free_strarray(envp_ptrs, envc);
+            vfree(new_argv);
+            frame->rax = (uint64_t)res;
+            return;
+        }
     }
 
-    rootfs_file_t file = read_rootfs(path_buf);
-    if (file.mode && !can_access_rootfs(&file, 0, 0, 1)) { frame->rax = (uint64_t)-EPERM; return; }
-
+    // Normal (non-shebang) path
     char **argv_ptrs = NULL;
     char **envp_ptrs = NULL;
-
     int argc = copy_from_user_strarray(&argv_ptrs, (const char **)user_argv, 63);
     if (argc < 0) { frame->rax = (uint64_t)argc; return; }
-
     int envc = copy_from_user_strarray(&envp_ptrs, (const char **)user_envp, 63);
     if (envc < 0) {
         free_strarray(argv_ptrs, argc);
         frame->rax = (uint64_t)envc;
         return;
     }
-
     int res = execve_elf(path_buf, argv_ptrs, envp_ptrs, frame);
     if (res == 0) {
         current_task_ptr->fs_base = 0;
         current_task_ptr->gs_base = 0;
         write_msr(MSR_FS_BASE, 0);
         write_msr(MSR_GS_BASE, 0);
-
-        // POSIX: on exec, caught signals reset to SIG_DFL; ignored stay ignored
         for (int i = 1; i < 32; i++) {
             uint64_t *sa = &current_task_ptr->sigactions[i * 4];
             if (sa[0] != 0 && sa[0] != 1) {
-                // Caught signal -> reset to default
                 sa[0] = 0; sa[1] = 0; sa[2] = 0; sa[3] = 0;
             }
         }
         current_task_ptr->pending_signals = 0;
     }
-
     free_strarray(argv_ptrs, argc);
     free_strarray(envp_ptrs, envc);
-
-    frame->rax = (uint64_t)res;
+    if (res != 0) frame->rax = (uint64_t)res;
 }
 
 void sys_exit(syscall_frame_t *frame) {
@@ -2666,18 +2870,11 @@ void sys_wait4(syscall_frame_t *frame) {
 
         for (int i = 0; i < MAX_TASKS; i++) {
             // Only care about children of the current task
-            if (!tasks[i].state || tasks[i].ppid != current_task_ptr->pid)
-                continue;
+            if (!tasks[i].state || tasks[i].ppid != current_task_ptr->pid) continue;
 
-            // If user asked for a specific PID, ignore others
-            // pid == -1  -> any child
-            // pid > 0    -> specific child
-            // pid == 0   -> any child in same pgrp (simplified: treat like -1)
-            // pid < -1   -> any child in pgrp -pid
-            if (pid > 0 && tasks[i].pid != pid)
-                continue;
-            if (pid < -1 && tasks[i].pgid != -pid)
-                continue;
+            if (pid > 0 && tasks[i].pid != pid) continue;
+            if (pid == 0 && tasks[i].pgid != current_task_ptr->pgid) continue;
+            if (pid < -1 && tasks[i].pgid != -pid) continue;
 
             found_child = 1;
 
@@ -2701,6 +2898,9 @@ void sys_wait4(syscall_frame_t *frame) {
                 pid_t ret = tasks[i].pid;
                 tasks[i].state = TASK_DEAD;
                 frame->rax = (uint64_t)ret;
+                
+                // CRITICAL: Unlock before leaving!
+                spin_unlock(&sched_lock);
                 return;
             }
 
@@ -2712,36 +2912,44 @@ void sys_wait4(syscall_frame_t *frame) {
                 }
                 tasks[i].stop_reported = 1;
                 frame->rax = (uint64_t)tasks[i].pid;
+                
+                // CRITICAL: Unlock before leaving!
+                spin_unlock(&sched_lock);
                 return;
             }
         }
 
         // If we found no children at all, we can't wait
-        if (!found_child) { frame->rax = (uint64_t)-ECHILD; return; }
+        if (!found_child) { 
+            frame->rax = (uint64_t)-ECHILD; 
+            spin_unlock(&sched_lock); // CRITICAL: Unlock before leaving!
+            return; 
+        }
 
         // WNOHANG: return 0 if no child has exited yet
-        if (options & WNOHANG) { frame->rax = 0; return; }
+        if (options & WNOHANG) { 
+            frame->rax = 0; 
+            spin_unlock(&sched_lock); // CRITICAL: Unlock before leaving!
+            return; 
+        }
 
         // Return EINTR if any pending signal has a custom handler to run.
-        // This includes SIGCHLD — if busybox sh has a SIGCHLD handler it needs
-        // to run it (to record the stopped job) before waitpid can continue.
         if (signal_pending()) {
             uint64_t pending = current_task_ptr->pending_signals & ~current_task_ptr->blocked_signals;
-            pending |= current_task_ptr->pending_signals &
-                       ((1ULL << SIGKILL) | (1ULL << SIGSTOP)); // unblockable
-            // Check if any pending signal has a custom (non-DFL, non-IGN) handler
+            pending |= current_task_ptr->pending_signals & ((1ULL << SIGKILL) | (1ULL << SIGSTOP)); // unblockable
+            
             int has_custom = 0;
             for (int s = 1; s <= 31; s++) {
                 if (!(pending & (1ULL << s))) continue;
                 uint64_t h = current_task_ptr->sigactions[s * 4];
-                if (h != 0 /* SIG_DFL */ && h != 1 /* SIG_IGN */) { has_custom = 1; break; }
-                // SIG_DFL for non-SIGCHLD non-SIGCONT non-stop signals also interrupts
+                if (h != 0 && h != 1) { has_custom = 1; break; }
                 if (s != SIGCHLD && s != SIGCONT && s != SIGTSTP && s != SIGSTOP && h == 0) {
                     has_custom = 1; break;
                 }
             }
             if (has_custom) {
                 frame->rax = (uint64_t)-EINTR;
+                spin_unlock(&sched_lock); // CRITICAL: Unlock before leaving!
                 return;
             }
         }
@@ -2751,75 +2959,6 @@ void sys_wait4(syscall_frame_t *frame) {
         spin_unlock(&sched_lock);
         __asm__ volatile("int $32");
         spin_lock(&sched_lock);
-    }
-}
-
-// Helper: deliver signal to a single task by index.
-// Returns true if the task was found and eligible.
-static void deliver_sig_to_task(int i, int sig) {
-    if (sig == SIGKILL) {
-        // SIGKILL cannot be ignored or caught
-        if (tasks[i].pid == current_task_ptr->pid) {
-            exit_task(128 + sig);
-        }
-        tasks[i].term_sig = sig;
-        tasks[i].state = TASK_ZOMBIE;
-        for (int j = 1; j < MAX_TASKS; j++) {
-            if (tasks[j].state != TASK_DEAD && tasks[j].ppid == tasks[i].pid) {
-                if (tasks[j].state == TASK_ZOMBIE) tasks[j].state = TASK_DEAD;
-                else tasks[j].ppid = 1;
-            }
-        }
-        for (int j = 0; j < FD_MAX; j++) {
-            if (tasks[i].fd_table.entries[j].open) free_fd(&tasks[i].fd_table, j);
-        }
-        // Notify parent
-        for (int j = 0; j < MAX_TASKS; j++) {
-            if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
-                tasks[j].pending_signals |= (1ULL << SIGCHLD);
-                if (tasks[j].state == TASK_STOPPED) tasks[j].state = TASK_READY;
-                break;
-            }
-        }
-        return;
-    }
-    switch (sig) {
-        case SIGSTOP:
-        case SIGTSTP:
-            if (tasks[i].state == TASK_RUNNING || tasks[i].state == TASK_READY) {
-                tasks[i].state = TASK_STOPPED;
-                tasks[i].stop_reported = 0;
-                // Notify parent so waitpid(WUNTRACED) wakes up
-                for (int j = 0; j < MAX_TASKS; j++) {
-                    if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
-                        tasks[j].pending_signals |= (1ULL << SIGCHLD);
-                        if (tasks[j].state == TASK_READY || tasks[j].state == TASK_RUNNING)
-                            ; // already awake, will see the stopped child on next waitpid loop
-                        break;
-                    }
-                }
-                if (tasks[i].pid == current_task_ptr->pid) __asm__ volatile("int $32");
-            }
-            break;
-        case SIGCONT:
-            if (tasks[i].state == TASK_STOPPED) {
-                tasks[i].state = TASK_READY;
-                tasks[i].stop_reported = 0;
-                // Notify parent of the continue event
-                for (int j = 0; j < MAX_TASKS; j++) {
-                    if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
-                        tasks[j].pending_signals |= (1ULL << SIGCHLD);
-                        break;
-                    }
-                }
-            }
-            tasks[i].pending_signals &= ~((1ULL << SIGSTOP) | (1ULL << SIGTSTP));
-            break;
-        default:
-            tasks[i].pending_signals |= (1ULL << sig);
-            if (tasks[i].state == TASK_STOPPED)
-                tasks[i].state = TASK_READY;
-            break;
     }
 }
 
@@ -3342,6 +3481,21 @@ void sys_chdir(syscall_frame_t *frame) {
     char resolved[256];
     resolve_path_symlinks(abs_path, resolved, sizeof(resolved));
 
+    // procfs directories (e.g. /proc/<pid>, /proc/self, /proc/<pid>/fd) are
+    // virtual: they have no rootfs backing, so validate them through the
+    // procfs resolver. Without this, `cd /proc/<pid>` fails with ENOENT even
+    // though getdents on /proc lists the pid.
+    if (procfs_is_proc_path(resolved)) {
+        int self = proc_self_idx();
+        proc_node_t n;
+        if (!procfs_resolve(resolved, self, &n)) { frame->rax = (uint64_t)-ENOENT; return; }
+        if (!procfs_is_dir(&n)) { frame->rax = (uint64_t)-ENOTDIR; return; }
+        strncpy(current_task_ptr->cwd, resolved, 255);
+        current_task_ptr->cwd[255] = '\0';
+        frame->rax = 0;
+        return;
+    }
+
     rootfs_file_t dir = read_rootfs(resolved);
     if (!dir.data && !dir.mode) { frame->rax = (uint64_t)-ENOENT; return; }
     if ((dir.mode & 0040000) == 0 && strcmp(resolved, "/") != 0) {
@@ -3456,18 +3610,18 @@ void sys_unlink(syscall_frame_t *frame) {
 }
 
 void sys_symlink(syscall_frame_t *frame) {
-    const char *user_target = (const char *)frame->rdi;
-    const char *user_linkpath = (const char *)frame->rsi;
+    const char *target = (const char *)frame->rdi;
+    const char *linkpath = (const char *)frame->rsi;
 
-    if (!user_target || !user_linkpath) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!target || !linkpath) { frame->rax = (uint64_t)-EINVAL; return; }
 
-    char target[256], linkpath[256];
-    if (copy_from_user(target, user_target, sizeof(target)) < 0 || copy_from_user(linkpath, user_linkpath, sizeof(linkpath)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    char target_buf[256], linkpath_buf[256];
+    if (copy_from_user(target_buf, target, sizeof(target_buf)) < 0 || copy_from_user(linkpath_buf, linkpath, sizeof(linkpath_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
 
-    char abs_linkpath[256];
-    get_absolute_path(linkpath, abs_linkpath, sizeof(abs_linkpath));
+    char abs_linkpath_buf[256];
+    get_absolute_path(linkpath_buf, abs_linkpath_buf, sizeof(abs_linkpath_buf));
 
-    frame->rax = (uint64_t)symlink_rootfs(target, abs_linkpath, current_task_ptr->euid, current_task_ptr->egid);
+    frame->rax = (uint64_t)symlink_rootfs(target_buf, abs_linkpath_buf, current_task_ptr->euid, current_task_ptr->egid);
 }
 
 void sys_readlink(syscall_frame_t *frame) {
@@ -3721,7 +3875,6 @@ void sys_getppid(syscall_frame_t *frame) {
 }
 
 void sys_setsid(syscall_frame_t *frame) {
-    // Fail if the caller is already a process group leader
     if (current_task_ptr->pid == current_task_ptr->pgid) {
         frame->rax = (uint64_t)-EPERM;
         return;
@@ -3894,8 +4047,8 @@ void sys_settimeofday(syscall_frame_t *frame) {
 
 void sys_mount(syscall_frame_t *frame) {
     const char *source = (const char *)frame->rdi;
-    const char *user_target = (const char *)frame->rsi;
-    const char *user_fstype = (const char *)frame->rdx;
+    const char *target = (const char *)frame->rsi;
+    const char *fstype = (const char *)frame->rdx;
     unsigned long mountflags = (unsigned long)frame->r10;
     const void *data = (const void *)frame->r8;
 
@@ -3904,15 +4057,14 @@ void sys_mount(syscall_frame_t *frame) {
     bool priv = current_task_ptr && current_task_ptr->euid == 0;
     if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
 
-    if (!user_target || !user_fstype) {
-        frame->rax = (uint64_t)-EINVAL; return;
-    }
+    if (!target || !fstype) { frame->rax = (uint64_t)-EINVAL; return; }
 
     char target_buf[64];
     char fstype_buf[32];
-    if (copy_from_user(target_buf, user_target, sizeof(target_buf)) < 0 || copy_from_user(fstype_buf, user_fstype, sizeof(fstype_buf)) < 0) {
+    if (copy_from_user(target_buf, target, sizeof(target_buf)) < 0 || copy_from_user(fstype_buf, fstype, sizeof(fstype_buf)) < 0) {
         frame->rax = (uint64_t)-EFAULT; return;
     }
+
     if (!*target_buf || !*fstype_buf) {
         frame->rax = (uint64_t)-EINVAL; return;
     }
@@ -3951,16 +4103,16 @@ void sys_mount(syscall_frame_t *frame) {
 }
 
 void sys_umount(syscall_frame_t *frame) {
-    const char *user_target = (const char *)frame->rdi;
+    const char *target = (const char *)frame->rdi;
     (void)frame->rsi;
 
     bool priv = current_task_ptr && current_task_ptr->euid == 0;
     if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
 
-    if (!user_target) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!target) { frame->rax = (uint64_t)-EINVAL; return; }
 
     char target_buf[64];
-    if (copy_from_user(target_buf, user_target, sizeof(target_buf)) < 0) {
+    if (copy_from_user(target_buf, target, sizeof(target_buf)) < 0) {
         frame->rax = (uint64_t)-EFAULT; return;
     }
 
@@ -4170,15 +4322,15 @@ void sys_unlinkat(syscall_frame_t *frame) {
 }
 
 void sys_symlinkat(syscall_frame_t *frame) {
-    const char *user_target = (const char *)frame->rdi;
+    const char *target = (const char *)frame->rdi;
     int newdirfd = (int)frame->rsi;
     const char *user_path = (const char *)frame->rdx;
 
-    if (!user_target || !user_path) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!target || !user_path) { frame->rax = (uint64_t)-EINVAL; return; }
 
     char target_buf[256];
     char path_buf[256];
-    if (copy_from_user(target_buf, user_target, sizeof(target_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (copy_from_user(target_buf, target, sizeof(target_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
     if (copy_from_user(path_buf, user_path, sizeof(path_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char abs_path[256];
@@ -4531,22 +4683,14 @@ void sys_getrandom(syscall_frame_t *frame) {
     frame->rax = buflen;
 }
 
-struct pollfd {
-    int   fd;
-    short events;
-    short revents;
-};
-
 void sys_poll(syscall_frame_t *frame) {
     struct pollfd *user_fds = (struct pollfd *)frame->rdi;
     uint64_t nfds = (uint64_t)frame->rsi;
     int timeout = (int)frame->rdx;
-
     if (nfds > 1024) { frame->rax = (uint64_t)-EINVAL; return; }
     if (nfds > 0 && !user_ptr_ok(user_fds, nfds * sizeof(struct pollfd))) {
         frame->rax = (uint64_t)-EFAULT; return;
     }
-
     struct pollfd *k_fds = NULL;
     if (nfds > 0) {
         k_fds = malloc(nfds * sizeof(struct pollfd));
@@ -4557,42 +4701,69 @@ void sys_poll(syscall_frame_t *frame) {
         }
     }
 
+    #define EVAL_FDS(events) do { \
+        (events) = 0; \
+        for (uint64_t i = 0; i < nfds; i++) { \
+            k_fds[i].revents = 0; \
+            int fd = k_fds[i].fd; \
+            if (fd < 0) continue; \
+            fd_entry_t *entry = get_current_fd(fd); \
+            if (!entry || !entry->open) { k_fds[i].revents |= POLLNVAL; (events)++; continue; } \
+            if (k_fds[i].events & POLLIN) { \
+                if (entry->type == FD_STREAM) { \
+                    int tty_idx = current_task_ptr->ctty_idx >= 0 ? current_task_ptr->ctty_idx : 0; \
+                    tty_t *t = get_tty(tty_idx); \
+                    if (t && get_tty_ring_count(&t->input) > 0) k_fds[i].revents |= POLLIN; \
+                } else if (entry->type == FD_DEV) { \
+                    char rel[256]; \
+                    int tty_idx = -1; \
+                    if (is_mounted_under(entry->path, "devtmpfs", rel)) { \
+                        if (strncmp(rel, "tty", 3) == 0 || strcmp(rel, "console") == 0) { \
+                            tty_idx = (strlen(rel) > 3 && rel[3] >= '0' && rel[3] <= '7') ? rel[3] - '0' : 0; \
+                        } \
+                    } else if (is_mounted_under(entry->path, "devpts", rel)) { \
+                        tty_idx = current_task_ptr->ctty_idx; \
+                    } \
+                    if (tty_idx >= 0) { \
+                        tty_t *t = get_tty(tty_idx); \
+                        if (t && get_tty_ring_count(&t->input) > 0) k_fds[i].revents |= POLLIN; \
+                    } else { \
+                        k_fds[i].revents |= POLLIN; \
+                    } \
+                } else { \
+                    k_fds[i].revents |= POLLIN; \
+                } \
+            } \
+            if (k_fds[i].events & POLLOUT) k_fds[i].revents |= POLLOUT; \
+            if (k_fds[i].revents) (events)++; \
+        } \
+    } while (0)
+
     int events = 0;
-    for (uint64_t i = 0; i < nfds; i++) {
-        k_fds[i].revents = 0;
-        int fd = k_fds[i].fd;
-        if (fd < 0) continue;
+    EVAL_FDS(events);
 
-        fd_entry_t *entry = get_current_fd(fd);
-        if (!entry || !entry->open) {
-            k_fds[i].revents |= 0x0020; // POLLNVAL
-            events++;
-            continue;
-        }
-
-        if (k_fds[i].events & 0x0001) k_fds[i].revents |= 0x0001; // POLLIN
-        if (k_fds[i].events & 0x0004) k_fds[i].revents |= 0x0004; // POLLOUT
-        if (k_fds[i].revents) events++;
-    }
-
-    if (events == 0 && timeout > 0) {
+    if (events == 0 && timeout != 0) {
         uint64_t start_time = hpet_elapsed_us();
-        uint64_t total_us = (uint64_t)timeout * 1000ULL;
-        while (hpet_elapsed_us() - start_time < total_us) {
+        uint64_t total_us = (timeout > 0) ? (uint64_t)timeout * 1000ULL : UINT64_MAX;
+        while (1) {
             if (signal_pending()) {
                 if (nfds > 0) free(k_fds);
                 frame->rax = (uint64_t)-EINTR;
                 return;
             }
-            __asm__ volatile("sti; pause; hlt" ::: "memory");
+            EVAL_FDS(events);
+            if (events > 0) break;
+            if (timeout > 0 && hpet_elapsed_us() - start_time >= total_us) break;
+            __asm__ volatile("int $32");
         }
     }
+
+    #undef EVAL_FDS
 
     if (nfds > 0) {
         copy_to_user((void*)user_fds, k_fds, nfds * sizeof(struct pollfd));
         free(k_fds);
     }
-
     frame->rax = (uint64_t)events;
 }
 

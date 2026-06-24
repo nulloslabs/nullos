@@ -21,6 +21,12 @@ task_t* current_task_ptr = &tasks[0];
 static spinlock_t task_lock = SPINLOCK_INIT;
 static pid_t next_pid = 0;
 
+const vma_table_t *task_vma_table(int pid_idx) {
+    if (pid_idx < 0 || pid_idx >= MAX_TASKS) return NULL;
+    if (tasks[pid_idx].state == TASK_DEAD) return NULL;
+    return &tasks[pid_idx].vmas;
+}
+
 // Let's keep this public and not private, other functions change it.
 spinlock_t sched_lock = SPINLOCK_INIT;
 
@@ -359,21 +365,35 @@ void exit_task(int status) {
         if (tasks[i].state != TASK_DEAD && tasks[i].pid == my_ppid) {
             tasks[i].pending_signals |= (1ULL << SIGCHLD);
             // Wake parent if it was sleeping in wait4 (it will re-check)
-            if (tasks[i].state == TASK_STOPPED || tasks[i].state == TASK_READY)
+            if (tasks[i].state == TASK_STOPPED && tasks[i].waiting_for != 0) {
+            } else if (tasks[i].state == TASK_STOPPED || tasks[i].state == TASK_READY) {
                 tasks[i].state = TASK_READY;
+            }
             break;
         }
     }
 
-    if (current_task_ptr->pid == 1) {
-        panic("init process exited");
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (tasks[i].waiting_for == my_pid) {
+            tasks[i].waiting_for = 0;
+            tasks[i].state = TASK_READY;
+            break;
+        }
     }
+
+    if (current_task_ptr->pid == 1) panic("init process exited");
 
     spin_unlock(&sched_lock);
     sti();
     __asm__ volatile("int $32");
 
     idle();
+}
+
+bool signal_pending(void) {
+    if (!current_task_ptr) return false;
+    uint64_t unblockable = (1ULL << SIGKILL) | (1ULL << SIGSTOP);
+    return (current_task_ptr->pending_signals & (~current_task_ptr->blocked_signals | unblockable)) != 0;
 }
 
 void init_scheduler(void) {
@@ -385,12 +405,4 @@ void init_scheduler(void) {
     current_task_ptr = &tasks[0];
 
     printf("scheduler: initialized scheduler\n");
-}
-
-// Accessor used by procfs to read a task's VMA table without reaching into
-// the tasks[] array directly from another translation unit.
-const vma_table_t *task_vma_table(int pid_idx) {
-    if (pid_idx < 0 || pid_idx >= MAX_TASKS) return NULL;
-    if (tasks[pid_idx].state == TASK_DEAD) return NULL;
-    return &tasks[pid_idx].vmas;
 }

@@ -275,7 +275,15 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
         memcpy(&tasks[pid].vmas, &local_vmas, sizeof(vma_table_t));
     }
 
-    return pid;
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (tasks[i].waiting_for == pid) {
+            tasks[i].waiting_for = 0;
+            tasks[i].state = TASK_READY;
+            break;
+        }
+    }
+
+    return 0;
 }
 
 int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
@@ -292,8 +300,7 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     uint8_t *data = (uint8_t *)file.data;
     elf64_ehdr_t *ehdr = (elf64_ehdr_t *)data;
 
-    if (ehdr->magic != ELF_MAGIC || ehdr->class != ELF_CLASS64 || ehdr->machine != EM_X86_64)
-        return -ENOEXEC;
+    if (ehdr->magic != ELF_MAGIC || ehdr->class != ELF_CLASS64 || ehdr->machine != EM_X86_64) return -ENOEXEC;
 
     vmm_context_t *ctx = create_vmm_context();
     if (!ctx) return -ENOMEM;
@@ -385,5 +392,14 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     frame->rcx = entry;
     frame->rdx = 0;
     frame->rsp = v_rsp;
+
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (tasks[i].waiting_for == current_task_ptr->pid) {
+            tasks[i].waiting_for = 0;
+            tasks[i].state = TASK_READY;
+            break;
+        }
+    }
+
     return 0;
 }

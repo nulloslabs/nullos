@@ -138,5 +138,5 @@ typedef struct {
     } un;
 } __attribute__((packed)) elf64_auxv_t;
 
-pid_t execute_elf(const char *path, char **argv, char **envp);
+int execute_elf(const char *path, char **argv, char **envp);
 int execve_elf(const char *path, char **argv, char **envp, void* raw_frame);

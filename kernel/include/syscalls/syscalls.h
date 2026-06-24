@@ -8,7 +8,6 @@
 #define user_addr_ok(addr, size) ((uint64_t)(addr) < USER_ADDR_MAX && (uint64_t)(size) <= USER_ADDR_MAX - (uint64_t)(addr))
 #define user_ptr_ok(ptr, size) user_addr_ok((uint64_t)(ptr), (uint64_t)(size))
 
-// Register frame passed to syscall_dispatch
 typedef struct {
     uint64_t rax;
     uint64_t rbx;
@@ -27,6 +26,10 @@ typedef struct {
     uint64_t r14;
     uint64_t r15;
 } __attribute__((packed)) syscall_frame_t;
+
+typedef void (*syscall_fn_t)(syscall_frame_t *);
+
+extern const syscall_fn_t syscall_table[];
 
 void syscall_dispatch(syscall_frame_t *frame);
 void init_syscalls(void);

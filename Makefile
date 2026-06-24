@@ -12,9 +12,6 @@ all: iso
 kernel:
 	@$(MAKE) -C kernel
 
-userspace:
-	@$(MAKE) -C userspace
-
 rootfs:
 	@$(MAKE) -C rootfs
 

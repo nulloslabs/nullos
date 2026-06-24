@@ -48,6 +48,7 @@ void sys_listen(syscall_frame_t *frame);
 void sys_socketpair(syscall_frame_t *frame);
 void sys_reboot(syscall_frame_t *frame);
 void sys_fork(syscall_frame_t *frame);
+void sys_vfork(syscall_frame_t *frame);
 void sys_execve(syscall_frame_t *frame);
 void sys_exit(syscall_frame_t *frame);
 void sys_wait4(syscall_frame_t *frame);

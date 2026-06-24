@@ -9,9 +9,10 @@
 
 typedef struct {
     char name[65];
-    uint64_t (*read)(void* buf, uint64_t count, uint64_t offset);
-    uint64_t (*write)(const void* buf, uint64_t count, uint64_t offset);
+    uint64_t (*read)(void* buf, uint64_t count, uint64_t offset, int dev_idx);
+    uint64_t (*write)(const void* buf, uint64_t count, uint64_t offset, int dev_idx);
     bool active;
+    int index; // Device-specific index (e.g., TTY number)
 } devtmpfs_device_t;
 
 extern devtmpfs_device_t devtmpfs_devices[MAX_DEVTMPFS_DEVICES];

@@ -10,10 +10,10 @@
 extern char scancode_to_ascii(uint8_t sc);
 
 static tty_t ttys[NUM_TTYS];
-static spinlock_t tty_lock = SPINLOCK_INIT;
+spinlock_t tty_lock = SPINLOCK_INIT;
 
-// Currently only tty0 is active (no VT switching).
-#define ACTIVE_TTY 0
+// Track which TTY receives keyboard input (no VT switching yet, so we use the last active TTY)
+static int keyboard_tty = 0;
 
 int get_tty_ring_count(tty_ring_t *r) { return (int)((r->head - r->tail + TTY_BUF_SIZE) % TTY_BUF_SIZE); }
 
@@ -36,14 +36,12 @@ int read_tty_ring(tty_ring_t *r, char *buf, int len) {
 
 tty_t *get_tty(int idx) { if (idx < 0 || idx >= NUM_TTYS) return NULL; return &ttys[idx]; }
 
-spinlock_t *get_tty_lock(void) { return &tty_lock; }
-
 void tty_process_scancode(uint8_t sc) {
     char c = scancode_to_ascii(sc);
     if (c == 0) return;  // modifier press/release, caps lock, etc.
     uint64_t irq;
     spin_lock_irqsave(&tty_lock, &irq);
-    tty_t *t = &ttys[ACTIVE_TTY];
+    tty_t *t = &ttys[keyboard_tty];
     tcflag_t lflags = t->termios.c_lflag;
     cc_t vintr = t->termios.c_cc[VINTR];
     cc_t vsusp = t->termios.c_cc[VSUSP];
@@ -62,7 +60,7 @@ void tty_process_scancode(uint8_t sc) {
 void tty_process_input_signals(void) {
     uint64_t irq;
     spin_lock_irqsave(&tty_lock, &irq);
-    tty_t *t = &ttys[ACTIVE_TTY];
+    tty_t *t = &ttys[keyboard_tty];
     int sig = t->pending_isig;
     if (!sig) { spin_unlock_irqrestore(&tty_lock, irq); return; }
     char c = t->pending_isig_c;
@@ -70,7 +68,7 @@ void tty_process_input_signals(void) {
     t->pending_isig = 0;
     spin_unlock_irqrestore(&tty_lock, irq);
 
-    int delivered = tty_signal_pgrp(ACTIVE_TTY, sig);
+    int delivered = tty_signal_pgrp(keyboard_tty, sig);
     if (delivered == 0) {
         spin_lock_irqsave(&tty_lock, &irq);
         write_tty_ring(&t->input, &c, 1);
@@ -133,6 +131,12 @@ int tty_signal_pgrp(int tty_idx, int sig) {
         }
     }
     return delivered;
+}
+
+void set_keyboard_tty(int tty_idx) {
+    if (tty_idx >= 0 && tty_idx < NUM_TTYS) {
+        keyboard_tty = tty_idx;
+    }
 }
 
 void init_ttys(void) {

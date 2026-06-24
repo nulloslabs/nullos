@@ -15,6 +15,12 @@
 #define KERNEL_STACK_SIZE 32768
 #define TASK_STDIN_BUF_SIZE 256
 
+#define TASK_DEAD 0
+#define TASK_READY 1
+#define TASK_RUNNING 2
+#define TASK_ZOMBIE 3
+#define TASK_STOPPED 4
+
 typedef struct {
     pid_t pid;
     pid_t ppid;
@@ -34,6 +40,7 @@ typedef struct {
     gid_t gid;
     gid_t egid;
     fd_table_t fd_table;
+    pid_t waiting_for;
     char cwd[256];
     char exe[256];          // path of the executable backing this task (for /proc/<pid>/exe)
     vma_table_t vmas;       // tracked virtual memory areas (for /proc/<pid>/maps)
@@ -49,38 +56,23 @@ typedef struct {
     uint64_t pending_signals;
     uint64_t blocked_signals;
     int *clear_child_tid;
-    int stop_reported;         // 1 after WUNTRACED has reported this stop, reset on SIGCONT
-    // Per-task FPU / XSAVE area.  Eager-saved on context switch and on signal
-    // delivery; xrstor'd when the task (or signal frame) is entered.
+    int stop_reported;
     void *fpu_area;
-    // Alternate signal stack (sigaltstack).  sas_ss_flags holds SS_* bits.
-    void   *sas_ss_sp;
-    size_t  sas_ss_size;
-    int     sas_ss_flags;
-    // True while a signal is being delivered on the alternate stack, so
-    // nested deliveries don't recurse onto it again.
+    void *sas_ss_sp;
+    size_t sas_ss_size;
+    int sas_ss_flags;
     bool on_altstack;
 } __attribute__((aligned(16))) task_t;
-
-#define TASK_DEAD 0
-#define TASK_READY 1
-#define TASK_RUNNING 2
-#define TASK_ZOMBIE 3
-#define TASK_STOPPED 4
 
 extern task_t tasks[MAX_TASKS];
 extern int current_task;
 extern task_t* current_task_ptr;
 extern spinlock_t sched_lock;
 
-void init_scheduler(void);
 pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_t initial_rsp);
 pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx);
 void schedule(void);
 void exit_task(int status);
-
-static inline bool signal_pending(void) {
-    if (!current_task_ptr) return false;
-    uint64_t unblockable = (1ULL << SIGKILL) | (1ULL << SIGSTOP);
-    return (current_task_ptr->pending_signals & (~current_task_ptr->blocked_signals | unblockable)) != 0;
-}
+const vma_table_t *task_vma_table(int pid_idx);
+bool signal_pending(void);
+void init_scheduler(void);

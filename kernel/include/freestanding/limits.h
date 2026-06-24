@@ -13,10 +13,12 @@
 #define SHRT_MAX    32767
 #define USHRT_MAX   65535U
 
+#define WORD_BIT    32
 #define INT_MIN     (-2147483647 - 1)
 #define INT_MAX     2147483647
 #define UINT_MAX    4294967295U
 
+#define LONG_BIT    64
 #define LONG_MIN    (-9223372036854775807L - 1L)
 #define LONG_MAX    9223372036854775807L
 #define ULONG_MAX   18446744073709551615UL
@@ -25,14 +27,10 @@
 #define LLONG_MAX   9223372036854775807LL
 #define ULLONG_MAX  18446744073709551615ULL
 
-#define SIZE_MAX    ((size_t)-1)
 #define SSIZE_MAX   ((ssize_t)(SIZE_MAX / 2))
 
 #define TIME_T_MIN  ((time_t)(-TIME_T_MAX - 1))
 #define TIME_T_MAX  ((time_t)(((uint64_t)1 << ((sizeof(time_t) * 8) - 1)) - 1))
-
-#define WORD_BIT    32
-#define LONG_BIT    64
 
 #define OFF_MAX     LLONG_MAX
 #define OFF_MIN     LLONG_MIN

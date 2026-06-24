@@ -1,5 +1,4 @@
 // Look at this #include mess...
-#include <freestanding/stddef.h>
 #include <io/terminal.h>
 #include <io/framebuffer.h>
 #include <main/panic.h>
@@ -83,7 +82,7 @@ void kmain(uint64_t load_offset) {
     const char *init_path = "/init";
     char *init_argv[] = { (char*)init_path, NULL };
     char *init_envp[] = { NULL };
-    pid_t init = execute_elf(init_path, init_argv, init_envp);
+    int init = execute_elf(init_path, init_argv, init_envp);
     if (init < 0) panic("init process didn't run due to a error");
 
     idle();
