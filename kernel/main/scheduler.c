@@ -303,7 +303,7 @@ void schedule(void) {
 
         // Ensure TSS.RSP0 is updated so Ring 3 -> Ring 0 interrupts use the correct stack!
         if (tasks[next].kernel_stack) {
-            tss_set_kernel_stack_for_cpu(0, (void*)((uint64_t)tasks[next].kernel_stack + KERNEL_STACK_SIZE));
+            set_tss_kernel_stack_for_cpu(0, (void*)((uint64_t)tasks[next].kernel_stack + KERNEL_STACK_SIZE));
         }
 
         if (tasks[next].ctx && tasks[next].ctx != tasks[old_task].ctx) {

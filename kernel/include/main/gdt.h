@@ -43,6 +43,6 @@ typedef struct {
 extern cpu_gdt_t cpu_gdts[MAX_CPUS];
 
 void set_tss_kernel_stack(void *stack);           // BSP shorthand (cpu 0)
-void tss_set_kernel_stack_for_cpu(int cpu_index, void *stack);
+void set_tss_kernel_stack_for_cpu(int cpu_index, void *stack);
 void init_gdt(void);                              // BSP: calls init_gdt_for_cpu(0)
 void init_gdt_for_cpu(int cpu_index);             // APs: call this on each AP

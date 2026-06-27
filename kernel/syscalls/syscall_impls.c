@@ -33,7 +33,7 @@
 #include <main/halt.h>
 #include <main/hostname.h>
 #include <main/timekeeping.h>
-#include <main/uname.h>
+#include <main/utsname.h>
 #include <main/acpi.h>
 #include <main/msr.h>
 #include <main/fd.h>
@@ -3050,7 +3050,7 @@ void sys_uname(syscall_frame_t *frame) {
 
     if (!bufp) { frame->rax = (uint64_t)-EFAULT; return; }
 
-    struct utsname info = uname_info;
+    struct utsname info = utsname_info;
     get_hostname(info.nodename, sizeof(info.nodename));
 
     write_vmm(current_task_ptr->ctx, bufp, &info, sizeof(info));

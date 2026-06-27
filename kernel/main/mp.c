@@ -31,7 +31,7 @@ static void ap_entry(struct limine_mp_info *info) {
 
     void *stack = vmalloc(32768);
     cpus[idx].kernel_stack = (void*)((uint64_t)stack + 32768);
-    tss_set_kernel_stack_for_cpu(idx, cpus[idx].kernel_stack);
+    set_tss_kernel_stack_for_cpu(idx, cpus[idx].kernel_stack);
 
     init_sse();
     init_syscalls();

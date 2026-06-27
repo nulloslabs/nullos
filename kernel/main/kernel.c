@@ -32,7 +32,7 @@
 #include <main/string.h>
 #include <syscalls/syscalls.h>
 #include <main/madt.h>
-#include <main/uname.h>
+#include <main/utsname.h>
 #include <io/ttys.h>
 #include <io/ptys.h>
 #include <main/rng.h>
@@ -67,7 +67,7 @@ void kmain(uint64_t load_offset) {
     init_scheduler();
     init_pci();
     cache_machine_info();
-    cache_uname();
+    cache_utsname();
     init_pci_drivers();
     init_syscalls();
 
