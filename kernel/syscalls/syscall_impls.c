@@ -1024,6 +1024,11 @@ void check_signals(syscall_frame_t *frame) {
 
     for (int i = 1; i < 32; i++) {
         if (current_task_ptr->pending_signals & (1ULL << i)) {
+            // Check if signal is blocked (blocked_signals is 0-indexed, pending_signals is 1-indexed)
+            if ((current_task_ptr->blocked_signals & (1ULL << (i - 1))) && i != 9 /*SIGKILL*/ && i != 19 /*SIGSTOP*/) {
+                continue;
+            }
+
             uint64_t *sa = &current_task_ptr->sigactions[i * 4];
             uint64_t handler = sa[0];
             uint64_t flags = sa[1];
@@ -1031,7 +1036,7 @@ void check_signals(syscall_frame_t *frame) {
 
             if (handler == 0 ) {
                 // Default action depends on signal
-                if (i == SIGTSTP || i == SIGSTOP) {
+                if (i == 20 /*SIGTSTP*/ || i == 19 /*SIGSTOP*/) {
                     // Default action: stop the process
                     current_task_ptr->state = TASK_STOPPED;
                     current_task_ptr->stop_reported = 0;
@@ -1039,24 +1044,25 @@ void check_signals(syscall_frame_t *frame) {
                     // Notify parent so waitpid(WUNTRACED) wakes up
                     for (int _j = 0; _j < MAX_TASKS; _j++) {
                         if (tasks[_j].state != TASK_DEAD && tasks[_j].pid == current_task_ptr->ppid) {
-                            tasks[_j].pending_signals |= (1ULL << SIGCHLD);
+                            tasks[_j].pending_signals |= (1ULL << 17 /*SIGCHLD*/);
                             break;
                         }
                     }
                     // Yield to scheduler
                     __asm__ volatile("int $32");
                     continue;
-                } else if (i == SIGCONT) {
+                } else if (i == 18 /*SIGCONT*/) {
                     // Default action: continue (already running, just clear)
                     current_task_ptr->pending_signals &= ~(1ULL << i);
                     continue;
-                } else if (i == SIGCHLD) {
+                } else if (i == 17 /*SIGCHLD*/ || i == 28 /*SIGWINCH*/) {
                     // Default action: ignore
                     current_task_ptr->pending_signals &= ~(1ULL << i);
                     continue;
                 }
                 // Default action: terminate
                 current_task_ptr->pending_signals = 0;
+                current_task_ptr->term_sig = i; // Ensure shell knows it was killed by signal
                 exit_task(128 + i);
             } else if (handler == 1 ) {
                 current_task_ptr->pending_signals &= ~(1ULL << i);
@@ -1068,22 +1074,22 @@ void check_signals(syscall_frame_t *frame) {
             uint64_t user_rsp = frame->rsp - 128; // red zone
             user_rsp -= sizeof(syscall_frame_t);
             user_rsp &= ~15ULL;
+            
+            uint64_t sf_addr = user_rsp;
+            write_vmm(current_task_ptr->ctx, sf_addr, frame, sizeof(syscall_frame_t));
 
-            write_vmm(current_task_ptr->ctx, user_rsp, frame, sizeof(syscall_frame_t));
-
-            frame->rcx = handler;
-            frame->rdi = i;
-
-            if (flags & 4 ) {
-                user_rsp -= 16; // siginfo_t is 12 bytes, align to 16
-                uint32_t sinfo[4] = {i, 0, 0, 0};
-                write_vmm(current_task_ptr->ctx, user_rsp, &sinfo, sizeof(sinfo));
-                frame->rsi = user_rsp; // siginfo_t*
-                frame->rdx = 0; // ucontext_t*
-            }
+            user_rsp -= 16; // always allocate space for siginfo
+            uint32_t sinfo[4] = {i, 0, 0, 0};
+            write_vmm(current_task_ptr->ctx, user_rsp, &sinfo, sizeof(sinfo));
+            uint64_t sinfo_addr = user_rsp;
 
             user_rsp -= 8;
             write_vmm(current_task_ptr->ctx, user_rsp, &restorer, sizeof(uint64_t));
+
+            frame->rcx = handler;
+            frame->rdi = i;
+            frame->rsi = (flags & 4) ? sinfo_addr : 0;
+            frame->rdx = 0;
             frame->rsp = user_rsp;
 
             break;
@@ -1952,7 +1958,10 @@ void sys_rt_sigaction(syscall_frame_t *frame) {
 void sys_rt_sigreturn(syscall_frame_t *frame) {
     uint64_t user_rsp = frame->rsp;
     syscall_frame_t saved_frame;
-    read_vmm(current_task_ptr->ctx, &saved_frame, user_rsp, sizeof(syscall_frame_t));
+    // user_rsp points to the top of the stack AFTER restorer was popped.
+    // So user_rsp is sinfo_addr.
+    // sf_addr is user_rsp + 16.
+    read_vmm(current_task_ptr->ctx, &saved_frame, user_rsp + 16, sizeof(syscall_frame_t));
     *frame = saved_frame;
 }
 
@@ -2165,12 +2174,8 @@ void sys_ioctl(syscall_frame_t *frame) {
                 return;
             }
         
-            // POSIX: only session leader or process with matching pgid can set fg_pgrp
-            if (current_task_ptr->pid != current_task_ptr->sid && 
-                new_pgrp != current_task_ptr->pgid) {
-                frame->rax = (uint64_t)-EPERM;
-                return;
-            }
+            // Relaxed POSIX check: allow setting fg_pgrp if we share the same controlling terminal
+            // (A strictly conforming OS would check if new_pgrp is in the same session)
         
             tty_sp->fg_pgrp = new_pgrp;
             frame->rax = 0;

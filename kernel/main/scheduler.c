@@ -392,8 +392,10 @@ void exit_task(int status) {
 
 bool signal_pending(void) {
     if (!current_task_ptr) return false;
-    uint64_t unblockable = (1ULL << SIGKILL) | (1ULL << SIGSTOP);
-    return (current_task_ptr->pending_signals & (~current_task_ptr->blocked_signals | unblockable)) != 0;
+    uint64_t unblockable = (1ULL << 9 /*SIGKILL*/) | (1ULL << 19 /*SIGSTOP*/);
+    // blocked_signals is 0-indexed (bit 0 = signal 1), pending_signals is 1-indexed (bit 1 = signal 1)
+    uint64_t blocked_shifted = current_task_ptr->blocked_signals << 1;
+    return (current_task_ptr->pending_signals & (~blocked_shifted | unblockable)) != 0;
 }
 
 void init_scheduler(void) {

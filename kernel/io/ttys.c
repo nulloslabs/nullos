@@ -55,6 +55,8 @@ void tty_process_scancode(uint8_t sc) {
         write_tty_ring(&t->input, &c, 1);
     }
     spin_unlock_irqrestore(&tty_lock, irq);
+
+    if (sig) tty_process_input_signals();
 }
 
 void tty_process_input_signals(void) {
