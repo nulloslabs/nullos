@@ -285,9 +285,16 @@ static void add_tombstone(const char *norm_path) {
     }
 }
 
-// Does the tar archive contain any entry (file/dir/symlink) at `norm_path`
-// (already in "./foo/bar" form)? Used to decide whether a deletion needs a
-// tombstone to keep the original from resurfacing.
+static bool overlay_has_path_n(const char *norm_path, size_t len) {
+    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+        if (!modified_files[i].is_active) continue;
+        const char *p = modified_files[i].path;
+        if (strlen(p) == len && strncmp(p, norm_path, len) == 0)
+            return true;
+    }
+    return false;
+}
+
 static bool tar_has_entry(const char *norm_path) {
     if (!tar_archive_start) return false;
     uint8_t *ptr = tar_archive_start;
@@ -566,25 +573,31 @@ int rmdir_rootfs(const char *path) {
     if (!file.mode) return -ENOENT;
     if ((file.mode & 0xF000) != 0x4000) return -ENOTDIR;
 
-    // check it's empty — scan modified_files for any children
+    // check it's empty — scan modified_files for any live (non-tombstone) children
     size_t norm_len = strlen(norm);
     for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
         if (!modified_files[i].is_active) continue;
+        if (modified_files[i].is_tombstone) continue;
         if (strcmp(modified_files[i].path, norm) == 0) continue; // itself
         if (strncmp(modified_files[i].path, norm, norm_len) == 0 &&
             modified_files[i].path[norm_len] == '/') return -ENOTEMPTY;
     }
 
-    // check TAR for any children
+    // check TAR for any children (tombstones hide tar entries, so a tar child
+    // that has been deleted is already invisible — no need to skip it here
+    // because the tombstone above already means "not present")
     if (tar_archive_start) {
         uint8_t *ptr = tar_archive_start;
         while (1) {
             struct tar_header *h = (struct tar_header *)ptr;
             if (h->name[0] == '\0') break;
             uint64_t size = parse_octal(h->size);
-            if (strncmp(h->name, norm, norm_len) == 0 &&
-                h->name[norm_len] == '/' &&
-                strlen(h->name) > norm_len + 1) return -ENOTEMPTY;
+            // skip this tar entry if a tombstone hides it
+            if (!overlay_has_path_n(h->name, strlen(h->name))) {
+                if (strncmp(h->name, norm, norm_len) == 0 &&
+                    h->name[norm_len] == '/' &&
+                    strlen(h->name) > norm_len + 1) return -ENOTEMPTY;
+            }
             ptr += 512 + (size + 511) / 512 * 512;
         }
     }
@@ -661,28 +674,6 @@ int chmod_rootfs(const char *path, mode_t mode) {
     return 0;
 }
 
-// Returns true if the overlay (modified_files[]) holds any entry at the given
-// normalized path — including a tombstone. `norm_path`/`len` are the
-// "./foo/bar" form used throughout rootfs, without a trailing slash. Used to
-// skip tar entries during directory enumeration: a real overlay entry would
-// otherwise be listed twice (once per source), and a tombstoned entry must
-// not be listed at all.
-static bool overlay_has_path_n(const char *norm_path, size_t len) {
-    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
-        if (!modified_files[i].is_active) continue;
-        const char *p = modified_files[i].path;
-        if (strlen(p) == len && strncmp(p, norm_path, len) == 0)
-            return true;
-    }
-    return false;
-}
-
-// Enumerate a merged view of the rootfs: every tar entry that isn't shadowed
-// by an overlay entry, followed by every overlay entry. Without this merge,
-// files/dirs created at runtime (mkdir, write, symlink — which land in the
-// modified_files overlay) never show up in directory listings, so getdents()
-// of a directory containing them comes back empty (e.g. `ls /` after
-// `cp -r /etc /etc-copy` would not list /etc-copy).
 int get_rootfs_entry(int index, directory_entry_t *entry) {
     if (!entry) return -1;
 

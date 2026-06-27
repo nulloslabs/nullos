@@ -7,4 +7,5 @@ size_t get_fpu_state_size(void);
 void save_fpu_state(void *area);
 void restore_fpu_state(const void *area);
 void init_fpu_area(void *area);
+void init_sse_for_cpu(void);
 void init_sse(void);

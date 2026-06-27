@@ -43,7 +43,7 @@ void init_fpu_area(void *area) {
     save_fpu_state(area);
 }
 
-void init_sse(void) {
+void init_sse_for_cpu(void) {
     if (!cpu_has_feature(CPU_FEATURE_SSE)) panic("cpu dosen't support sse");
     if (!cpu_has_feature(CPU_FEATURE_SSE2)) panic("cpu dosen't support sse2");
 
@@ -78,5 +78,9 @@ void init_sse(void) {
 
     cached_state_size = xsave_area_size();
     clear_fpu_ts();
+}
+
+void init_sse(void) {
+    init_sse_for_cpu();
     printf("sse: enabled sse\n");
 }

@@ -31,4 +31,5 @@ typedef void (*syscall_fn_t)(syscall_frame_t *);
 extern const syscall_fn_t syscall_table[];
 
 void syscall_dispatch(syscall_frame_t *frame);
+void init_syscalls_for_cpu(void);
 void init_syscalls(void);

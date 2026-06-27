@@ -8,6 +8,7 @@
 #define SIGILL 4
 #define SIGTRAP 5
 #define SIGABRT 6
+#define SIGBUS 7
 #define SIGFPE 8
 #define SIGKILL 9
 #define SIGSEGV 11

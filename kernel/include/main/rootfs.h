@@ -4,7 +4,7 @@
 #include <freestanding/stddef.h>
 #include <freestanding/sys/types.h>
 
-#define MAX_MODIFIED_FILES 128
+#define MAX_MODIFIED_FILES 1024
 
 #define FT_FILE 1
 #define FT_DIRECTORY 2

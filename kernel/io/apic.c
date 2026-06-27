@@ -32,7 +32,7 @@ enum apic_mode detect_apic(void) {
 }
 
 // --- Initialization ---
-static void init_xapic(uint64_t base_phys) {
+static void init_xapic_for_cpu(uint64_t base_phys) {
     // Map LAPIC MMIO into kernel address space
     lapic_base = (volatile uint32_t *)phys_to_virt(base_phys);
 
@@ -47,10 +47,9 @@ static void init_xapic(uint64_t base_phys) {
 
     // Clear TPR (accept all interrupts)
     lapic_write(LAPIC_TPR, 0);
-    printf("apic: initialized xapic\n");
 }
 
-static void init_x2apic(void) {
+static void init_x2apic_for_cpu(void) {
     // Enable x2APIC via IA32_APIC_BASE MSR
     uint64_t msr = read_msr(MSR_APIC_BASE);
     msr |= MSR_APIC_BASE_EN | MSR_APIC_BASE_X2EN;
@@ -58,16 +57,24 @@ static void init_x2apic(void) {
 
     // Set SVR: enable + vector 0xFF
     write_msr(X2APIC_MSR_SVR, LAPIC_SVR_ENABLE | 0xFF);
-    printf("apic: initialized x2apic\n");
 }
 
-void init_apic(void) {
+void init_apic_for_cpu(void) {
     if (current_apic_mode == APIC_X2APIC) {
-        init_x2apic();
+        init_x2apic_for_cpu();
     } else if (current_apic_mode == APIC_XAPIC) {
         uint64_t msr = read_msr(MSR_APIC_BASE);
         uint64_t base_phys = msr & 0xFFFFF000ULL;
-        init_xapic(base_phys);
+        init_xapic_for_cpu(base_phys);
+    }
+}
+
+void init_apic(void) {
+    init_apic_for_cpu();
+    if (current_apic_mode == APIC_X2APIC) {
+        printf("apic: initialized x2apic\n");
+    } else if (current_apic_mode == APIC_XAPIC) {
+        printf("apic: initialized xapic\n");
     } else {
         printf("apic: no apic found, falling back to pic\n");
         return;

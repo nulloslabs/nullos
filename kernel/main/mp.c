@@ -33,10 +33,9 @@ static void ap_entry(struct limine_mp_info *info) {
     cpus[idx].kernel_stack = (void*)((uint64_t)stack + 32768);
     set_tss_kernel_stack_for_cpu(idx, cpus[idx].kernel_stack);
 
-    init_sse();
-    init_syscalls();
-    init_apic();
-    init_apic_timer(250);
+    init_sse_for_cpu();
+    init_syscalls_for_cpu();
+    init_apic_for_cpu();
 
     cpus[idx].active = 1;
     __sync_fetch_and_add(&ap_ready_count, 1);

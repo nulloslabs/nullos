@@ -53,4 +53,5 @@ void init_apic_timer(uint32_t frequency_hz);
 void send_apic_ipi(uint32_t apic_id, uint32_t vector);
 void send_init_apic(uint32_t apic_id);
 enum apic_mode detect_apic(void);
+void init_apic_for_cpu(void);
 void init_apic(void);

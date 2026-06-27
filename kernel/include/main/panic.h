@@ -33,4 +33,4 @@ typedef struct {
 } __attribute__((packed)) exception_frame_t;
 
 __attribute__((noreturn)) void panic(const char *reason);
-__attribute__((noreturn)) void exception_panic(exception_frame_t *frame);
+void exception_panic(exception_frame_t *frame);

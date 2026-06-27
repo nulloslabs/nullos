@@ -1336,6 +1336,11 @@ void sys_write(syscall_frame_t *frame) {
     rootfs_file_t file = read_rootfs(entry->path);
     if (!can_access_rootfs(&file, 0, 1, 0)) { frame->rax = (uint64_t)-EACCES; return; }
 
+    // O_APPEND: every write goes to the current end of file
+    if (entry->flags & O_APPEND) {
+        entry->offset = file.size;
+    }
+
     uint64_t new_size = entry->offset + count;
     if (file.size > new_size) new_size = file.size;
 
@@ -1450,6 +1455,12 @@ void sys_open(syscall_frame_t *frame) {
         int r = write_rootfs(abs_path, "", 0, mode | 0o100000, current_task_ptr->euid, current_task_ptr->egid);
         if (r < 0) { frame->rax = (uint64_t)r; return; }
         file = read_rootfs(abs_path);
+    }
+
+    // O_TRUNC: truncate existing regular file to zero length
+    if ((flags & O_TRUNC) && file.data && (file.mode & 0xF000) == 0x8000) {
+        int r = write_rootfs(abs_path, NULL, 0, file.mode, file.uid, file.gid);
+        if (r < 0) { frame->rax = (uint64_t)r; return; }
     }
 
     int want_write = (flags & O_WRONLY) || (flags & O_RDWR);
@@ -4279,6 +4290,12 @@ void sys_openat(syscall_frame_t *frame) {
         int r = write_rootfs(abs_path, "", 0, mode | 0o100000, current_task_ptr->euid, current_task_ptr->egid);
         if (r < 0) { frame->rax = (uint64_t)r; return; }
         file = read_rootfs(abs_path);
+    }
+
+    // O_TRUNC: truncate existing regular file to zero length
+    if ((flags & O_TRUNC) && file.data && (file.mode & 0xF000) == 0x8000) {
+        int r = write_rootfs(abs_path, NULL, 0, file.mode, file.uid, file.gid);
+        if (r < 0) { frame->rax = (uint64_t)r; return; }
     }
 
     int want_write = (flags & O_WRONLY) || (flags & O_RDWR);

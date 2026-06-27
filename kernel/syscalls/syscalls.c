@@ -115,7 +115,7 @@ void syscall_dispatch(syscall_frame_t *frame) {
     check_signals(frame);
 }
 
-void init_syscalls(void) {
+void init_syscalls_for_cpu(void) {
     // Enable syscall/sysret in EFER
     write_msr(MSR_EFER, read_msr(MSR_EFER) | 1);
 
@@ -124,6 +124,9 @@ void init_syscalls(void) {
     write_msr(MSR_SFMASK, (1 << 9));
 
     write_msr(MSR_KERNEL_GS_BASE, (uint64_t)current_task_ptr);
+}
 
+void init_syscalls(void) {
+    init_syscalls_for_cpu();
     printf("syscalls: initialized syscalls\n");
 }
