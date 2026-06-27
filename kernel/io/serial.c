@@ -1,7 +1,6 @@
 #include <freestanding/stdint.h>
 #include <freestanding/stddef.h>
 #include <freestanding/stdarg.h>
-#include <freestanding/stdbool.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
 #include <io/io.h>

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <freestanding/stdint.h>
-#include <freestanding/stdbool.h>
 
 #define USER_ADDR_MAX 0x0000800000000000ULL
 

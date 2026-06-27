@@ -1,5 +1,4 @@
 #include <freestanding/stdint.h>
-#include <freestanding/stdbool.h>
 #include <io/ps2_keyboard.h>
 #include <io/keyboard.h>
 #include <io/io.h>

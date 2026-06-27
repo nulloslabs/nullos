@@ -2,7 +2,6 @@
 
 #include <freestanding/stdint.h>
 #include <freestanding/stddef.h>
-#include <freestanding/stdbool.h>
 #include <main/spinlocks.h>
 
 #define MAX_DEVTMPFS_DEVICES 64

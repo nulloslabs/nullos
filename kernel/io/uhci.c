@@ -1,5 +1,4 @@
 #include <freestanding/stdint.h>
-#include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
 #include <io/uhci.h>
 #include <io/usb.h>

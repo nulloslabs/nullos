@@ -1,5 +1,4 @@
 #include <freestanding/stdint.h>
-#include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
 #include <freestanding/signal.h>
 #include <freestanding/fcntl.h>

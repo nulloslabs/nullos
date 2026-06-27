@@ -1,6 +1,5 @@
 #pragma once
 
-#include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
 #include <main/scheduler.h>
 #include <syscalls/syscalls.h>

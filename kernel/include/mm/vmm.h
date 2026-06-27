@@ -2,7 +2,6 @@
 
 #include <freestanding/stdint.h>
 #include <freestanding/stddef.h>
-#include <freestanding/stdbool.h>
 
 #define PAGE_SIZE 4096
 #define USER_MMAP_BASE  0x0000100000000000ULL

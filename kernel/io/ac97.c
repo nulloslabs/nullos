@@ -1,6 +1,5 @@
 #include <freestanding/stdint.h>
 #include <freestanding/stddef.h>
-#include <freestanding/stdbool.h>
 #include <io/ac97.h>
 #include <io/io.h>
 #include <io/hpet.h>

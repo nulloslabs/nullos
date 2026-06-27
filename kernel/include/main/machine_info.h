@@ -1,7 +1,6 @@
 #pragma once
 
 #include <freestanding/stdint.h>
-#include <freestanding/stdbool.h>
 
 typedef enum {
     CPU_FEATURE_FPU,

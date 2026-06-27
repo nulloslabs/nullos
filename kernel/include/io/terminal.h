@@ -1,7 +1,6 @@
 #pragma once
 
 #include <freestanding/stdint.h>
-#include <freestanding/stdbool.h>
 #include <freestanding/stdarg.h>
 #include <limine/limine.h>
 #include <io/framebuffer.h>

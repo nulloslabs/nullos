@@ -1,6 +1,5 @@
 #include <freestanding/stdint.h>
 #include <freestanding/stddef.h>
-#include <freestanding/stdbool.h>
 #include <io/keyboard.h>
 #include <io/terminal.h>
 #include <main/halt.h>

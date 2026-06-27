@@ -1,6 +1,5 @@
 #include <freestanding/stdint.h>
 #include <freestanding/stddef.h>
-#include <freestanding/stdbool.h>
 #include <freestanding/cpuid.h>
 #include <main/string.h>
 #include <main/machine_info.h>

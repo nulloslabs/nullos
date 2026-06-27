@@ -1,4 +1,3 @@
-#include <freestanding/stdbool.h>
 #include <freestanding/stdint.h>
 #include <io/io.h>
 #include <io/rtc.h>

@@ -1,5 +1,4 @@
 #include <freestanding/stdint.h>
-#include <freestanding/stdbool.h>
 #include <io/rtl8139.h>
 #include <io/io.h>
 #include <mm/mm.h>

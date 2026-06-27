@@ -1,7 +1,6 @@
 #pragma once
 
 #include <freestanding/stdint.h>
-#include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
 
 #define FD_MAX 32

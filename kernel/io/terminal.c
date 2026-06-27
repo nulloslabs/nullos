@@ -1,5 +1,4 @@
 #include <freestanding/stdint.h>
-#include <freestanding/stdbool.h>
 #include <freestanding/stdarg.h>
 #include <freestanding/stdio.h>
 #include <main/string.h>
