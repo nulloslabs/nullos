@@ -1,6 +1,8 @@
 #pragma once
 
 #include <freestanding/stdint.h>
+#include <freestanding/termios.h>
+#include <freestanding/sys/types.h>
 #include <io/ttys.h>
 
 #define NUM_PTYS 16
@@ -12,6 +14,8 @@ typedef struct {
     int slave_refs;
     bool allocated;
     bool locked;
+    struct termios termios;
+    pid_t fg_pgrp;
 } pty_t;
 
 extern pty_t ptys[NUM_PTYS];
@@ -30,3 +34,4 @@ int write_pty_master(int idx, const char *buf, int len);
 uint64_t read_pts(int idx, void *buf, uint64_t count, uint64_t offset);
 uint64_t write_pts(int idx, const void *buf, uint64_t count, uint64_t offset);
 void init_ptys(void);
+int pty_signal_pgrp(int pty_idx, int sig);

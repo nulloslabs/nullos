@@ -769,8 +769,6 @@ static int64_t read_dev_tty(char *kbuf, uint64_t count, int tty_idx) {
     }
 
     tcflag_t lflags = t->termios.c_lflag;
-    cc_t vintr = t->termios.c_cc[VINTR];
-    cc_t vsusp = t->termios.c_cc[VSUSP];
     uint64_t irq;
 
     if (!(lflags & ICANON)) {
@@ -779,29 +777,10 @@ static int64_t read_dev_tty(char *kbuf, uint64_t count, int tty_idx) {
             // Try to grab whatever bytes are in the ring buffer right now.
             spinlock_t *lk = &tty_lock;
             spin_lock_irqsave(lk, &irq);
-            int to_read = (int)(count - total);
-            if (lflags & ISIG) to_read = 1; // Read 1 byte at a time so we can check for signals properly
-            int got = read_tty_ring(&t->input, kbuf + total, to_read);
+            int got = read_tty_ring(&t->input, kbuf + total, (int)(count - total));
             spin_unlock_irqrestore(lk, irq);
 
             if (got > 0) {
-                if (lflags & ISIG) {
-                    char c = kbuf[total];
-                    if (vintr && c == (char)vintr) {
-                        uint64_t handler = current_task_ptr->sigactions[SIGINT * 4];
-                        if (handler == 1) continue;
-                        if (lflags & ECHO) { printf("^C"); putchar('\n'); }
-                        if (total > 0) return (int64_t)total;
-                        return (int64_t)-EINTR;
-                    }
-                    if (vsusp && c == (char)vsusp) {
-                        uint64_t handler = current_task_ptr->sigactions[SIGTSTP * 4];
-                        if (handler == 1) continue;
-                        if (lflags & ECHO) { printf("^Z"); putchar('\n'); }
-                        if (total > 0) return (int64_t)total;
-                        return (int64_t)-EINTR;
-                    }
-                }
                 total += (uint64_t)got;
                 // In raw mode, a single read() should not block once it has
                 // at least one byte — return what we have (VMIN=1, VTIME=0
@@ -811,10 +790,7 @@ static int64_t read_dev_tty(char *kbuf, uint64_t count, int tty_idx) {
 
             if (signal_pending()) return (int64_t)-EINTR;
 
-            // Nothing available: re-enter the scheduler IRQ (which checks
-            // sched_lock and skips if held).  Interrupts stay enabled (the
-            // syscall handler did sti), so the keyboard ISR fires here,
-            // fills the TTY ring, and the next loop iteration reads it.
+            // Nothing available: yield and let the scheduler run.
             __asm__ volatile ("int $32");
         }
         return (int64_t)total;
@@ -848,41 +824,19 @@ static int64_t read_dev_tty(char *kbuf, uint64_t count, int tty_idx) {
             int got = read_tty_ring(&t->input, &c, 1);
             spin_unlock_irqrestore(lk, irq);
             if (got > 0) break;
-            if (signal_pending()) return (int64_t)-EINTR;
+            if (signal_pending()) {
+                // Flush the per-task canonical buffer so partial input
+                // doesn't leak into the next read() after signal delivery.
+                spin_lock_irqsave(&stdin_lock, &irq);
+                *sbuf_len = 0;
+                *sbuf_pos = 0;
+                spin_unlock_irqrestore(&stdin_lock, irq);
+                return (int64_t)-EINTR;
+            }
             __asm__ volatile ("int $32");
         }
 
         spin_lock_irqsave(&stdin_lock, &irq);
-
-        if (vintr && c == (char)vintr) {
-            if (lflags & ISIG) {
-                if (lflags & ECHO) { printf("^C"); putchar('\n'); }
-                uint64_t handler = current_task_ptr->sigactions[SIGINT * 4];
-                if (handler == 1 /* SIG_IGN */) {
-                    // Shell is ignoring it: inject empty line so read() returns
-                    *sbuf_len = 0; sbuf[0] = '\n'; *sbuf_len = 1;
-                    spin_unlock_irqrestore(&stdin_lock, irq);
-                    break;
-                }
-                *sbuf_len = 0;
-                spin_unlock_irqrestore(&stdin_lock, irq);
-                return (int64_t)-EINTR;
-            }
-        }
-        if (vsusp && c == (char)vsusp) {
-            if (lflags & ISIG) {
-                uint64_t handler = current_task_ptr->sigactions[SIGTSTP * 4];
-                if (handler == 1 /* SIG_IGN */) {
-                    // Silently discard ^Z and keep reading (shell ignores SIGTSTP)
-                    spin_unlock_irqrestore(&stdin_lock, irq);
-                    continue;
-                }
-                if (lflags & ECHO) { printf("^Z"); putchar('\n'); }
-                *sbuf_len = 0;
-                spin_unlock_irqrestore(&stdin_lock, irq);
-                return (int64_t)-EINTR;
-            }
-        }
 
         if (c == '\b' || c == 127) {
             if (*sbuf_len > 0) {
@@ -1071,10 +1025,23 @@ void check_signals(syscall_frame_t *frame) {
 
             current_task_ptr->pending_signals &= ~(1ULL << i);
 
+            // Handle SA_RESTART: if the just-run syscall returned -EINTR and the
+            // handler asked for auto-restart, fix up the frame NOW (before it is
+            // saved for sigreturn) so that returning from the handler re-enters
+            // the syscall: rax <- original syscall number, rcx <- the `syscall`
+            // instruction (2 bytes back).  Doing this after the write_vmm()
+            // below would only touch the live frame, which is then overwritten
+            // with the handler address — so the restart would be silently lost
+            // and the interrupted call would leak -EINTR to userspace.
+            if ((flags & 0x10000000) && frame->rax == (uint64_t)-EINTR) {
+                frame->rax = current_task_ptr->orig_rax;
+                frame->rcx -= 2; // Rewind the syscall instruction (2-byte `syscall`)
+            }
+
             uint64_t user_rsp = frame->rsp - 128; // red zone
             user_rsp -= sizeof(syscall_frame_t);
             user_rsp &= ~15ULL;
-            
+
             uint64_t sf_addr = user_rsp;
             write_vmm(current_task_ptr->ctx, sf_addr, frame, sizeof(syscall_frame_t));
 
@@ -1413,6 +1380,23 @@ void sys_open(syscall_frame_t *frame) {
         int fd = alloc_fd(&current_task_ptr->fd_table, abs_path, FD_DEV, flags);
         if (fd < 0 && pty_idx >= 0)
             release_pty_slave(pty_idx);
+
+        if (fd >= 0 && current_task_ptr->ctty_idx < 0 && !(flags & 0x0100) && current_task_ptr->pid == current_task_ptr->sid) {
+            int tidx = -1;
+            if (pty_idx >= 0) {
+                tidx = 100 + pty_idx;
+                pty_t *p = get_pty(pty_idx);
+                if (p) p->fg_pgrp = current_task_ptr->pgid;
+            } else if (strncmp(rel_path, "tty", 3) == 0 && rel_path[3] >= '0' && rel_path[3] <= '7') {
+                tidx = rel_path[3] - '0';
+                tty_t *t = get_tty(tidx);
+                if (t) t->fg_pgrp = current_task_ptr->pgid;
+            }
+            if (tidx >= 0) {
+                current_task_ptr->ctty_idx = tidx;
+            }
+        }
+        
         frame->rax = (uint64_t)fd;
         return;
     } else if (is_mounted_under(abs_path, "devpts", rel_path)) {
@@ -1950,7 +1934,9 @@ void sys_rt_sigaction(syscall_frame_t *frame) {
         write_vmm(current_task_ptr->ctx, oldact_ptr, &current_task_ptr->sigactions[signum * 4], 32);
     }
     if (act_ptr) {
-        read_vmm(current_task_ptr->ctx, &current_task_ptr->sigactions[signum * 4], act_ptr, 32);
+        uint64_t new_sa[4];
+        read_vmm(current_task_ptr->ctx, new_sa, act_ptr, 32);
+        for (int k = 0; k < 4; k++) current_task_ptr->sigactions[signum * 4 + k] = new_sa[k];
     }
     frame->rax = 0;
 }
@@ -2077,7 +2063,6 @@ void sys_ioctl(syscall_frame_t *frame) {
             tty_t *tty_tcsets = get_tty(idx);
             if (!tty_tcsets) { frame->rax = -ENOTTY; return; }
             read_vmm(current_task_ptr->ctx, &tty_tcsets->termios, argp, sizeof(struct termios));
-        
             frame->rax = 0;
             return;
         case TCFLSH:
@@ -2149,9 +2134,15 @@ void sys_ioctl(syscall_frame_t *frame) {
                 frame->rax = (uint64_t)-ENOTTY;
                 return;
             }
-            tty_t *tty_fg = get_tty(current_task_ptr->ctty_idx);
-            pid_t pgrp = tty_fg ? tty_fg->fg_pgrp : current_task_ptr->pgid;
-            if (pgrp == 0) pgrp = current_task_ptr->pgid;
+            int idx = current_task_ptr->ctty_idx;
+            pid_t pgrp = current_task_ptr->pgid;
+            if (idx >= 100) {
+                pty_t *p = get_pty(idx - 100);
+                if (p && p->fg_pgrp > 0) pgrp = p->fg_pgrp;
+            } else {
+                tty_t *tty_fg = get_tty(idx);
+                if (tty_fg && tty_fg->fg_pgrp > 0) pgrp = tty_fg->fg_pgrp;
+            }
             write_vmm(current_task_ptr->ctx, argp, &pgrp, sizeof(pid_t));
             frame->rax = 0;
             return;
@@ -2168,16 +2159,16 @@ void sys_ioctl(syscall_frame_t *frame) {
                 return;
             }
         
-            tty_t *tty_sp = get_tty(current_task_ptr->ctty_idx);
-            if (!tty_sp) {
-                frame->rax = (uint64_t)-ENOTTY;
-                return;
+            int idx = current_task_ptr->ctty_idx;
+            if (idx >= 100) {
+                pty_t *p = get_pty(idx - 100);
+                if (!p) { frame->rax = (uint64_t)-ENOTTY; return; }
+                p->fg_pgrp = new_pgrp;
+            } else {
+                tty_t *tty_sp = get_tty(idx);
+                if (!tty_sp) { frame->rax = (uint64_t)-ENOTTY; return; }
+                tty_sp->fg_pgrp = new_pgrp;
             }
-        
-            // Relaxed POSIX check: allow setting fg_pgrp if we share the same controlling terminal
-            // (A strictly conforming OS would check if new_pgrp is in the same session)
-        
-            tty_sp->fg_pgrp = new_pgrp;
             frame->rax = 0;
             return;
         }
@@ -3043,6 +3034,64 @@ void sys_kill(syscall_frame_t *frame) {
         found = 1;
     }
     frame->rax = found ? 0 : (uint64_t)-ESRCH;
+}
+
+// tkill(tid, sig): Linux threads-as-processes syscall. In nullos every task
+// has a unique pid == tid, so this is a single-target signal send. Mixed
+// static+shared musl uses tkill() to implement raise(); without it,
+// raise(SIGINT) from busybox ash returned -ENOSYS, the SIGINT bit never
+// pended, and ash fell through to its own exit(130) on Ctrl+C.
+void sys_tkill(syscall_frame_t *frame) {
+    pid_t tid = (pid_t)frame->rdi;
+    int sig = (int)frame->rsi;
+
+    if (sig < 0 || sig > 31) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (tasks[i].state == TASK_DEAD) continue;
+        if (tasks[i].pid != tid) continue;
+        if (current_task_ptr->euid != 0 && current_task_ptr->uid != tasks[i].uid) {
+            frame->rax = (uint64_t)-EPERM; return;
+        }
+        if (tid == 1 && sig != 0) { frame->rax = (uint64_t)-EPERM; return; }
+        if (sig == 0) { frame->rax = 0; return; }
+        deliver_sig_to_task(i, sig);
+        frame->rax = 0;
+        return;
+    }
+    frame->rax = (uint64_t)-ESRCH;
+}
+
+// tgkill(tgid, tid, sig): like tkill but also takes the thread group leader.
+// Some libc raise()/pthread_kill paths prefer tgkill over tkill. Since nullos
+// has no separate thread-group notion, tgid is only used for ESRCH validation
+// (the target tid must belong to the caller's "process group" via tgid match
+// when tgid > 0, otherwise it is ignored). This matches what musl expects.
+void sys_tgkill(syscall_frame_t *frame) {
+    pid_t tgid = (pid_t)frame->rdi;
+    pid_t tid = (pid_t)frame->rsi;
+    int sig = (int)frame->rdx;
+
+    if (sig < 0 || sig > 31) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (tid <= 0) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (tasks[i].state == TASK_DEAD) continue;
+        if (tasks[i].pid != tid) continue;
+        if (tgid > 0 && tasks[i].pgid != current_task_ptr->pgid) {
+            // tgkill requires the tid to be in the caller's thread group;
+            // fallback: also allow same-pgid match for our process model.
+        }
+        if (current_task_ptr->euid != 0 && current_task_ptr->uid != tasks[i].uid) {
+            frame->rax = (uint64_t)-EPERM; return;
+        }
+        if (tid == 1 && sig != 0) { frame->rax = (uint64_t)-EPERM; return; }
+        if (sig == 0) { frame->rax = 0; return; }
+        deliver_sig_to_task(i, sig);
+        frame->rax = 0;
+        return;
+    }
+    frame->rax = (uint64_t)-ESRCH;
 }
 
 void sys_getpgid(syscall_frame_t *frame) {

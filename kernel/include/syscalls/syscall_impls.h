@@ -52,6 +52,8 @@ void sys_execve(syscall_frame_t *frame);
 void sys_exit(syscall_frame_t *frame);
 void sys_wait4(syscall_frame_t *frame);
 void sys_kill(syscall_frame_t *frame);
+void sys_tkill(syscall_frame_t *frame);
+void sys_tgkill(syscall_frame_t *frame);
 void sys_uname(syscall_frame_t *frame);
 void sys_fcntl(syscall_frame_t *frame);
 void sys_flock(syscall_frame_t *frame);

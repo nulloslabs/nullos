@@ -6,8 +6,57 @@
 #include <io/ptys.h>
 #include <io/ttys.h>
 
+#include <freestanding/signal.h>
+#include <main/scheduler.h>
+
 pty_t ptys[NUM_PTYS];
 spinlock_t pty_lock = SPINLOCK_INIT;
+
+int pty_signal_pgrp(int pty_idx, int sig) {
+    if (sig < 1 || sig > 31) return 0;
+    pty_t *p = get_pty(pty_idx);
+    int delivered = 0;
+    if (!p || p->fg_pgrp == 0) {
+        if (current_task_ptr) {
+            uint64_t handler = current_task_ptr->sigactions[sig * 4];
+            if (handler != 1) {
+                current_task_ptr->pending_signals |= (1ULL << sig);
+                delivered = 1;
+            }
+        }
+        return delivered;
+    }
+    pid_t fpgrp = p->fg_pgrp;
+    int target_ctty = 100 + pty_idx;
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (tasks[i].state == TASK_DEAD) continue;
+        if (tasks[i].ctty_idx != target_ctty) continue;
+        if (tasks[i].pgid != fpgrp) continue;
+        uint64_t handler = tasks[i].sigactions[sig * 4];
+        if (handler == 1) continue;
+        delivered++;
+        if (sig == SIGTSTP || sig == SIGSTOP) {
+            if (handler == 0) {
+                if (tasks[i].state == TASK_RUNNING || tasks[i].state == TASK_READY) {
+                    tasks[i].state = TASK_STOPPED;
+                    tasks[i].stop_reported = 0;
+                    for (int j = 0; j < MAX_TASKS; j++) {
+                        if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
+                            tasks[j].pending_signals |= (1ULL << SIGCHLD);
+                            break;
+                        }
+                    }
+                }
+            } else {
+                tasks[i].pending_signals |= (1ULL << sig);
+            }
+        } else {
+            tasks[i].pending_signals |= (1ULL << sig);
+            if (tasks[i].state == TASK_STOPPED) tasks[i].state = TASK_READY;
+        }
+    }
+    return delivered;
+}
 
 uint64_t read_pts(int idx, void *buf, uint64_t count, uint64_t offset) {
     (void)offset;
@@ -22,6 +71,11 @@ uint64_t read_pts(int idx, void *buf, uint64_t count, uint64_t offset) {
         }
         got = read_tty_ring(&p->m2s, b, (int)count);
         spin_unlock_irqrestore(&pty_lock, irq);
+
+        if (got == 0) {
+            if (signal_pending()) return (uint64_t)-EINTR;
+            __asm__ volatile("int $32");
+        }
     }
     return (uint64_t)got;
 }
@@ -54,6 +108,17 @@ int alloc_pty(void) {
             ptys[i].m2s.head = ptys[i].m2s.tail = 0;
             ptys[i].s2m.head = ptys[i].s2m.tail = 0;
             
+            ptys[i].termios.c_iflag = 0x2400; // ICRNL | IXON
+            ptys[i].termios.c_oflag = 0x05;   // OPOST | ONLCR
+            ptys[i].termios.c_cflag = 0x00BF; // CREAD | CS8
+            ptys[i].termios.c_lflag = 0x8A3B; // ISIG | ICANON | ECHO | ECHOE | ECHOK | IEXTEN
+            ptys[i].termios.c_cc[VINTR] = 3;  // Ctrl+C
+            ptys[i].termios.c_cc[VEOF] = 4;   // Ctrl+D
+            ptys[i].termios.c_cc[VKILL] = 21; // Ctrl+U
+            ptys[i].termios.c_cc[VERASE] = 127; // DEL
+            ptys[i].termios.c_cc[VSUSP] = 26; // Ctrl+Z
+            ptys[i].fg_pgrp = 0;
+
             spin_unlock_irqrestore(&pty_lock, irq);
             return i;
         }
@@ -153,6 +218,11 @@ int read_pty_master(int idx, char *buf, int len) {
         if (!p->allocated || p->slave_refs == 0) { spin_unlock_irqrestore(&pty_lock, irq); return -EIO; }
         got = read_tty_ring(&p->s2m, buf, len);
         spin_unlock_irqrestore(&pty_lock, irq);
+
+        if (got == 0) {
+            if (signal_pending()) return -EINTR;
+            __asm__ volatile("int $32");
+        }
     }
     return got;
 }
@@ -162,7 +232,42 @@ int write_pty_master(int idx, const char *buf, int len) {
     if (!p) return -1;
     uint64_t irq; spin_lock_irqsave(&pty_lock, &irq);
     if (!p->allocated) { spin_unlock_irqrestore(&pty_lock, irq); return -1; }
-    int w = write_tty_ring(&p->m2s, buf, len);
+    
+    tcflag_t lflags = p->termios.c_lflag;
+    cc_t vintr = p->termios.c_cc[VINTR];
+    cc_t vsusp = p->termios.c_cc[VSUSP];
+    
+    int w = 0;
+    for (int i = 0; i < len; i++) {
+        char c = buf[i];
+        int sig = 0;
+        if ((lflags & ISIG) && vintr && c == (char)vintr) sig = SIGINT;
+        else if ((lflags & ISIG) && vsusp && c == (char)vsusp) sig = SIGTSTP;
+        
+        if (sig) {
+            pty_signal_pgrp(idx, sig);
+            // Flush the master-to-slave ring buffer on signal (unless NOFLSH).
+            // Matches Linux __isig() behaviour.
+            if (!(lflags & NOFLSH)) {
+                p->m2s.head = p->m2s.tail = 0;
+            }
+            if (lflags & ECHO) {
+                // Echo ^C/^Z to s2m (slave to master), followed by newline
+                // so the shell prompt appears on a fresh line (matches Linux
+                // __isig() behaviour and our TTY path).
+                char caret = '^';
+                char letter = (sig == SIGINT) ? 'C' : 'Z';
+                char nl = '\n';
+                write_tty_ring(&p->s2m, &caret, 1);
+                write_tty_ring(&p->s2m, &letter, 1);
+                write_tty_ring(&p->s2m, &nl, 1);
+            }
+            continue; // POSIX: ISIG discards the character
+        }
+        write_tty_ring(&p->m2s, &c, 1);
+        w++;
+    }
+    
     spin_unlock_irqrestore(&pty_lock, irq);
     return w;
 }

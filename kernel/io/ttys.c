@@ -48,89 +48,131 @@ void tty_process_scancode(uint8_t sc) {
     int sig = 0;
     if ((lflags & ISIG) && vintr && c == (char)vintr) sig = SIGINT;
     else if ((lflags & ISIG) && vsusp && c == (char)vsusp) sig = SIGTSTP;
+    int echo = 0;
+
+
     if (sig) {
-        t->pending_isig = sig;
-        t->pending_isig_c = c;
+        // Deliver the signal to the foreground process group right away.
+        // tty_signal_pgrp() only flips pending-signal bits (and may stop or
+        // wake tasks) — it never sleeps or allocates — so it is safe to run
+        // from this keyboard ISR.  Doing the delivery here, instead of
+        // deferring it to the next syscall boundary, means a Ctrl+C interrupts
+        // the foreground program the instant the key is pressed, regardless of
+        // whether it happens to be blocked in read().
+        tty_signal_pgrp(keyboard_tty, sig);
+
+        // Flush the input ring buffer so partially-typed input is discarded.
+        // This matches Linux's __isig() behaviour (unless NOFLSH is set).
+        // Without this, stale characters leak into the next read() after the
+        // signal handler returns or a new foreground program starts.
+        if (!(lflags & NOFLSH)) {
+            t->input.head = t->input.tail = 0;
+        }
+
+        echo = (lflags & ECHO) != 0;
     } else {
         write_tty_ring(&t->input, &c, 1);
     }
     spin_unlock_irqrestore(&tty_lock, irq);
 
-    if (sig) tty_process_input_signals();
+    if (echo) {
+        // Echo "^C"/"^Z" plus a newline directly so it appears immediately
+        // (term_lock is irq-save, hence safe from this ISR).  Echoing here
+        // rather than at a syscall boundary is what makes the visual feedback
+        // match the keypress for every program, not just the one in read().
+        if (sig == SIGINT) printf("^C\n");
+        else               printf("^Z\n");
+    }
 }
 
-void tty_process_input_signals(void) {
-    uint64_t irq;
-    spin_lock_irqsave(&tty_lock, &irq);
-    tty_t *t = &ttys[keyboard_tty];
-    int sig = t->pending_isig;
-    if (!sig) { spin_unlock_irqrestore(&tty_lock, irq); return; }
-    char c = t->pending_isig_c;
-    tcflag_t lflags = t->termios.c_lflag;
-    t->pending_isig = 0;
-    spin_unlock_irqrestore(&tty_lock, irq);
+/*
+ * Deliver an ISIG-triggered signal (SIGINT/SIGTSTP/...) to the foreground
+ * job of `tty_idx`. Called from the keyboard ISR (tty_process_scancode).
+ *
+ * Two delivery modes:
+ *
+ *   1. fg_pgrp > 0  (POSIX):  deliver to every member of the foreground
+ *      process group. We deliberately do NOT require ctty_idx to match
+ *      tty_idx here. After busybox getty/login do setsid(), their
+ *      descendants inherit ctty_idx = -1 and may never re-acquire the tty
+ *      via TIOCSCTTY; the old `ctty_idx != tty_idx` filter would then
+ *      silently eat the SIGINT for the ENTIRE foreground job, which is
+ *      exactly why "Ctrl+C does nothing until Enter": the only thing that
+ *      ever woke the cooked-mode reader was '\n' landing in the ring.
+ *
+ *   2. fg_pgrp == 0 (no fg pgrp registered): the OLD code pended the signal
+ *      on current_task_ptr, which at IRQ time is whoever happened to be
+ *      running (often the idle task) — i.e. the SIGINT bit landed on the
+ *      wrong task and never reached the program actually blocked in read().
+ *      We now do best-effort delivery to every live task that still
+ *      believes it owns tty_idx as its controlling terminal. Not strict
+ *      POSIX (POSIX says "no fg group => don't deliver"), but it makes
+ *      interactive Ctrl+C behave intuitively when the shell's tcsetpgrp
+ *      couldn't run/complete.
+ *
+ * Note: SIGTTIN/SIGTTOU gating in read()/write() already enforces
+ * background-vs-foreground at the syscall layer, so widening matching
+ * here is safe.
+ */
+static void deliver_sig_to_task(int idx, int sig) {
+    task_t *t = &tasks[idx];
+    if (t->sigactions[sig * 4] == 1 /* SIG_IGN */) return;
 
-    int delivered = tty_signal_pgrp(keyboard_tty, sig);
-    if (delivered == 0) {
-        spin_lock_irqsave(&tty_lock, &irq);
-        write_tty_ring(&t->input, &c, 1);
-        spin_unlock_irqrestore(&tty_lock, irq);
-        return;
-    }
-
-    if (lflags & ECHO) {
-        if (sig == SIGINT) { printf("^C"); putchar('\n'); }
-        else if (sig == SIGTSTP) { printf("^Z"); putchar('\n'); }
+    if (sig == SIGTSTP || sig == SIGSTOP) {
+        if (t->sigactions[sig * 4] == 0 /* SIG_DFL */) {
+            // Stop in place and notify the parent for waitpid(WUNTRACED).
+            if (t->state == TASK_RUNNING || t->state == TASK_READY) {
+                t->state = TASK_STOPPED;
+                t->stop_reported = 0;
+                for (int j = 0; j < MAX_TASKS; j++) {
+                    if (tasks[j].state != TASK_DEAD && tasks[j].pid == t->ppid) {
+                        tasks[j].pending_signals |= (1ULL << SIGCHLD);
+                        break;
+                    }
+                }
+            }
+        } else {
+            // Installed handler: just pend; handler runs at next syscall.
+            t->pending_signals |= (1ULL << sig);
+        }
+    } else {
+        t->pending_signals |= (1ULL << sig);
+        // Wake a stopped task so it can run its handler / be terminated.
+        if (t->state == TASK_STOPPED)
+            t->state = TASK_READY;
     }
 }
 
 int tty_signal_pgrp(int tty_idx, int sig) {
     if (sig < 1 || sig > 31) return 0;
     tty_t *t = get_tty(tty_idx);
+    if (!t) return 0;
+
     int delivered = 0;
-    if (!t || t->fg_pgrp == 0) {
-        // No foreground pgrp set: fall back to signalling current task
-        if (current_task_ptr) {
-            uint64_t handler = current_task_ptr->sigactions[sig * 4];
-            if (handler != 1 /* SIG_IGN */) {
-                current_task_ptr->pending_signals |= (1ULL << sig);
-                delivered = 1;
-            }
+    pid_t fpgrp = t->fg_pgrp;
+
+    if (fpgrp > 0) {
+        // Mode 1: foreground process group only (see big comment above).
+        // Filter purely on pgid; do NOT filter on ctty_idx.
+        for (int i = 0; i < MAX_TASKS; i++) {
+            if (tasks[i].state == TASK_DEAD) continue;
+            if (tasks[i].pgid != fpgrp) continue;
+            if (tasks[i].sigactions[sig * 4] == 1 /* SIG_IGN */) continue;
+            deliver_sig_to_task(i, sig);
+            delivered++;
         }
         return delivered;
     }
-    pid_t fpgrp = t->fg_pgrp;
+
+    // Mode 2: no fg pgrp registered. Best-effort delivery to everything on
+    // this controlling tty. Replaces the old incorrect
+    // "signal current_task_ptr" fallback.
     for (int i = 0; i < MAX_TASKS; i++) {
         if (tasks[i].state == TASK_DEAD) continue;
         if (tasks[i].ctty_idx != tty_idx) continue;
-        if (tasks[i].pgid != fpgrp) continue;
-        // Skip if the task is explicitly ignoring this signal
-        uint64_t handler = tasks[i].sigactions[sig * 4];
-        if (handler == 1 /* SIG_IGN */) continue;
+        if (tasks[i].sigactions[sig * 4] == 1 /* SIG_IGN */) continue;
+        deliver_sig_to_task(i, sig);
         delivered++;
-        // SIGTSTP/SIGSTOP with SIG_DFL stop the task directly
-        if (sig == SIGTSTP || sig == SIGSTOP) {
-            if (handler == 0 /* SIG_DFL */) {
-                if (tasks[i].state == TASK_RUNNING || tasks[i].state == TASK_READY) {
-                    tasks[i].state = TASK_STOPPED;
-                    tasks[i].stop_reported = 0;
-                    // Notify parent so waitpid(WUNTRACED) wakes up
-                    for (int j = 0; j < MAX_TASKS; j++) {
-                        if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
-                            tasks[j].pending_signals |= (1ULL << SIGCHLD);
-                            break;
-                        }
-                    }
-                }
-            } else {
-                tasks[i].pending_signals |= (1ULL << sig);
-            }
-        } else {
-            tasks[i].pending_signals |= (1ULL << sig);
-            // Wake a stopped/sleeping task so it can process the signal
-            if (tasks[i].state == TASK_STOPPED)
-                tasks[i].state = TASK_READY;
-        }
     }
     return delivered;
 }
@@ -146,7 +188,6 @@ void init_ttys(void) {
         ttys[i].input.head = ttys[i].input.tail = 0;
         ttys[i].active = true;
         ttys[i].fg_pgrp = 0;
-        ttys[i].pending_isig = 0;
         ttys[i].termios.c_iflag = 0x0500;
         ttys[i].termios.c_oflag = 0x0005;
         ttys[i].termios.c_cflag = 0x04BF;

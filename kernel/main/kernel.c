@@ -12,7 +12,6 @@
 #include <mm/vmm.h>
 #include <io/hpet.h>
 #include <io/rtc.h>
-#include <main/timekeeping.h>
 #include <main/scheduler.h>
 #include <main/limine_req.h>
 #include <main/acpi.h>
@@ -60,7 +59,6 @@ void kmain(uint64_t load_offset) {
     detect_apic();
     init_apic();
     init_hpet();
-    init_timekeeping();
     init_rtc();
     init_pit(250);
     init_rng();

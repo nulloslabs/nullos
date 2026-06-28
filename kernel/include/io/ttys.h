@@ -18,8 +18,6 @@ typedef struct {
     bool active;
     struct termios termios;
     pid_t fg_pgrp;  // foreground process group for this tty (0 = none)
-    volatile int  pending_isig;    // SIGINT/SIGTSTP queued from keyboard ISR
-    volatile char pending_isig_c;    // original control character
 } tty_t;
 
 extern spinlock_t tty_lock;
@@ -30,6 +28,5 @@ int write_tty_ring(tty_ring_t *r, const char *buf, int len);
 int get_tty_ring_count(tty_ring_t *r);
 void tty_process_scancode(uint8_t sc);
 int tty_signal_pgrp(int tty_idx, int sig);
-void tty_process_input_signals(void);
 void set_keyboard_tty(int tty_idx);
 void init_ttys(void);

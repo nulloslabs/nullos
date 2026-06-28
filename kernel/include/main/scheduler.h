@@ -57,6 +57,7 @@ typedef struct {
     uint64_t blocked_signals;
     int *clear_child_tid;
     int stop_reported;
+    uint64_t orig_rax;
     void *fpu_area;
     void *sas_ss_sp;
     size_t sas_ss_size;

@@ -8,13 +8,11 @@ endif
 include config.mk
 
 .DEFAULT_GOAL := all
-USERSPACE_PROGS := $(patsubst ../userspace/main/progs/main/%.c,../userspace/%,$(wildcard ../userspace/main/progs/main/*.c)) $(patsubst ../userspace/main/progs/main/%.S,../userspace/%,$(wildcard ../userspace/main/progs/main/*.S))
-DEP := $(wildcard ../userspace/main/progs/*.c) $(wildcard ../userspace/main/progs/*.S) $(USERSPACE_PROGS) $(shell find main/ 2>/dev/null) config.mk ../userspace/libc.so ../userspace/libc.a ../userspace/crt0.o ../userspace/crt1.o ../userspace/Scrt1.o ../userspace/crti.o ../userspace/crtn.o ../userspace/ld.so
 
 all: rootfs
 
 rootfs:
-	@if [ ! -f rootfs.tar.gz ] || [ ! -d main ] || [ Makefile -nt rootfs.tar.gz ] || [ config.mk -nt rootfs.tar.gz ] || $(foreach dep,$(DEP),[ $(dep) -nt rootfs.tar.gz ] ||) false; then \
+	@if [ ! -f rootfs.tar.gz ] || [ ! -d main ] || [ Makefile -nt rootfs.tar.gz ] || [ config.mk -nt rootfs.tar.gz ]; then \
 		mkdir -p main/home main/root main/dev main/proc main/etc main/usr && \
 		mkdir -p main/home/user main/etc/init.d main/usr/bin main/usr/sbin main/usr/lib main/usr/include && \
 		ln -snf usr/bin main/bin && \
@@ -22,7 +20,7 @@ rootfs:
 		ln -snf usr/lib main/lib && \
 		printf '%s\n' \
 			'::sysinit:/etc/init.d/rcS' \
-			'tty0::respawn:-/sbin/getty -L tty0 115200 vt100' \
+			'tty0::respawn:/sbin/getty -L tty0 115200 vt100' \
 			'::ctrlaltdel:/sbin/reboot' \
 			'::shutdown:/bin/umount -a -r' \
 			> main/etc/inittab && \
@@ -42,9 +40,9 @@ rootfs:
 		chmod 644 main/etc/passwd main/etc/group && \
 		chmod 600 main/etc/shadow && \
 		printf "\nWelcome to NullOS!\n\nAn OS that's fast, secure and private.\n\n" > main/etc/motd && \
-		if [ ! -f main/usr/bin/busybox ]; then \
+		if [ ! -f main/usr/bin/busybox ] || [ Makefile -nt main/usr/bin/busybox ] || [ config.mk -nt main/usr/bin/busybox ]; then \
 			printf "  %-7s %s\n" "FETCH" "$(SUBDIR)/main/usr/bin/busybox" && \
-			wget https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox -O main/usr/bin/busybox && \
+			curl -sLo main/usr/bin/busybox https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox && \
 			chmod +x main/usr/bin/busybox; \
 		else \
 			printf "  %-7s %s\n" "INFO" "$(SUBDIR)/main/usr/bin/busybox is already up to date"; \
