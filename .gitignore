@@ -9,11 +9,3 @@ iso/main/
 rootfs/main/
 tools/limine/
 kernel/include/limine/
-
-userspace/**/*
-!userspace/**/
-!userspace/**/*.c
-!userspace/**/*.h
-!userspace/**/*.S
-!userspace/**/Makefile
-!userspace/**/config.mk
