@@ -15,7 +15,7 @@ static bool use_xsave = false;
 static size_t cached_state_size = 0;
 
 size_t get_fpu_state_size(void) {
-    return cached_state_size ? cached_state_size : xsave_area_size();
+    return cached_state_size ? cached_state_size : get_xsave_area_size();
 }
 
 void save_fpu_state(void *area) {
@@ -76,7 +76,7 @@ void init_sse_for_cpu(void) {
         use_xsave = false;
     }
 
-    cached_state_size = xsave_area_size();
+    cached_state_size = get_xsave_area_size();
     clear_fpu_ts();
 }
 

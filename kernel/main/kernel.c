@@ -12,7 +12,7 @@
 #include <mm/vmm.h>
 #include <io/hpet.h>
 #include <io/rtc.h>
-#include <main/scheduler.h>
+#include <main/sched.h>
 #include <main/limine_req.h>
 #include <main/acpi.h>
 // Please, let this stop...
@@ -35,12 +35,15 @@
 #include <io/ttys.h>
 #include <io/ptys.h>
 #include <main/rng.h>
+#include <io/serial.h>
 // Lets never do that again.
 
-void kmain(uint64_t load_offset) {
+void kmain(void) {
     cli();
     clrscr();
+    init_serial_ports();
     init_default_font();
+    show_cursor(true); // Show cursor as soon as possible
     parse_boot_args();
     init_sse();
     init_gdt();
@@ -53,7 +56,6 @@ void kmain(uint64_t load_offset) {
     init_devices();
     init_ttys();
     init_ptys();
-    show_cursor(true);
     init_acpi();
     parse_madt();
     detect_apic();
@@ -62,7 +64,7 @@ void kmain(uint64_t load_offset) {
     init_rtc();
     init_pit(250);
     init_rng();
-    init_scheduler();
+    init_sched();
     init_pci();
     cache_machine_info();
     cache_utsname();

@@ -1,7 +1,7 @@
 #include <freestanding/stdint.h>
 #include <freestanding/dirent.h>
 #include <main/string.h>
-#include <main/scheduler.h>
+#include <main/sched.h>
 #include <main/fd.h>
 #include <io/devtmpfs.h>
 #include <io/procfs.h>
@@ -9,16 +9,17 @@
 #include <syscalls/syscall_impls.h>
 
 const proc_static_node_t proc_nodes[] = {
-    { "",              PROC_NODE_DIR,     PROC_DIR_ROOT        },
-    { "/self",         PROC_NODE_SYMLINK, PROC_LINK_SELF       },
-    { "/mounts",       PROC_NODE_SYMLINK, PROC_LINK_ROOT_MOUNTS},
-    { "/<pid>",        PROC_NODE_DIR,     PROC_DIR_PID         },
-    { "/<pid>/fd",     PROC_NODE_DIR,     PROC_DIR_FD          },
-    { "/<pid>/maps",   PROC_NODE_FILE,    PROC_FILE_MAPS       },
-    { "/<pid>/mounts", PROC_NODE_FILE,    PROC_FILE_MOUNTS     },
-    { "/<pid>/exe",    PROC_NODE_SYMLINK, PROC_LINK_EXE        },
-    { "/<pid>/cwd",    PROC_NODE_SYMLINK, PROC_LINK_CWD        },
-    { "/<pid>/fd/<n>", PROC_NODE_SYMLINK, PROC_LINK_FD         },
+    { "",              PROC_NODE_DIR,     PROC_DIR_ROOT         },
+    { "/self",         PROC_NODE_SYMLINK, PROC_LINK_SELF        },
+    { "/mounts",       PROC_NODE_SYMLINK, PROC_LINK_ROOT_MOUNTS },
+    { "/<pid>",        PROC_NODE_DIR,     PROC_DIR_PID          },
+    { "/<pid>/fd",     PROC_NODE_DIR,     PROC_DIR_FD           },
+    { "/<pid>/maps",   PROC_NODE_FILE,    PROC_FILE_MAPS        },
+    { "/<pid>/mounts", PROC_NODE_FILE,    PROC_FILE_MOUNTS      },
+    { "/<pid>/auxv",   PROC_NODE_FILE,    PROC_FILE_AUXV        },
+    { "/<pid>/exe",    PROC_NODE_SYMLINK, PROC_LINK_EXE         },
+    { "/<pid>/cwd",    PROC_NODE_SYMLINK, PROC_LINK_CWD         },
+    { "/<pid>/fd/<n>", PROC_NODE_SYMLINK, PROC_LINK_FD          },
 };
 
 const dirent_static_t root_children[] = {
@@ -30,6 +31,7 @@ const dirent_static_t pid_children[] = {
     { "fd",     DT_DIR },
     { "maps",   DT_REG },
     { "mounts", DT_REG },
+    { "auxv",   DT_REG },
     { "exe",    DT_LNK },
     { "cwd",    DT_LNK },
 };
@@ -123,6 +125,15 @@ static void buf_append_hex(char *buf, size_t *pos, size_t cap, uint64_t v) {
     buf_append(buf, pos, cap, fwd);
 }
 
+static size_t build_auxv(int pid_idx, char *out) {
+    int words = tasks[pid_idx].auxv_blob_words;
+    if (words <= 0) return 0;
+    size_t size = (size_t)words * sizeof(uint64_t);
+    if (size > PROCFS_MAX_CONTENT) size = PROCFS_MAX_CONTENT;
+    memcpy(out, tasks[pid_idx].auxv_blob, size);
+    return size;
+}
+
 static size_t build_maps(int pid_idx, char *out) {
     size_t pos = 0; out[0] = '\0';
     extern const vma_table_t *task_vma_table(int pid_idx);
@@ -178,10 +189,11 @@ static int fmt_int(int v, char *out, size_t out_size) {
     return n;
 }
 
-size_t procfs_content(const proc_node_t *node, char *out) {
+size_t get_procfs_content(const proc_node_t *node, char *out) {
     switch (node->entry) {
     case PROC_FILE_MAPS:   return build_maps(node->pid, out);
     case PROC_FILE_MOUNTS: return build_mounts(out);
+    case PROC_FILE_AUXV:   return build_auxv(node->pid, out);
     default:               return 0;
     }
 }
@@ -191,7 +203,7 @@ static void write_name(char *name, size_t name_size, const char *src) {
     name[name_size - 1] = '\0';
 }
 
-bool procfs_is_proc_path(const char *abs_path) {
+bool is_procfs_path(const char *abs_path) {
     if (!abs_path) return false;
     if (strcmp(abs_path, "/proc") == 0) return true;
     return starts_with(abs_path, "/proc/");
@@ -253,23 +265,23 @@ static bool procfs_resolve_impl(const char *abs_path, const char *orig_path, int
     return false;
 }
 
-bool procfs_resolve(const char *abs_path, int self, proc_node_t *out) {
+bool resolve_procfs(const char *abs_path, int self, proc_node_t *out) {
     return procfs_resolve_impl(abs_path, NULL, self, out, true);
 }
 
-bool procfs_resolve_nofollow(const char *abs_path, int self, proc_node_t *out) {
+bool resolve_procfs_nofollow(const char *abs_path, int self, proc_node_t *out) {
     return procfs_resolve_impl(abs_path, NULL, self, out, false);
 }
 
-bool procfs_resolve_nofollow_orig(const char *abs_path, const char *orig_path, int self, proc_node_t *out) {
+bool resolve_procfs_nofollow_orig(const char *abs_path, const char *orig_path, int self, proc_node_t *out) {
     return procfs_resolve_impl(abs_path, orig_path, self, out, false);
 }
 
-bool procfs_is_dir(const proc_node_t *node) {
+bool is_procfs_dir(const proc_node_t *node) {
     return node->type == PROC_NODE_DIR;
 }
 
-int procfs_readlink(const proc_node_t *node, int self, char *out, size_t out_size) {
+int read_procfs_link(const proc_node_t *node, int self, char *out, size_t out_size) {
     switch (node->entry) {
     case PROC_LINK_SELF:
         return fmt_int(tasks[self].pid, out, out_size);
@@ -289,7 +301,7 @@ int procfs_readlink(const proc_node_t *node, int self, char *out, size_t out_siz
     }
 }
 
-bool procfs_get_dirent(const proc_node_t *dir, int self, int index, char *name, size_t name_size, uint8_t *type_out) {
+bool get_procfs_dirent(const proc_node_t *dir, int self, int index, char *name, size_t name_size, uint8_t *type_out) {
     (void)self;
     if (index < 0) return false;
 

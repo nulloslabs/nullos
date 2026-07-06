@@ -7,7 +7,7 @@
 #include <io/ttys.h>
 
 #include <freestanding/signal.h>
-#include <main/scheduler.h>
+#include <main/sched.h>
 
 pty_t ptys[NUM_PTYS];
 spinlock_t pty_lock = SPINLOCK_INIT;
@@ -39,6 +39,7 @@ int pty_signal_pgrp(int pty_idx, int sig) {
             if (handler == 0) {
                 if (tasks[i].state == TASK_RUNNING || tasks[i].state == TASK_READY) {
                     tasks[i].state = TASK_STOPPED;
+                    tasks[i].stopped_by_signal = 1;
                     tasks[i].stop_reported = 0;
                     for (int j = 0; j < MAX_TASKS; j++) {
                         if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {

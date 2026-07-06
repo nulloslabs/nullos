@@ -13,7 +13,7 @@ typedef unsigned long nlink_t;
 typedef unsigned long ino_t;
 typedef long blkcnt_t;
 #else
-#error "Unsupported architecture for sys/types.h."
+#error "Unsupported architecture for freestanding/sys/types.h."
 #endif
 
 typedef long time_t;

@@ -14,9 +14,6 @@ static uint64_t vmalloc_cursor = 0xffffc00000000000;
 static uint64_t vuser_cursor   = USER_MMAP_BASE;
 static spinlock_t vmm_lock = SPINLOCK_INIT;
 
-#define KERNEL_HEAP_BASE  0xffffb00000000000ULL
-#define KERNEL_HEAP_LIMIT 0xffffc00000000000ULL
-
 // Helper: Get virtual address of a physical page using HHDM
 void* phys_to_virt(uint64_t phys) { return (void*)(phys + hhdm_req.response->offset); }
 
@@ -24,8 +21,7 @@ uint64_t virt_to_phys(void* virt) {
     uintptr_t addr = (uintptr_t)virt;
     
     // Check if it's in the kernel executable range
-    if (addr >= 0xffffffff80000000) { if (eaddr_req.response) { return addr - eaddr_req.response->virtual_base + eaddr_req.response->physical_base; }
-    }
+    if (addr >= 0xffffffff80000000) { if (eaddr_req.response) { return addr - eaddr_req.response->virtual_base + eaddr_req.response->physical_base; } }
     
     if (addr >= KERNEL_HEAP_BASE && addr < KERNEL_HEAP_LIMIT) { return get_vmm_phys(&kernel_context, addr); }
 
@@ -165,7 +161,8 @@ uint64_t get_vmm_phys(vmm_context_t* ctx, uint64_t virt) {
     if (!(entry & VMM_PRESENT)) return 0;
 
     // Mask out the flags to get the pure physical address, then add the page offset
-    return (entry & 0x000ffffffffff000ULL) + offset;
+    uint64_t phys = (entry & 0x000ffffffffff000ULL) + offset;
+    return phys;
 }
 
 void read_vmm(vmm_context_t* ctx, void* dest, uint64_t virt_src, size_t size) {

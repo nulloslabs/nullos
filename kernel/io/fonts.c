@@ -682,6 +682,23 @@ static uint8_t builtin_8x16_font[] = {
     0x00, 0x00, 0x00, 0x00
 };
 
+void change_font(const char *path, uint8_t w, uint8_t h) {
+    if (!w || !h) return; // Sanity check if width or height is 0
+    if (devtmpfs_device_exists(path)) return;
+
+    rootfs_file_t file = read_rootfs(path);
+
+    if (!file.data || file.size == 0 || file.size > 16384) return; // Sanity check if the file dosent exist, empty or too big
+    if (256 * h * w / 8 != file.size) return; // Sanity check if the filesize is valid or not
+    if (memcmp(current_font, file.data, file.size) == 0) return; // Sanity check if it's the same file or not
+
+    clrscr(); // Clear the screen so there isn't any weird shenanigans
+
+    memcpy(current_font, file.data, file.size);
+    current_font_w = w;
+    current_font_h = h;
+}
+
 void init_default_font(void) {
     if (!fb_req.response || fb_req.response->framebuffer_count < 1) return;
     struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
@@ -698,22 +715,4 @@ void init_default_font(void) {
         halt();
     }
     printf("fonts: initialized %dx%d font\n", current_font_w, current_font_h); // Now we can use functions like printf() again!
-}
-
-void change_font(const char *path, uint8_t w, uint8_t h) {
-    if (!w || !h) return; // Sanity check if width or height is 0
-
-    if (devtmpfs_device_exists(path)) return;
-
-    rootfs_file_t file = read_rootfs(path);
-
-    if (!file.data || file.size == 0 || file.size > 16384) return; // Sanity check if the file dosent exist, empty or too big
-    if (256 * h * w / 8 != file.size) return; // Sanity check if the filesize is valid or not
-    if (memcmp(current_font, file.data, file.size) == 0) return; // Sanity check if it's the same file or not
-
-    clrscr(); // Clear the screen so there isn't any weird shenanigans
-
-    memcpy(current_font, file.data, file.size);
-    current_font_w = w;
-    current_font_h = h;
 }

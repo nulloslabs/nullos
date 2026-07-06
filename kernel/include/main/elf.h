@@ -3,7 +3,7 @@
 #include <freestanding/stdint.h>
 #include <freestanding/stddef.h>
 #include <mm/vmm.h>
-#include <main/scheduler.h>
+#include <main/sched.h>
 
 #define ELF_MAGIC 0x464C457F
 #define ELF_CLASS64 2

@@ -8,5 +8,6 @@
 
 void init_pmm(void);
 void* pmalloc(void);
+void* prealloc(uint64_t count);
 void pfree(void *phys_addr);
 void pref(void *phys_addr);

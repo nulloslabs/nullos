@@ -1,8 +1,20 @@
 #pragma once
 
 #include <freestanding/stddef.h>
-#include <main/scheduler.h>
+#include <main/sched.h>
 #include <syscalls/syscalls.h>
+
+// Some public helpers
+void wake_clear_child_tid(task_t *task);
+int copy_from_user(void *kdest, const void *usrc, size_t size);
+int copy_to_user(const void *udest, const void *ksrc, size_t size);
+bool is_mounted_under(const char* path, const char* fstype, char* relative_out);
+void register_vfs_mount(const char *path, const char *fstype);
+int enumerate_vfs_mounts(int index, char *out_line, size_t line_size);
+void check_signals(syscall_frame_t *frame);
+void check_futex_timeouts(void);
+void cleanup_futex_task(int task_idx);
+void process_robust_list(task_t *task);
 
 // Actual implementations
 void sys_read(syscall_frame_t *frame);
@@ -20,20 +32,24 @@ void sys_brk(syscall_frame_t *frame);
 void sys_rt_sigaction(syscall_frame_t *frame);
 void sys_rt_sigprocmask(syscall_frame_t *frame);
 void sys_rt_sigreturn(syscall_frame_t *frame);
+void sys_rt_sigtimedwait(syscall_frame_t *frame);
 void sys_poll(syscall_frame_t *frame);
 void sys_set_tid_address(syscall_frame_t *frame);
 void sys_ioctl(syscall_frame_t *frame);
 void sys_pread64(syscall_frame_t *frame);
 void sys_readv(syscall_frame_t *frame);
 void sys_writev(syscall_frame_t *frame);
+void sys_access(syscall_frame_t *frame);
 void sys_pipe(syscall_frame_t *frame);
+void sys_select(syscall_frame_t *frame);
 void sys_dup(syscall_frame_t *frame);
 void sys_dup2(syscall_frame_t *frame);
 void sys_nanosleep(syscall_frame_t *frame);
 void sys_getpid(syscall_frame_t *frame);
 void sys_getpgid(syscall_frame_t *frame);
-void sys_setpgid(syscall_frame_t *frame);
+void sys_getpgrp(syscall_frame_t *frame);
 void sys_setsid(syscall_frame_t *frame);
+void sys_setpgid(syscall_frame_t *frame);
 void sys_getsid(syscall_frame_t *frame);
 void sys_sendfile(syscall_frame_t *frame);
 void sys_socket(syscall_frame_t *frame);
@@ -48,6 +64,7 @@ void sys_socketpair(syscall_frame_t *frame);
 void sys_reboot(syscall_frame_t *frame);
 void sys_fork(syscall_frame_t *frame);
 void sys_vfork(syscall_frame_t *frame);
+void sys_clone(syscall_frame_t *frame);
 void sys_execve(syscall_frame_t *frame);
 void sys_exit(syscall_frame_t *frame);
 void sys_wait4(syscall_frame_t *frame);
@@ -81,16 +98,24 @@ void sys_setgid(syscall_frame_t *frame);
 void sys_geteuid(syscall_frame_t *frame);
 void sys_getegid(syscall_frame_t *frame);
 void sys_getppid(syscall_frame_t *frame);
+void sys_getpgrp(syscall_frame_t *frame);
 void sys_seteuid(syscall_frame_t *frame);
 void sys_setegid(syscall_frame_t *frame);
+void sys_setresuid(syscall_frame_t *frame);
+void sys_getresuid(syscall_frame_t *frame);
+void sys_setresgid(syscall_frame_t *frame);
+void sys_getresgid(syscall_frame_t *frame);
 void sys_utime(syscall_frame_t *frame);
 void sys_arch_prctl(syscall_frame_t *frame);
 void sys_setrlimit(syscall_frame_t *frame);
+void sys_prlimit64(syscall_frame_t *frame);
 void sys_settimeofday(syscall_frame_t *frame);
 void sys_mount(syscall_frame_t *frame);
 void sys_umount(syscall_frame_t *frame);
 void sys_sethostname(syscall_frame_t *frame);
-void sys_gethostname(syscall_frame_t *frame);
+void sys_setdomainname(syscall_frame_t *frame);
+void sys_gettid(syscall_frame_t *frame);
+void sys_clock_gettime(syscall_frame_t *frame);
 void sys_futex(syscall_frame_t *frame);
 void sys_getdents64(syscall_frame_t *frame);
 void sys_exit_group(syscall_frame_t *frame);
@@ -98,18 +123,14 @@ void sys_openat(syscall_frame_t *frame);
 void sys_fstatat(syscall_frame_t *frame);
 void sys_unlinkat(syscall_frame_t *frame);
 void sys_symlinkat(syscall_frame_t *frame);
+void sys_readlinkat(syscall_frame_t *frame);
 void sys_fchmodat(syscall_frame_t *frame);
+void sys_pselect6(syscall_frame_t *frame);
+void sys_set_robust_list(syscall_frame_t *frame);
+void sys_get_robust_list(syscall_frame_t *frame);
 void sys_utimensat(syscall_frame_t *frame);
+void sys_pipe2(syscall_frame_t *frame);
 void sys_getsockopt(syscall_frame_t *frame);
 void sys_setsockopt(syscall_frame_t *frame);
 void sys_getrandom(syscall_frame_t *frame);
-
-// Some public helpers
-void wake_clear_child_tid(task_t *task);
-int copy_from_user(void *kdest, const void *usrc, size_t size);
-int copy_to_user(const void *udest, const void *ksrc, size_t size);
-bool is_mounted_under(const char* path, const char* fstype, char* relative_out);
-void register_vfs_mount(const char *path, const char *fstype);
-int enumerate_vfs_mounts(int index, char *out_line, size_t line_size);
-void check_signals(syscall_frame_t *frame);
-void futex_check_timeouts(void);
+void sys_rseq(syscall_frame_t *frame);

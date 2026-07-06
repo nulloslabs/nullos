@@ -4,7 +4,7 @@
 #include <main/idt.h>
 #include <main/gdt.h>
 #include <main/halt.h>
-#include <main/scheduler.h>
+#include <main/sched.h>
 #include <mm/mm.h>
 #include <mm/vmm.h>
 #include <main/string.h>

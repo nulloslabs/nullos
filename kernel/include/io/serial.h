@@ -12,3 +12,4 @@ int serial_putchar(uint16_t port, int c);
 int serial_puts(uint16_t port, const char *s);
 int serial_vprintf(uint16_t port, const char *fmt, va_list args);
 int serial_printf(uint16_t port, const char *fmt, ...);
+void init_serial_ports(void);

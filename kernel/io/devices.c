@@ -98,9 +98,7 @@ static uint64_t null_write(const void* buf, uint64_t count, uint64_t offset, int
 
 static uint64_t zero_read(void* buf, uint64_t count, uint64_t offset, int dev_idx) {
     (void)offset; (void)dev_idx;
-    for (uint64_t i = 0; i < count; i++) {
-        ((uint8_t*)buf)[i] = 0;
-    }
+    memset(buf, 0, count);
     return count;
 }
 

@@ -21,19 +21,58 @@ void* pmalloc(void) {
             bitmap[idx / 8] |= (1 << (idx % 8)); // Mark used
             ref_counts[idx] = 1;
             last_index = idx;
+            uint64_t phys = idx * PAGE_SIZE;
             spin_unlock_irqrestore(&pmm_lock, flags);
-            return (void*)(idx * PAGE_SIZE); // Returns PHYSICAL address
+
+            // Zero the page via the HHDM so callers never observe stale data
+            // left over from a previous owner.  This is critical for user
+            // pages: this kernel lacks a destroy_vmm_context() path, so pages
+            // reaching the PMM via sys_munmap/exec can still hold old lock
+            // words, and pthread mutexes interpret a leftover 2 (lll
+            // "contended" state) as "another thread owns this", deadlocking
+            // single-threaded programs.
+            memset((void*)(phys + hhdm_req.response->offset), 0, PAGE_SIZE);
+
+            return (void*)phys; // Returns PHYSICAL address
         }
     }
     spin_unlock_irqrestore(&pmm_lock, flags);
     return NULL; // OOM
 }
 
+void* prealloc(uint64_t count) {
+    if (count == 0) return NULL;
+    uint64_t flags;
+    spin_lock_irqsave(&pmm_lock, &flags);
+
+    // Search for `count` contiguous free pages starting at last_index
+    for (uint64_t i = 0; i < max_pages; i++) {
+        uint64_t idx = (last_index + i) % max_pages;
+        // Can't wrap around: need idx..idx+count-1 all in range
+        if (idx + count > max_pages) continue;
+        int ok = 1;
+        for (uint64_t j = 0; j < count; j++) {
+            if (bitmap[(idx + j) / 8] & (1 << ((idx + j) % 8))) { ok = 0; break; }
+        }
+        if (ok) {
+            for (uint64_t j = 0; j < count; j++) {
+                bitmap[(idx + j) / 8] |= (1 << ((idx + j) % 8));
+                ref_counts[idx + j] = 1;
+            }
+            last_index = idx + count;
+            spin_unlock_irqrestore(&pmm_lock, flags);
+            return (void*)(idx * PAGE_SIZE);
+        }
+    }
+    spin_unlock_irqrestore(&pmm_lock, flags);
+    return NULL;
+}
+
 void pfree(void *phys_addr) {
     uint64_t flags;
     spin_lock_irqsave(&pmm_lock, &flags);
     uint64_t page_idx = (uint64_t)phys_addr / PAGE_SIZE;
-    if (ref_counts[page_idx] > 0) {
+    if (page_idx < max_pages && ref_counts[page_idx] > 0) {
         ref_counts[page_idx]--;
         if (ref_counts[page_idx] == 0) {
             bitmap[page_idx / 8] &= ~(1 << (page_idx % 8));
@@ -46,7 +85,7 @@ void pref(void *phys_addr) {
     uint64_t flags;
     spin_lock_irqsave(&pmm_lock, &flags);
     uint64_t page_idx = (uint64_t)phys_addr / PAGE_SIZE;
-    if (ref_counts[page_idx] > 0 && ref_counts[page_idx] < 255) {
+    if (page_idx < max_pages && ref_counts[page_idx] > 0 && ref_counts[page_idx] < 255) {
         ref_counts[page_idx]++;
     }
     spin_unlock_irqrestore(&pmm_lock, flags);

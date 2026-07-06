@@ -1,6 +1,6 @@
 #include <freestanding/errno.h>
 #include <freestanding/asm/unistd.h>
-#include <main/scheduler.h>
+#include <main/sched.h>
 #include <main/msr.h>
 #include <io/terminal.h>
 #include <io/ttys.h>
@@ -24,11 +24,14 @@ const syscall_fn_t syscall_table[] = {
     [__NR_rt_sigaction]    = sys_rt_sigaction,
     [__NR_rt_sigprocmask]  = sys_rt_sigprocmask,
     [__NR_rt_sigreturn]    = sys_rt_sigreturn,
+    [__NR_rt_sigtimedwait] = sys_rt_sigtimedwait,
     [__NR_ioctl]           = sys_ioctl,
     [__NR_pread64]         = sys_pread64,
     [__NR_readv]           = sys_readv,
     [__NR_writev]          = sys_writev,
+    [__NR_access]          = sys_access,
     [__NR_pipe]            = sys_pipe,
+    [__NR_select]          = sys_select,
     [__NR_dup]             = sys_dup,
     [__NR_dup2]            = sys_dup2,
     [__NR_nanosleep]       = sys_nanosleep,
@@ -43,6 +46,7 @@ const syscall_fn_t syscall_table[] = {
     [__NR_bind]            = sys_bind,
     [__NR_listen]          = sys_listen,
     [__NR_socketpair]      = sys_socketpair,
+    [__NR_clone]           = sys_clone,
     [__NR_fork]            = sys_fork,
     [__NR_vfork]           = sys_vfork,
     [__NR_execve]          = sys_execve,
@@ -77,9 +81,14 @@ const syscall_fn_t syscall_table[] = {
     [__NR_getegid]         = sys_getegid,
     [__NR_setpgid]         = sys_setpgid,
     [__NR_getppid]         = sys_getppid,
+    [__NR_getpgrp]         = sys_getpgrp,
     [__NR_setsid]          = sys_setsid,
     [__NR_seteuid]         = sys_seteuid,
     [__NR_setegid]         = sys_setegid,
+    [__NR_setresuid]       = sys_setresuid,
+    [__NR_getresuid]       = sys_getresuid,
+    [__NR_setresgid]       = sys_setresgid,
+    [__NR_getresgid]       = sys_getresgid,
     [__NR_getpgid]         = sys_getpgid,
     [__NR_getsid]          = sys_getsid,
     [__NR_utime]           = sys_utime,
@@ -90,7 +99,9 @@ const syscall_fn_t syscall_table[] = {
     [__NR_umount]          = sys_umount,
     [__NR_reboot]          = sys_reboot,
     [__NR_sethostname]     = sys_sethostname,
-    [__NR_gethostname]     = sys_gethostname,
+    [__NR_setdomainname]   = sys_setdomainname,
+    [__NR_gettid]          = sys_gettid,
+    [__NR_clock_gettime]   = sys_clock_gettime,
     [__NR_tkill]           = sys_tkill,
     [__NR_futex]           = sys_futex,
     [__NR_getdents64]      = sys_getdents64,
@@ -101,19 +112,30 @@ const syscall_fn_t syscall_table[] = {
     [__NR_fstatat]         = sys_fstatat,
     [__NR_unlinkat]        = sys_unlinkat,
     [__NR_symlinkat]       = sys_symlinkat,
+    [__NR_readlinkat]      = sys_readlinkat,
     [__NR_fchmodat]        = sys_fchmodat,
+    [__NR_pselect6]        = sys_pselect6,
+    [__NR_set_robust_list] = sys_set_robust_list,
+    [__NR_get_robust_list] = sys_get_robust_list,
     [__NR_utimensat]       = sys_utimensat,
+    [__NR_pipe2]           = sys_pipe2,
     [__NR_getsockopt]      = sys_getsockopt,
     [__NR_setsockopt]      = sys_setsockopt,
+    [__NR_prlimit64]       = sys_prlimit64,
     [__NR_getrandom]       = sys_getrandom,
+    [__NR_rseq]            = sys_rseq,
 };
 
 extern void syscall_entry(void);
 
 void syscall_dispatch(syscall_frame_t *frame) {
     current_task_ptr->orig_rax = frame->rax;
-    if (frame->rax < (sizeof(syscall_table) / sizeof(syscall_table[0])) && syscall_table[frame->rax]) syscall_table[frame->rax](frame);
-    else frame->rax = (uint64_t)-ENOSYS;
+
+    if (frame->rax < (sizeof(syscall_table) / sizeof(syscall_table[0])) && syscall_table[frame->rax]) {
+        syscall_table[frame->rax](frame);
+    } else {
+        frame->rax = (uint64_t)-ENOSYS;
+    }
     check_signals(frame);
 }
 

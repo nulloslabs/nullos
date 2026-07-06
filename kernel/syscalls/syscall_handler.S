@@ -31,18 +31,24 @@ syscall_entry:
 
     mov rdi, rsp           // frame pointer
     
-.Llock_loop:
-    lock bts dword ptr [rip + sched_lock], 0
-    jnc .Llock_done
-    pause
-    jmp .Llock_loop
-.Llock_done:
-    
+    // Acquire sched_lock with interrupts ENABLED during spinloop
     sti
-    call syscall_dispatch
-    cli
+.Lspin:
+    mov al, 1
+    xchg byte ptr [rip + sched_lock], al
+    test al, al
+    jz .Llocked
+    pause
+    jmp .Lspin
     
-    lock btr dword ptr [rip + sched_lock], 0
+.Llocked:
+    // Now we have sched_lock, KEEP interrupts enabled during syscall
+    // This allows the timer to preempt and schedule newly created tasks
+    call syscall_dispatch
+    
+    // Release sched_lock before returning to userspace
+    cli
+    mov byte ptr [rip + sched_lock], 0
     
     // restore registers
     pop rax

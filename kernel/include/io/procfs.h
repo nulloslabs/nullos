@@ -21,6 +21,7 @@ typedef enum {
     PROC_DIR_FD,
     PROC_FILE_MAPS,
     PROC_FILE_MOUNTS,
+    PROC_FILE_AUXV,
     PROC_LINK_SELF,
     PROC_LINK_ROOT_MOUNTS,
     PROC_LINK_EXE,
@@ -50,11 +51,11 @@ extern const proc_static_node_t proc_nodes[];
 extern const dirent_static_t root_children[];
 extern const dirent_static_t pid_children[];
 
-bool procfs_resolve(const char *abs_path, int self, proc_node_t *out);
-bool procfs_resolve_nofollow(const char *abs_path, int self, proc_node_t *out);
-bool procfs_resolve_nofollow_orig(const char *abs_path, const char *orig_path, int self, proc_node_t *out);
-bool procfs_is_proc_path(const char *abs_path);
-bool procfs_is_dir(const proc_node_t *node);
-bool procfs_get_dirent(const proc_node_t *dir, int self, int index, char *name, size_t name_size, uint8_t *type_out);
-size_t procfs_content(const proc_node_t *node, char *out);
-int procfs_readlink(const proc_node_t *node, int self, char *out, size_t out_size);
+bool resolve_procfs(const char *abs_path, int self, proc_node_t *out);
+bool resolve_procfs_nofollow(const char *abs_path, int self, proc_node_t *out);
+bool resolve_procfs_nofollow_orig(const char *abs_path, const char *orig_path, int self, proc_node_t *out);
+bool is_procfs_path(const char *abs_path);
+bool is_procfs_dir(const proc_node_t *node);
+bool get_procfs_dirent(const proc_node_t *dir, int self, int index, char *name, size_t name_size, uint8_t *type_out);
+size_t get_procfs_content(const proc_node_t *node, char *out);
+int read_procfs_link(const proc_node_t *node, int self, char *out, size_t out_size);

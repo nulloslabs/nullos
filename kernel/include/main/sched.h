@@ -3,6 +3,7 @@
 #include <freestanding/stdint.h>
 #include <freestanding/signal.h>
 #include <freestanding/ucontext.h>
+#include <freestanding/linux/rseq.h>
 #include <freestanding/sys/types.h>
 #include <main/fd.h>
 #include <main/spinlocks.h>
@@ -21,11 +22,12 @@
 #define TASK_ZOMBIE 3
 #define TASK_STOPPED 4
 
+// TODO (maybe): Make this shit of a struct less messier
 typedef struct {
     pid_t pid;
     pid_t ppid;
     pid_t pgid;
-    pid_t sid;                 // session leader pid (0 = no session / inherited)
+    pid_t sid;
     int state;
     int priority;
     uint8_t ring;
@@ -42,10 +44,12 @@ typedef struct {
     fd_table_t fd_table;
     pid_t waiting_for;
     char cwd[256];
-    char exe[256];          // path of the executable backing this task (for /proc/<pid>/exe)
-    vma_table_t vmas;       // tracked virtual memory areas (for /proc/<pid>/maps)
+    char exe[256];
+    vma_table_t vmas;
+    uint64_t auxv_blob[16];
+    int auxv_blob_words;
     int exit_status;
-    int term_sig;              // signal that terminated us (0 = normal exit)
+    int term_sig;
     uint64_t fs_base;
     uint64_t gs_base;
     int ctty_idx;
@@ -55,15 +59,22 @@ typedef struct {
     uint64_t sigactions[32 * 4];
     uint64_t pending_signals;
     uint64_t blocked_signals;
-    int *clear_child_tid;
-    int stop_reported;
+    // I don't know what any of these things below me does...
     uint64_t orig_rax;
+    int *clear_child_tid;
     void *fpu_area;
     void *sas_ss_sp;
     size_t sas_ss_size;
     int sas_ss_flags;
     bool on_altstack;
-} __attribute__((aligned(16))) task_t;
+    void *robust_list_head;
+    size_t robust_list_len;
+    struct rseq *rseq;
+    uint32_t rseq_sig;
+    size_t rseq_len;
+    int stop_reported;
+    int stopped_by_signal;
+} task_t;
 
 extern task_t tasks[MAX_TASKS];
 extern int current_task;
@@ -72,8 +83,9 @@ extern spinlock_t sched_lock;
 
 pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_t initial_rsp);
 pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx);
+pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *child_ctx, uint64_t clone_flags, uint64_t new_stack, int *parent_tidptr, int *child_tidptr, uint64_t new_tls);
 void schedule(void);
 void exit_task(int status);
 const vma_table_t *task_vma_table(int pid_idx);
 bool signal_pending(void);
-void init_scheduler(void);
+void init_sched(void);

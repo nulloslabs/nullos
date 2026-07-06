@@ -1,5 +1,6 @@
 #include <freestanding/stddef.h>
 #include <freestanding/stdint.h>
+#include <freestanding/sys/stat.h>
 #include <freestanding/sys/types.h>
 #include <main/panic.h>
 #include <io/terminal.h>
@@ -8,12 +9,22 @@
 #include <main/gzip.h>
 #include <mm/mm.h>
 #include <freestanding/errno.h>
-#include <main/scheduler.h>
+#include <freestanding/dirent.h>
+#include <main/sched.h>
 #include <main/limine_req.h>
 #include <limine/limine.h>
 
 static uint8_t *tar_archive_start = NULL;
 static uint8_t *tar_decompressed = NULL;
+static uint8_t **tar_entry_ptrs = NULL;
+static int tar_total_count = 0;
+
+struct tar_symlink {
+    char path[128];
+    char target[128];
+};
+static struct tar_symlink *tar_symlinks = NULL;
+static int tar_symlink_count = 0;
 static modified_file_t modified_files[MAX_MODIFIED_FILES];
 
 static void collapse_slashes(const char *in, char *out, size_t out_size) {
@@ -133,28 +144,33 @@ static bool tar_name_matches(const char *tar_name, const char *norm) {
 }
 
 static bool find_tar_symlink(const char *abs_path, char *resolved_abs, size_t resolved_size) {
-    if (!tar_archive_start) return false;
-
     char norm[256];
     normalize_path(abs_path, norm, sizeof(norm));
 
-    uint8_t *ptr = tar_archive_start;
-    while (1) {
-        struct tar_header *h = (struct tar_header *)ptr;
-        if (h->name[0] == '\0') break;
-
-        uint64_t size = parse_octal(h->size);
-        char type = h->typeflag[0];
-
-        if ((type == '1' || type == '2') && tar_name_matches(h->name, norm)) {
+    // Check overlay symlinks first (created via symlink_rootfs)
+    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+        if (modified_files[i].is_active && !modified_files[i].is_tombstone &&
+            (modified_files[i].mode & 0xF000) == 0xA000 &&
+            tar_name_matches(modified_files[i].path, norm)) {
             char target[101];
-            strncpy(target, h->linkname, 100);
+            strncpy(target, (const char *)modified_files[i].data, 100);
             target[100] = '\0';
             resolve_link_target(abs_path, target, resolved_abs, resolved_size);
             return true;
         }
+    }
 
-        ptr += 512 + (size + 511) / 512 * 512;
+    // Fall back to tar symlinks
+    if (!tar_symlinks) return false;
+
+    for (int i = 0; i < tar_symlink_count; i++) {
+        if (tar_name_matches(tar_symlinks[i].path, norm)) {
+            char target[101];
+            strncpy(target, tar_symlinks[i].target, 100);
+            target[100] = '\0';
+            resolve_link_target(abs_path, target, resolved_abs, resolved_size);
+            return true;
+        }
     }
 
     return false;
@@ -225,12 +241,13 @@ static void resolve_path_symlinks_ex(const char *in_abs, char *out_abs, size_t o
     out_abs[out_size - 1] = '\0';
 }
 
-static void add_modified_file(const char *path, void *data, size_t size, uint32_t mode, uid_t uid, gid_t gid) {
+static void add_modified_file(const char *path, void *data, size_t size, size_t capacity, uint32_t mode, uid_t uid, gid_t gid) {
     for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
         if (modified_files[i].is_active && strcmp(modified_files[i].path, path) == 0) {
             if (modified_files[i].data) free(modified_files[i].data);
             modified_files[i].data = data;
             modified_files[i].size = size;
+            modified_files[i].capacity = capacity;
             modified_files[i].mode = mode;
             modified_files[i].uid = uid;
             modified_files[i].gid = gid;
@@ -246,6 +263,7 @@ static void add_modified_file(const char *path, void *data, size_t size, uint32_
             modified_files[i].path[sizeof(modified_files[i].path) - 1] = '\0';
             modified_files[i].data = data;
             modified_files[i].size = size;
+            modified_files[i].capacity = capacity;
             modified_files[i].mode = mode;
             modified_files[i].uid = uid;
             modified_files[i].gid = gid;
@@ -520,9 +538,108 @@ int write_rootfs(const char *path, const void *data, uint64_t size, uint32_t mod
         memcpy(copy, data, (size_t)size);
     }
 
-    add_modified_file(norm, copy, (size_t)size, mode, uid, gid);
+    add_modified_file(norm, copy, (size_t)size, (size_t)size, mode, uid, gid);
     return 0;
 }
+
+// Find an active (non-tombstone) overlay entry for `norm`, or NULL.
+static modified_file_t *find_overlay_entry(const char *norm) {
+    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+        if (modified_files[i].is_active &&
+            !modified_files[i].is_tombstone &&
+            strcmp(modified_files[i].path, norm) == 0) {
+            return &modified_files[i];
+        }
+    }
+    return NULL;
+}
+
+// In-place partial write at byte offset `off`.  Critical for performance:
+// write_rootfs() above takes a full-replacement buffer and malloc+memcpy of
+// the whole file each call, which makes dd-style loops (many small writes
+// to a growing file) O(N^2) — a 1.5 MiB image via `dd bs=512` took ~35 s.
+//
+// This helper reuses the existing overlay buffer when one exists: it only
+// reallocates (geometrically, 1.5x) when the write extends past the current
+// allocation, and copies only the newly-written bytes.  Each write is thus
+// O(off+count) amortized, not O(file_size).  When no overlay entry exists
+// yet (first write on a tar-backed or brand-new file), it snapshots the
+// current contents, applies the patch, and stores a fresh overlay entry.
+int write_rootfs_partial(const char *path, const void *data, uint64_t off, uint64_t count, uint32_t mode, uid_t uid, gid_t gid) {
+    if (count == 0) return 0;
+
+    char norm[256];
+    get_norm_path(path, norm, sizeof(norm));
+
+    if (off + count < count) return -EINVAL; // overflow guard
+
+    modified_file_t *ent = find_overlay_entry(norm);
+    if (ent) {
+        uint64_t new_size = off + count;
+        if (new_size > ent->capacity) {
+            // Grow geometrically (1.5x) to absorb future small writes
+            // without a realloc each time.  Never shrink; the goal is to
+            // stabilise large-file copy loops like dd/tar.
+            uint64_t grow = ent->capacity + (ent->capacity >> 1);
+            if (grow < 512) grow = 512;
+            uint64_t cap = (grow > new_size) ? grow : new_size;
+            void *realloced = realloc(ent->data, (size_t)cap);
+            if (!realloced) {
+                // Fall back to exact-size allocation.
+                realloced = realloc(ent->data, (size_t)new_size);
+                if (!realloced) return -ENOMEM;
+                cap = new_size;
+            }
+            ent->data = realloced;
+            ent->capacity = cap;
+        }
+        if (new_size > ent->size) {
+            // Zero-fill the gap if the write starts past the old end
+            // (sparse write, e.g. lseek+write beyond EOF).
+            if (off > ent->size) {
+                memset((uint8_t *)ent->data + ent->size, 0, (size_t)(off - ent->size));
+            }
+            // Track true file size, not allocation capacity.
+            ent->size = new_size;
+        }
+        memcpy((uint8_t *)ent->data + off, data, (size_t)count);
+        ent->mode = mode ? mode : (ent->mode ? ent->mode : 0100644);
+        ent->uid  = uid;
+        ent->gid  = gid;
+        return 0;
+    }
+
+    // No overlay entry yet.  Snapshot current contents (tar-backed or empty),
+    // apply the patch into a fresh buffer, and store it as a new overlay entry.
+    rootfs_file_t cur = read_rootfs(path);
+    uint64_t base_size = cur.size;
+    uint64_t need = off + count;
+    uint64_t alloc = (base_size > need) ? base_size : need;
+
+    void *buf = malloc((size_t)alloc);
+    if (!buf) return -ENOMEM;
+
+    // Seed with current file contents if any (this promotes tar-backed data
+    // into the overlay so future writes hit the fast path above).
+    if (cur.data && base_size) memcpy(buf, cur.data, (size_t)base_size);
+    // Zero-fill any tail-gap before the write region.
+    if (base_size < off) memset((uint8_t *)buf + base_size, 0, (size_t)(off - base_size));
+    // Apply the patch.
+    memcpy((uint8_t *)buf + off, data, (size_t)count);
+
+    uint32_t final_mode = mode ? mode : (cur.mode ? cur.mode : 0100644);
+    add_modified_file(norm, buf, (size_t)need, (size_t)alloc, final_mode, uid, gid);
+    return 0;
+}
+
+int mkdir_rootfs(const char *path, mode_t mode, uid_t uid, gid_t gid) {
+    char norm[256];
+    get_norm_path(path, norm, sizeof(norm));
+
+    add_modified_file(norm, NULL, 0, 0, mode | 0040000, uid, gid);
+    return 0;
+}
+
 
 int delete_rootfs(const char *path) {
     // Don't follow the final component: unlink must remove the entry itself
@@ -552,14 +669,6 @@ int delete_rootfs(const char *path) {
     }
 
     return -1; // Not found
-}
-
-int mkdir_rootfs(const char *path, mode_t mode, uid_t uid, gid_t gid) {
-    char norm[256];
-    get_norm_path(path, norm, sizeof(norm));
-
-    add_modified_file(norm, NULL, 0, mode | 0x4000, uid, gid); // S_IFDIR
-    return 0;
 }
 
 int rmdir_rootfs(const char *path) {
@@ -632,7 +741,7 @@ int symlink_rootfs(const char *target, const char *path, uid_t uid, gid_t gid) {
     if (!copy) return -ENOMEM;
     strcpy(copy, target);
 
-    add_modified_file(norm, copy, len, 0xA000 | 0777, uid, gid); // S_IFLNK
+    add_modified_file(norm, copy, len, len, 0xA000 | 0777, uid, gid); // S_IFLNK
     return 0;
 }
 
@@ -670,7 +779,7 @@ int chmod_rootfs(const char *path, mode_t mode) {
         memcpy(data_copy, file.data, file.size);
     }
 
-    add_modified_file(norm, data_copy, file.size, new_mode, file.uid, file.gid);
+    add_modified_file(norm, data_copy, file.size, file.size, new_mode, file.uid, file.gid);
     return 0;
 }
 
@@ -738,6 +847,96 @@ int get_rootfs_entry(int index, directory_entry_t *entry) {
     return -1; // Index out of range
 }
 
+int next_rootfs_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size, uint8_t *child_type) {
+    char prefix[258];
+    strncpy(prefix, dir_norm, sizeof(prefix) - 2);
+    prefix[sizeof(prefix) - 2] = '\0';
+    if (strcmp(dir_norm, "/") != 0) strcat(prefix, "/");
+    size_t prefix_len = strlen(prefix);
+
+    // Phase 1: tar entries — sequential walk using pre-computed pointer array
+    if (*index < tar_total_count && tar_entry_ptrs) {
+        for (int i = *index; i < tar_total_count; i++) {
+            struct tar_header *h = (struct tar_header *)tar_entry_ptrs[i];
+            char type = h->typeflag[0];
+
+            const char *tar_name = h->name;
+            size_t full_len = strlen(tar_name);
+            if (full_len > 1 && tar_name[full_len - 1] == '/') full_len--;
+
+            const char *name = tar_name;
+            if (name[0] == '.' && name[1] == '/') name += 2;
+
+            size_t nlen = strlen(name);
+            if (nlen > 1 && name[nlen - 1] == '/') nlen--;
+
+            if (!overlay_has_path_n(tar_name, full_len)) {
+                char abs_entry[256];
+                abs_entry[0] = '/';
+                strncpy(abs_entry + 1, name, sizeof(abs_entry) - 2);
+                abs_entry[sizeof(abs_entry) - 1] = '\0';
+
+                // Strip trailing slash on directory entries (./etc/ -> etc)
+                // so the "no '/' in child name" direct-child test below
+                // doesn't reject directories outright.
+                size_t plen = strlen(abs_entry);
+                if (plen > 1 && abs_entry[plen - 1] == '/') abs_entry[--plen] = '\0';
+
+                if (strncmp(abs_entry, prefix, prefix_len) == 0) {
+                    const char *child = abs_entry + prefix_len;
+                    if (*child && !strchr(child, '/') &&
+                        strcmp(child, ".") != 0 && strcmp(child, "..") != 0) {
+
+                        strncpy(child_name, child, child_name_size - 1);
+                        child_name[child_name_size - 1] = '\0';
+                        *child_type = (type == '5') ? DT_DIR :
+                                      (type == '2') ? DT_LNK : DT_REG;
+                        *index = i;
+                        return 0;
+                    }
+                }
+            }
+
+            if (h->name[0] == '\0') break;
+        }
+        *index = tar_total_count; // tar exhausted, advance to overlay marker
+    }
+
+    // Phase 2: overlay entries
+    int overlay_start = (*index >= tar_total_count) ? *index - tar_total_count : 0;
+    for (int i = overlay_start; i < MAX_MODIFIED_FILES; i++) {
+        if (!modified_files[i].is_active || modified_files[i].is_tombstone) continue;
+
+        const char *path = modified_files[i].path;
+        if (path[0] == '.' && path[1] == '/') path += 2;
+
+        char abs_entry[256];
+        abs_entry[0] = '/';
+        strncpy(abs_entry + 1, path, sizeof(abs_entry) - 2);
+        abs_entry[sizeof(abs_entry) - 1] = '\0';
+
+        size_t plen = strlen(abs_entry);
+        if (plen > 1 && abs_entry[plen - 1] == '/') abs_entry[--plen] = '\0';
+
+        if (strncmp(abs_entry, prefix, prefix_len) == 0) {
+            const char *child = abs_entry + prefix_len;
+            if (*child && !strchr(child, '/') &&
+                strcmp(child, ".") != 0 && strcmp(child, "..") != 0) {
+
+                strncpy(child_name, child, child_name_size - 1);
+                child_name[child_name_size - 1] = '\0';
+                mode_t mbits = modified_files[i].mode & 0xF000;
+                *child_type = (mbits == 0x4000) ? DT_DIR :
+                              (mbits == 0xA000) ? DT_LNK : DT_REG;
+                *index = tar_total_count + i;
+                return 0;
+            }
+        }
+    }
+
+    return 1; // no more children
+}
+
 void init_rootfs(void) {
     if (mod_req.response && mod_req.response->module_count > 0) {
         struct limine_file *mod = mod_req.response->modules[0];
@@ -755,6 +954,49 @@ void init_rootfs(void) {
 
         tar_archive_start = decompressed;
         tar_decompressed = decompressed;
+
+        uint8_t *ptr = decompressed;
+        tar_total_count = 0;
+        while (1) {
+            struct tar_header *h = (struct tar_header *)ptr;
+            if (h->name[0] == '\0') break;
+            uint64_t size = parse_octal(h->size);
+            char type = h->typeflag[0];
+            if (type == '1' || type == '2') tar_symlink_count++;
+            tar_total_count++;
+            ptr += 512 + (size + 511) / 512 * 512;
+        }
+
+        tar_entry_ptrs = malloc(tar_total_count * sizeof(uint8_t *));
+        if (tar_entry_ptrs) {
+            ptr = decompressed;
+            for (int i = 0; i < tar_total_count; i++) {
+                tar_entry_ptrs[i] = ptr;
+                struct tar_header *h = (struct tar_header *)ptr;
+                uint64_t size = parse_octal(h->size);
+                ptr += 512 + (size + 511) / 512 * 512;
+            }
+        } else {
+            tar_total_count = 0;
+        }
+
+        if (tar_symlink_count > 0) {
+            tar_symlinks = malloc(tar_symlink_count * sizeof(struct tar_symlink));
+            int idx = 0;
+            ptr = decompressed;
+            while (1) {
+                struct tar_header *h = (struct tar_header *)ptr;
+                if (h->name[0] == '\0') break;
+                uint64_t size = parse_octal(h->size);
+                char type = h->typeflag[0];
+                if (type == '1' || type == '2') {
+                    strncpy(tar_symlinks[idx].path, h->name, 128);
+                    strncpy(tar_symlinks[idx].target, h->linkname, 128);
+                    idx++;
+                }
+                ptr += 512 + (size + 511) / 512 * 512;
+            }
+        }
     } else {
         panic("no module found");
     }

@@ -5,6 +5,12 @@
 #include <limine/limine.h>
 #include <io/framebuffer.h>
 
+typedef enum {
+    STATE_NORMAL,
+    STATE_EXPECT_BRACKET,
+    STATE_READ_PARAMS
+} parser_state_t;
+
 extern uint64_t cursor_x;
 extern uint64_t cursor_y;
 extern uint32_t fg_color; 
@@ -12,14 +18,9 @@ extern uint32_t bg_color;
 extern uint32_t default_color;
 extern uint64_t line_start_y;
 
-typedef enum {
-    STATE_NORMAL,
-    STATE_EXPECT_BRACKET,
-    STATE_READ_PARAMS
-} parser_state_t;
-
+void invalidate_terminal_backbuffer(void);
 void show_cursor(bool visible);
-void scroll(struct limine_framebuffer *fb);
+void scroll(void);
 void clrscr(void);
 int putchar(int c);
 int puts(const char *s);

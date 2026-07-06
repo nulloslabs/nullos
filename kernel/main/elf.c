@@ -1,17 +1,20 @@
+#include <freestanding/errno.h>
+#include <freestanding/sys/types.h>
+#include <freestanding/sys/stat.h>
 #include <main/elf.h>
 #include <main/rootfs.h>
-#include <io/devtmpfs.h>
-#include <freestanding/errno.h>
+#include <main/msr.h>
+#include <main/spinlocks.h>
+#include <main/rng.h>
 #include <main/string.h>
-#include <mm/vma.h>
+#include <io/devtmpfs.h>
+#include <io/procfs.h>
 #include <io/terminal.h>
 #include <mm/mm.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
-#include <freestanding/sys/types.h>
-#include <main/spinlocks.h>
+#include <mm/vma.h>
 #include <syscalls/syscalls.h>
-#include <main/rng.h>
 
 static uint64_t aslr_random_offset(uint64_t max_pages) {
     uint64_t val;
@@ -128,28 +131,58 @@ static int load_elf_segments(vmm_context_t *ctx, uint8_t *data,
             uint64_t page_start = seg_start & ~0xFFFULL;
             uint64_t page_end   = (seg_end + 0xFFFULL) & ~0xFFFULL;
 
+            // 1) Allocate all pages for this PT_LOAD segment up front.
+            //    pmalloc() already returns zeroed pages (defensive: the kernel
+            //    has no destroy_vmm_context path, so recycled pages can hold
+            //    stale lock words). Only memset again if pmalloc didn't run
+            //    for a page that was already mapped by an earlier segment.
             for (uint64_t a = page_start; a < page_end; a += 0x1000) {
                 if (get_vmm_phys(ctx, a) == 0) {
                     void *page = pmalloc();
                     map_vmm(ctx, a, (uint64_t)page, VMM_USER | VMM_WRITABLE | VMM_NX);
-                    memset_vmm(ctx, a, 0, 0x1000);
                 }
             }
 
+            // 2) Bulk-copy the segment file image. The old code did
+            //    write_vmm(ctx, addr, &byte, 1) per byte — a full page-table
+            //    walk for EVERY byte. For a 2MB glibc that's ~2M walks.
+            //    Walk the page table once per page and memcpy the bytes that
+            //    land in each page directly via the HHDM alias.
             if (ph->filesz > 0) {
-                for (uint64_t i = 0; i < ph->filesz; i++) {
-                    uint8_t byte = data[ph->offset + i];
-                    write_vmm(ctx, seg_start + i, &byte, 1);
+                uint64_t dst = seg_start;
+                uint64_t left = ph->filesz;
+                const uint8_t *src = data + ph->offset;
+                while (left > 0) {
+                    uint64_t phys = get_vmm_phys(ctx, dst & ~0xFFFULL);
+                    if (!phys) break;
+                    uint64_t off = dst & 0xFFF;
+                    uint64_t chunk = 4096 - off;
+                    if (chunk > left) chunk = left;
+                    memcpy((uint8_t *)phys_to_virt(phys) + off, src, chunk);
+                    src  += chunk;
+                    dst  += chunk;
+                    left -= chunk;
                 }
             }
 
+            // 3) Zero the BSS region in page-sized chunks. The individual
+            //    data pages were already zeroed by pmalloc(); only the tail
+            //    of a partially-written page needs re-zeroing here. Still,
+            //    a page-at-a-time memset is O(thousands) faster than the old
+            //    byte-at-a-time write_vmm ZSS loop.
             if (ph->memsz > ph->filesz) {
                 uint64_t bss_start = seg_start + ph->filesz;
-                uint64_t bss_size  = ph->memsz - ph->filesz;
-
-                uint8_t zero = 0;
-                for (uint64_t i = 0; i < bss_size; i++) {
-                    write_vmm(ctx, bss_start + i, &zero, 1);
+                uint64_t bss_end   = seg_start + ph->memsz;
+                uint64_t a = bss_start;
+                while (a < bss_end) {
+                    uint64_t phys = get_vmm_phys(ctx, a & ~0xFFFULL);
+                    if (!phys) break;
+                    uint64_t off = a & 0xFFF;
+                    uint64_t chunk = 4096 - off;
+                    uint64_t remain = bss_end - a;
+                    if (chunk > remain) chunk = remain;
+                    memset((uint8_t *)phys_to_virt(phys) + off, 0, chunk);
+                    a += chunk;
                 }
             }
 
@@ -163,7 +196,7 @@ static int load_elf_segments(vmm_context_t *ctx, uint8_t *data,
                 int vprot = VMA_PROT_READ;  // PT_LOAD is always readable
                 if (ph->flags & PF_W) vprot |= VMA_PROT_WRITE;
                 if (ph->flags & PF_X) vprot |= VMA_PROT_EXEC;
-                vma_add(vmas, page_start, page_end, vprot, 0, ph->offset, name);
+                add_vma(vmas, page_start, page_end, vprot, 0, ph->offset, name);
             }
 
         } else if (ph->type == PT_DYNAMIC && dynamic_out) {
@@ -174,14 +207,14 @@ static int load_elf_segments(vmm_context_t *ctx, uint8_t *data,
     return 0;
 }
 
-pid_t execute_elf(const char *path, char **argv, char **envp) {
+int execute_elf(const char *path, char **argv, char **envp) {
     if (devtmpfs_device_exists(path)) return -EACCES;
 
     rootfs_file_t file = read_rootfs(path);
     if (!file.data) return -ENOENT;
 
-    if (file.mode & 0x4000) return -EISDIR;
-    if (!(file.mode & 0111)) return -EPERM;
+    if (S_ISDIR(file.mode)) return -EISDIR;
+    if (!(file.mode & S_IXUGO)) return -EPERM;
 
     uint8_t *data = (uint8_t *)file.data;
     elf64_ehdr_t *ehdr = (elf64_ehdr_t *)data;
@@ -205,7 +238,7 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
     // Record VMAs as we load segments; the task doesn't exist yet, so we
     // accumulate into a local table and splice it into tasks[pid] below.
     vma_table_t local_vmas;
-    vma_init(&local_vmas);
+    init_vma_table(&local_vmas);
 
     load_elf_segments(ctx, data, ehdr, base_addr, NULL, &local_vmas, path);
 
@@ -246,7 +279,7 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
     uint64_t stack_vaddr = USER_STACK_BASE - USER_STACK_SIZE;
     void *stack = vmap_user_at(ctx, stack_vaddr, USER_STACK_SIZE, VMM_USER | VMM_WRITABLE | VMM_NX);
     if (!stack) return -ENOMEM;
-    vma_add(&local_vmas, stack_vaddr, stack_vaddr + USER_STACK_SIZE,
+    add_vma(&local_vmas, stack_vaddr, stack_vaddr + USER_STACK_SIZE,
             VMA_PROT_READ | VMA_PROT_WRITE, VMA_FLAG_ANON | VMA_FLAG_STACK, 0, "[stack]");
 
     char *empty_envp[] = { NULL };
@@ -273,6 +306,16 @@ pid_t execute_elf(const char *path, char **argv, char **envp) {
         tasks[pid].exe[sizeof(tasks[pid].exe) - 1] = '\0';
         // Hand off the VMA table we accumulated during loading.
         memcpy(&tasks[pid].vmas, &local_vmas, sizeof(vma_table_t));
+        // Save auxv for /proc/<pid>/auxv
+        {
+            int auxc = 0;
+            while (auxv[auxc].type != AT_NULL) auxc++;
+            auxc++; // include AT_NULL
+            int words = auxc * 2;
+            if (words > 16) words = 16;
+            memcpy(tasks[pid].auxv_blob, auxv, words * sizeof(uint64_t));
+            tasks[pid].auxv_blob_words = words;
+        }
     }
 
     for (int i = 0; i < MAX_TASKS; i++) {
@@ -290,12 +333,13 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     syscall_frame_t *frame = (syscall_frame_t *)raw_frame;
 
     if (devtmpfs_device_exists(path)) return -EACCES;
+    if (is_procfs_path(path)) return -EACCES;
 
     rootfs_file_t file = read_rootfs(path);
     if (!file.data) return -ENOENT;
 
-    if (file.mode & 0x4000) return -EISDIR;
-    if (!(file.mode & 0111)) return -EPERM;
+    if (S_ISDIR(file.mode)) return -EISDIR;
+    if (!(file.mode & S_IXUGO)) return -EPERM;
 
     uint8_t *data = (uint8_t *)file.data;
     elf64_ehdr_t *ehdr = (elf64_ehdr_t *)data;
@@ -319,7 +363,7 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     // On exec, the old address space is replaced; reset the VMA table and
     // repopulate it as we load the new image.
     vma_table_t local_vmas;
-    vma_init(&local_vmas);
+    init_vma_table(&local_vmas);
 
     load_elf_segments(ctx, data, ehdr, base_addr, NULL, &local_vmas, path);
 
@@ -360,8 +404,7 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     uint64_t stack_vaddr = USER_STACK_BASE - USER_STACK_SIZE;
     void *stack = vmap_user_at(ctx, stack_vaddr, USER_STACK_SIZE, VMM_USER | VMM_WRITABLE | VMM_NX);
     if (!stack) return -ENOMEM;
-    vma_add(&local_vmas, stack_vaddr, stack_vaddr + USER_STACK_SIZE,
-            VMA_PROT_READ | VMA_PROT_WRITE, VMA_FLAG_ANON | VMA_FLAG_STACK, 0, "[stack]");
+    add_vma(&local_vmas, stack_vaddr, stack_vaddr + USER_STACK_SIZE, VMA_PROT_READ | VMA_PROT_WRITE, VMA_FLAG_ANON | VMA_FLAG_STACK, 0, "[stack]");
 
     char *empty_envp[] = { NULL };
     char **actual_envp = (envp) ? envp : empty_envp;
@@ -384,9 +427,21 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     strncpy(current_task_ptr->exe, path, sizeof(current_task_ptr->exe) - 1);
     current_task_ptr->exe[sizeof(current_task_ptr->exe) - 1] = '\0';
     memcpy(&current_task_ptr->vmas, &local_vmas, sizeof(vma_table_t));
+    // Save auxv for /proc/<pid>/auxv
+    {
+        int auxc = 0;
+        while (auxv[auxc].type != AT_NULL) auxc++;
+        auxc++; // include AT_NULL
+        int words = auxc * 2;
+        if (words > 16) words = 16;
+        memcpy(current_task_ptr->auxv_blob, auxv, words * sizeof(uint64_t));
+        current_task_ptr->auxv_blob_words = words;
+    }
 
     current_task_ptr->ctx = ctx;
     current_task_ptr->stack_base = stack;
+    current_task_ptr->fs_base = 0;
+    write_msr(MSR_FS_BASE, 0);
     switch_vmm_context(ctx);
 
     frame->rcx = entry;

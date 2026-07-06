@@ -19,9 +19,11 @@ tools:
 	@$(MAKE) -C ../tools
 
 iso: tools kernel rootfs
-	@if [ -f system.iso ] && [ system.iso -nt ../kernel/nullkrnl ] && \
-	    [ system.iso -nt ../rootfs/rootfs.tar.gz ] && \
-	    [ system.iso -nt ../config/limine.conf ]; then \
+	@if [ -f $(OUTFILE) ] && [ $(OUTFILE) -nt ../kernel/nullkrnl ] && \
+	    [ $(OUTFILE) -nt Makefile ] && \
+	    [ $(OUTFILE) -nt config.mk ] && \
+	    [ $(OUTFILE) -nt ../rootfs/rootfs.tar.gz ] && \
+	    [ $(OUTFILE) -nt ../config/limine.conf ]; then \
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/system.iso is already up to date"; \
 	else \
 		printf "  %-7s %s\n" "XORRISO" "$(SUBDIR)/system.iso" && \
@@ -31,13 +33,13 @@ iso: tools kernel rootfs
 		cp ../kernel/nullkrnl main/boot && \
 		cp ../rootfs/rootfs.tar.gz main/boot && \
 		cp ../config/limine.conf main/boot && \
-		$(XORRISO) -as mkisofs $(XORRISOFLAGS) main -o $(ISOFILE) > /dev/null 2>&1 && \
-		../tools/limine/limine bios-install $(ISOFILE) > /dev/null 2>&1; \
+		$(XORRISO) -as mkisofs $(XORRISOFLAGS) main -o $(OUTFILE) > /dev/null 2>&1 && \
+		../tools/limine/limine bios-install $(OUTFILE) > /dev/null 2>&1; \
 	fi
 
 clean:
-	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/$(ISOFILE) .stamp .rebuilt"
-	@rm -rf $(ISOFILE) .stamp .rebuilt
+	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/$(OUTFILE)"
+	@rm -rf $(OUTFILE)
 
 mrproper: clean
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/"

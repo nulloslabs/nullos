@@ -40,7 +40,7 @@ typedef long intptr_t;
 typedef unsigned long uintmax_t;
 typedef long intmax_t;
 #else
-#error "Unsupported architecture for stdint.h."
+#error "Unsupported architecture for freestanding/stdint.h."
 #endif
 
 typedef unsigned short uint16_t;

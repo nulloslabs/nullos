@@ -4,13 +4,6 @@
 #include <freestanding/stddef.h>
 #include <freestanding/signal.h>
 
-/* ABI layout for the saved register/FPU state delivered to a signal
-   handler, and the ucontext that wraps it. Mirrors the Linux/glibc
-   x86-64 layout (struct sigcontext, struct _fpstate, struct ucontext).
-   Pure definitions — no functions, so there is no matching .c file;
-   same status as the rest of freestanding/. */
-
-/* uc_flags bits (Linux kernel-internal). */
 #define UC_SIGCONTEXT_SS     0x2
 #define UC_STRICT_RESTORE_SS 0x4
 

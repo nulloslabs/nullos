@@ -53,7 +53,7 @@ static const uint8_t hid_to_scancode[256] = {
     [0x28] = 0x1C,  // Enter
     [0x29] = 0x01,  // Escape
     [0x2A] = 0x0E,  // Backspace
-    [0x2B] = 0x00,  // Tab (Disabled)
+    [0x2B] = 0x0F,  // Tab
     [0x2C] = 0x39,  // Space
     [0x2D] = 0x0C,  // -
     [0x2E] = 0x0D,  // =
@@ -79,6 +79,16 @@ static const uint8_t hid_to_scancode[256] = {
     [0x43] = 0x44,  // F10
     [0x44] = 0x57,  // F11
     [0x45] = 0x58,  // F12
+    [0x49] = 0x68,  // Insert   -> SC_INSERT
+    [0x4A] = 0x64,  // Home     -> SC_HOME
+    [0x4B] = 0x66,  // Page Up  -> SC_PGUP
+    [0x4C] = 0x69,  // Delete   -> SC_DELETE
+    [0x4D] = 0x65,  // End      -> SC_END
+    [0x4E] = 0x67,  // Page Down-> SC_PGDN
+    [0x4F] = 0x62,  // Right    -> SC_RIGHT
+    [0x50] = 0x63,  // Left     -> SC_LEFT
+    [0x51] = 0x61,  // Down     -> SC_DOWN
+    [0x52] = 0x60,  // Up       -> SC_UP
     // Modifier keys (usage IDs 0xE0-0xE7)
     [0xE0] = 0x1D,  // Left Control
     [0xE1] = 0x2A,  // Left Shift
@@ -149,6 +159,21 @@ void usb_keyboard_process_report(uint8_t *report, int kbd_index) {
             key_head = next;
         }
         tty_process_scancode(0xAA);
+    }
+
+    // Alt modifier tracking (same pattern as Shift)
+    {
+        uint8_t curr_alt = modifiers & (HID_MOD_LALT | HID_MOD_RALT);
+        uint8_t prev_alt = prev_modifiers & (HID_MOD_LALT | HID_MOD_RALT);
+        if (curr_alt && !prev_alt) {
+            uint32_t next = (key_head + 1) & 127;
+            if (next != key_tail) { key_buffer[key_head] = 0x38; key_head = next; }
+            tty_process_scancode(0x38);
+        } else if (!curr_alt && prev_alt) {
+            uint32_t next = (key_head + 1) & 127;
+            if (next != key_tail) { key_buffer[key_head] = 0xB8; key_head = next; }
+            tty_process_scancode(0xB8);
+        }
     }
 
     // Newly pressed keys

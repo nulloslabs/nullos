@@ -4,7 +4,7 @@
 
 struct utsname {
     char sysname[UTSNAME_LENGTH];
-    char nodename[UTSNAME_LENGTH];
+    char nodename[UTSNAME_LENGTH]; // Why is it nodename and not hostname ;-;
     char release[UTSNAME_LENGTH];
     char version[UTSNAME_LENGTH];
     char machine[UTSNAME_LENGTH];

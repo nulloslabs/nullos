@@ -11,6 +11,9 @@ volatile uint32_t key_tail = 0;
 static bool shift_pressed = false;
 static bool caps_lock = false;
 static bool ctrl_pressed = false;
+static bool alt_pressed = false;
+
+bool kbd_alt_pressed(void) { return alt_pressed; }
 
 uint8_t get_scancode(void) {
     if (key_head == key_tail) return 0;
@@ -31,6 +34,10 @@ char scancode_to_ascii(uint8_t sc) {
         if (released == 0x1D) {
             ctrl_pressed = false;
         }
+        // Handle Alt release
+        if (released == 0x38) {
+            alt_pressed = false;
+        }
         return 0;
     }
 
@@ -48,6 +55,9 @@ char scancode_to_ascii(uint8_t sc) {
             return 0;
         case 0x1D:
             ctrl_pressed = true;
+            return 0;
+        case 0x38:
+            alt_pressed = true;
             return 0;
     }
 

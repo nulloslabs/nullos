@@ -6,6 +6,7 @@
 #include <main/halt.h>
 #include <io/framebuffer.h>
 #include <io/fonts.h>
+#include <io/terminal.h>
 
 uint64_t fb_read_index(int idx, void* buf, uint64_t count, uint64_t offset) {
     if (!fb_req.response || idx >= (int)fb_req.response->framebuffer_count) return (uint64_t)-ENODEV;
@@ -21,9 +22,19 @@ uint64_t fb_write_index(int idx, const void* buf, uint64_t count, uint64_t offse
     if (!fb_req.response || idx >= (int)fb_req.response->framebuffer_count) return (uint64_t)-ENODEV;
     struct limine_framebuffer *fb = fb_req.response->framebuffers[idx];
     uint64_t size = fb->height * fb->pitch;
-    if (offset >= size) return 0;
+    // Writing past the end of the framebuffer is "no space left on device",
+    // not "EOF". Tools like `cat urandom > /dev/fb0` rely on this to know
+    // when to surface ENOSPC instead of looping forever on a 0-byte write.
+    if (offset >= size) return (uint64_t)-ENOSPC;
     if (offset + count > size) count = size - offset;
     memcpy((uint8_t*)fb->address + offset, buf, count);
+    // The kernel terminal keeps a back buffer that mirrors fb0 pixels so
+    // scrolling/redraws can read cached RAM instead of VRAM. This direct
+    // write bypassed that cache, leaving it stale. Instead of re-syncing
+    // the whole screen here (expensive), just mark the cache dirty: the
+    // next full-screen terminal operation will re-read live fb data first.
+    // Only fb0 is mirrored in the back buffer.
+    if (idx == 0) invalidate_terminal_backbuffer();
     return count;
 }
 

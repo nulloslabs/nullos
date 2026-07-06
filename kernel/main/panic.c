@@ -1,25 +1,36 @@
 #include <freestanding/stdint.h>
 #include <freestanding/stddef.h>
+#include <freestanding/stdarg.h>
 #include <freestanding/signal.h>
 #include <io/terminal.h>
 #include <main/panic.h>
 #include <main/halt.h>
-#include <main/scheduler.h>
+#include <main/sched.h>
 #include <mm/vmm.h>
 #include <syscalls/syscalls.h>
 #include <syscalls/syscall_impls.h>
 
-__attribute__((noreturn)) void panic(const char *reason) {
+
+__attribute__((noreturn)) void panic(const char *msg, ...) {
     cli();
+
+    va_list args;
+    va_start(args, msg);
 
     uint64_t rip = (uint64_t)__builtin_return_address(0);
     uint64_t rsp;
-
     __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
-    printf("kernel panic: %s\n", reason);
+
+    printf("kernel panic: ");
+
+    vprintf(msg, args);
+    printf("\n");
+
     printf("\nregisters:\n");
     printf(" rip: %p\n", rip);
     printf(" rsp: %p\n", rsp);
+
+    va_end(args);
     halt();
 }
 
@@ -66,47 +77,53 @@ void exception_panic(exception_frame_t *frame) {
 
     // Check if the fault came from user mode (Ring 3)
     if ((frame->cs & 3) != 0) {
+        static int fault_count = 0;
+        if (++fault_count <= 10) {  // Only log first 10 to avoid spam
+            printf("[exception] pid=%d vector=%d rip=%p err=%llx\n",
+                   current_task_ptr->pid, frame->vector, (void*)frame->rip, 
+                   (unsigned long long)frame->error_code);
+        }
+        
         int sig = exception_to_signal(frame->vector);
 
         current_task_ptr->pending_signals |= (1ULL << sig);
 
-        syscall_frame_t sf = {0};
-        sf.rax = frame->rax;
-        sf.rbx = frame->rbx;
-        sf.rcx = frame->rip;
-        sf.rdx = frame->rdx;
-        sf.rsi = frame->rsi;
-        sf.rdi = frame->rdi;
-        sf.rsp = frame->rsp;
-        sf.rbp = frame->rbp;
-        sf.r8  = frame->r8;
-        sf.r9  = frame->r9;
-        sf.r10 = frame->r10;
-        sf.r11 = frame->rflags;
-        sf.r12 = frame->r12;
-        sf.r13 = frame->r13;
-        sf.r14 = frame->r14;
-        sf.r15 = frame->r15;
+        syscall_frame_t signal_frame = {0};
+        signal_frame.rax = frame->rax;
+        signal_frame.rbx = frame->rbx;
+        signal_frame.rcx = frame->rip;
+        signal_frame.rdx = frame->rdx;
+        signal_frame.rsi = frame->rsi;
+        signal_frame.rdi = frame->rdi;
+        signal_frame.rsp = frame->rsp;
+        signal_frame.rbp = frame->rbp;
+        signal_frame.r8  = frame->r8;
+        signal_frame.r9  = frame->r9;
+        signal_frame.r10 = frame->r10;
+        signal_frame.r11 = frame->rflags;
+        signal_frame.r12 = frame->r12;
+        signal_frame.r13 = frame->r13;
+        signal_frame.r14 = frame->r14;
+        signal_frame.r15 = frame->r15;
 
-        check_signals(&sf);
+        check_signals(&signal_frame);
 
-        frame->rax = sf.rax;
-        frame->rbx = sf.rbx;
-        frame->rip = sf.rcx;
-        frame->rdx = sf.rdx;
-        frame->rsi = sf.rsi;
-        frame->rdi = sf.rdi;
-        frame->rsp = sf.rsp;
-        frame->rbp = sf.rbp;
-        frame->r8  = sf.r8;
-        frame->r9  = sf.r9;
-        frame->r10 = sf.r10;
-        frame->rflags = sf.r11;
-        frame->r12 = sf.r12;
-        frame->r13 = sf.r13;
-        frame->r14 = sf.r14;
-        frame->r15 = sf.r15;
-
+        frame->rax = signal_frame.rax;
+        frame->rbx = signal_frame.rbx;
+        frame->rip = signal_frame.rcx;
+        frame->rdx = signal_frame.rdx;
+        frame->rsi = signal_frame.rsi;
+        frame->rdi = signal_frame.rdi;
+        frame->rsp = signal_frame.rsp;
+        frame->rbp = signal_frame.rbp;
+        frame->r8  = signal_frame.r8;
+        frame->r9  = signal_frame.r9;
+        frame->r10 = signal_frame.r10;
+        frame->rflags = signal_frame.r11;
+        frame->r12 = signal_frame.r12;
+        frame->r13 = signal_frame.r13;
+        frame->r14 = signal_frame.r14;
+        frame->r15 = signal_frame.r15;
         return;
     }
 

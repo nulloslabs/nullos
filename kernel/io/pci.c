@@ -192,7 +192,7 @@ void init_pci(void) {
 }
 
 void init_pci_drivers(void) {
-    struct {
+    const struct {
         const char *name;
         uint16_t vendor;
         uint16_t device;
@@ -203,9 +203,15 @@ void init_pci_drivers(void) {
         {"e1000",   E1000_VENDOR,   E1000_DEVICE,   init_e1000}
     };
 
-    for (int i = 0; i < (int)(sizeof(known_pci_drivers)/sizeof(known_pci_drivers[0])); i++) { pci_device_t *dev = find_pci(known_pci_drivers[i].vendor, known_pci_drivers[i].device); if (dev) { printf("pci: found driver for %s\n", known_pci_drivers[i].name); known_pci_drivers[i].init(dev); } }
+    for (int i = 0; i < (int)(sizeof(known_pci_drivers) / sizeof(known_pci_drivers[0])); i++) {
+        pci_device_t *dev = find_pci(known_pci_drivers[i].vendor, known_pci_drivers[i].device);
+        if (dev) {
+            printf("pci: found driver for %s\n", known_pci_drivers[i].name);
+            known_pci_drivers[i].init(dev);
+        }
+    }
 
-    struct {
+    const struct {
         const char *name;
         uint8_t progif;
         void (*init)(pci_device_t*);

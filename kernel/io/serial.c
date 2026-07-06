@@ -5,8 +5,10 @@
 #include <main/spinlocks.h>
 #include <io/io.h>
 #include <io/serial.h>
+#include <io/terminal.h>
 
 static spinlock_t serial_lock = SPINLOCK_INIT;
+static const uint16_t serial_ports[] = { COM1, COM2, COM3, COM4 };
 
 static void int_to_str(uint64_t value, char *buf, size_t buf_size, int base, bool uppercase) {
     char temp[64];
@@ -280,4 +282,29 @@ int serial_printf(uint16_t port, const char *fmt, ...) {
     int ret = serial_vprintf(port, fmt, args);
     va_end(args);
     return ret;
+}
+
+void init_serial_ports(void) {
+    // The reason why we do this is because most PCs expect us to initialize the serial ports.
+    // Funny enough, QEMU dosen't need this (for some reason).
+    for (int i = 0; i < (int)(sizeof(serial_ports) / sizeof(serial_ports[0])); i++) {
+        uint16_t port = serial_ports[i]; // This is our port value.
+
+        // Initialize the port.
+        outb(port + 1, 0x00);
+        outb(port + 3, 0x80);
+        outb(port + 0, 0x03);
+        outb(port + 1, 0x00);
+        outb(port + 3, 0x03);
+        outb(port + 2, 0xC7);
+        outb(port + 4, 0x0B);
+        outb(port + 4, 0x1E);
+        outb(port + 0, 0xAE);
+
+        if (inb(port + 0) != 0xAE) continue; // Check if port is faulty/not present.
+
+        // Enable the port for use.
+        outb(port + 4, 0x0F);
+    }
+    printf("serial: initialized serial ports\n");
 }

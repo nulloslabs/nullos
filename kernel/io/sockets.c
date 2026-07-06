@@ -2,7 +2,7 @@
 #include <freestanding/errno.h>
 #include <main/spinlocks.h>
 #include <main/string.h>
-#include <main/scheduler.h>
+#include <main/sched.h>
 #include <mm/mm.h>
 
 static spinlock_t registry_lock = SPINLOCK_INIT;

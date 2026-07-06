@@ -30,13 +30,11 @@ clean:
 	@$(MAKE) -C rootfs clean
 	@$(MAKE) -C tools clean
 	@$(MAKE) -C iso clean
-	@$(MAKE) -C userspace clean
 
 mrproper:
 	@$(MAKE) -C kernel mrproper
 	@$(MAKE) -C rootfs mrproper
 	@$(MAKE) -C tools mrproper
 	@$(MAKE) -C iso mrproper
-	@$(MAKE) -C userspace mrproper
 
-.PHONY: all tools kernel rootfs userspace iso qemu clean mrproper
+.PHONY: all tools kernel rootfs iso qemu clean mrproper

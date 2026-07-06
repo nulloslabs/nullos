@@ -9,7 +9,7 @@ typedef unsigned long size_t;
 typedef long long off_t;
 typedef long ptrdiff_t;
 #else
-#error "Unsupported architecture for stddef.h."
+#error "Unsupported architecture for freestanding/stddef.h."
 #endif
 typedef int pid_t;
 typedef unsigned int wchar_t;

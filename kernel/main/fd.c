@@ -2,7 +2,7 @@
 #include <main/fd.h>
 #include <main/string.h>
 #include <freestanding/errno.h>
-#include <main/scheduler.h>
+#include <main/sched.h>
 #include <io/ptys.h>
 #include <io/sockets.h>
 

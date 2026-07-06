@@ -1,11 +1,6 @@
 #include <mm/vma.h>
 #include <main/string.h>
 
-void vma_init(vma_table_t *tbl) {
-    if (!tbl) return;
-    __builtin_memset(tbl, 0, sizeof(*tbl));
-}
-
 static void set_name(char *dst, const char *src) {
     if (!src) { dst[0] = '\0'; return; }
     strncpy(dst, src, VMA_NAME_MAX - 1);
@@ -32,13 +27,13 @@ static bool same_attrs(const vma_t *a, int prot, int flags, uint64_t offset,
     return true;
 }
 
-void vma_add(vma_table_t *tbl, uint64_t start, uint64_t end, int prot,
+void add_vma(vma_table_t *tbl, uint64_t start, uint64_t end, int prot,
              int flags, uint64_t offset, const char *name) {
     if (!tbl || start >= end) return;
 
     // First, drop anything inside [start,end) so we never record overlapping
     // regions; then attempt to merge with the immediate neighbors.
-    vma_remove(tbl, start, end);
+    remove_vma(tbl, start, end);
 
     // Find a free slot.
     int slot = -1;
@@ -95,7 +90,7 @@ void vma_add(vma_table_t *tbl, uint64_t start, uint64_t end, int prot,
     }
 }
 
-void vma_remove(vma_table_t *tbl, uint64_t start, uint64_t end) {
+void remove_vma(vma_table_t *tbl, uint64_t start, uint64_t end) {
     if (!tbl || start >= end) return;
     for (int i = 0; i < VMA_MAX; i++) {
         vma_t *v = &tbl->entries[i];
@@ -141,13 +136,13 @@ void vma_remove(vma_table_t *tbl, uint64_t start, uint64_t end) {
     }
 }
 
-void vma_protect(vma_table_t *tbl, uint64_t start, uint64_t end, int prot) {
+void protect_vma(vma_table_t *tbl, uint64_t start, uint64_t end, int prot) {
     if (!tbl || start >= end) return;
     // Remove then re-add the covered portions with the new protection, so the
     // resulting regions split/merge correctly.  We snapshot first since
     // vma_remove mutates the table.
     vma_t snap[VMA_MAX];
-    __builtin_memcpy(snap, tbl->entries, sizeof(snap));
+    memcpy(snap, tbl->entries, sizeof(snap));
 
     for (int i = 0; i < VMA_MAX; i++) {
         vma_t *v = &snap[i];
@@ -159,13 +154,13 @@ void vma_protect(vma_table_t *tbl, uint64_t start, uint64_t end, int prot) {
         uint64_t off = v->offset;
         if (!(v->flags & VMA_FLAG_ANON)) off += (a - v->start);
 
-        vma_add(tbl, a & ~(uint64_t)(PAGE_SIZE - 1),
+        add_vma(tbl, a & ~(uint64_t)(PAGE_SIZE - 1),
                 (b + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1),
                 prot, v->flags, off, v->name);
     }
 }
 
-void vma_set_heap(vma_table_t *tbl, uint64_t brk_start, uint64_t brk) {
+void set_vma_heap(vma_table_t *tbl, uint64_t brk_start, uint64_t brk) {
     if (!tbl) return;
     // Drop any existing [heap] entry, then re-add if the heap is non-empty.
     for (int i = 0; i < VMA_MAX; i++) {
@@ -174,7 +169,7 @@ void vma_set_heap(vma_table_t *tbl, uint64_t brk_start, uint64_t brk) {
         if (v->flags & VMA_FLAG_HEAP) { v->used = false; }
     }
     if (brk > brk_start) {
-        vma_add(tbl, brk_start, brk,
+        add_vma(tbl, brk_start, brk,
                 VMA_PROT_READ | VMA_PROT_WRITE, VMA_FLAG_ANON | VMA_FLAG_HEAP,
                 0, "[heap]");
     }
@@ -195,7 +190,7 @@ bool get_vma(const vma_table_t *tbl, int n, vma_t *out) {
     if (!tbl || !out || n < 0) return false;
     // Build a sorted view without mutating the source.
     vma_t copy[VMA_MAX];
-    __builtin_memcpy(copy, tbl->entries, sizeof(copy));
+    memcpy(copy, tbl->entries, sizeof(copy));
     // Simple insertion sort by start address; unused slots sink to the end.
     for (int i = 1; i < VMA_MAX; i++) {
         for (int j = i; j > 0; j--) {
@@ -220,11 +215,16 @@ bool get_vma(const vma_table_t *tbl, int n, vma_t *out) {
     return false;
 }
 
-int vma_count(const vma_table_t *tbl) {
+int count_vmas(const vma_table_t *tbl) {
     if (!tbl) return 0;
     int n = 0;
     for (int i = 0; i < VMA_MAX; i++) {
         if (tbl->entries[i].used) n++;
     }
     return n;
+}
+
+void init_vma_table(vma_table_t *tbl) {
+    if (!tbl) return;
+    memset(tbl, 0, sizeof(*tbl));
 }

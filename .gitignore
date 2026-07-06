@@ -7,5 +7,6 @@ nullkrnl*
 
 iso/main/
 rootfs/main/
+rootfs/packages/
 tools/limine/
 kernel/include/limine/

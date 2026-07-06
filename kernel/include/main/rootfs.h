@@ -37,6 +37,7 @@ typedef struct {
     char path[256];
     void *data;
     uint64_t size;
+    uint64_t capacity;
     mode_t mode;
     uid_t uid;
     gid_t gid;
@@ -52,18 +53,18 @@ typedef struct {
     int type;
 } directory_entry_t;
 
-// Some public helpers
 void get_absolute_path(const char *in, char *out_abs, size_t out_size);
 void resolve_link_target(const char *base_path_abs, const char *link_target, char *out_abs, size_t out_size);
-
 rootfs_file_t read_rootfs(const char *path);
 rootfs_file_t stat_rootfs(const char *path);
 rootfs_file_t stat_rootfs_nofollow(const char *path);
 int write_rootfs(const char *path, const void *data, uint64_t size, uint32_t mode, uid_t uid, gid_t gid);
-int delete_rootfs(const char *path);
+int write_rootfs_partial(const char *path, const void *data, uint64_t off, uint64_t count, uint32_t mode, uid_t uid, gid_t gid);
 int mkdir_rootfs(const char *path, mode_t mode, uid_t uid, gid_t gid);
+int delete_rootfs(const char *path);
 int rmdir_rootfs(const char *path);
 int symlink_rootfs(const char *target, const char *path, uid_t uid, gid_t gid);
 int chmod_rootfs(const char *path, mode_t mode);
 int get_rootfs_entry(int index, directory_entry_t* entry);
+int next_rootfs_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size, uint8_t *child_type);
 void init_rootfs(void);
