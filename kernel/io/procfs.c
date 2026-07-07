@@ -1,8 +1,11 @@
 #include <freestanding/stdint.h>
+#include <freestanding/cpuid.h>
 #include <freestanding/dirent.h>
 #include <main/string.h>
 #include <main/sched.h>
 #include <main/fd.h>
+#include <main/mp.h>
+#include <main/machine_info.h>
 #include <io/devtmpfs.h>
 #include <io/procfs.h>
 #include <mm/vma.h>
@@ -12,6 +15,7 @@ const proc_static_node_t proc_nodes[] = {
     { "",              PROC_NODE_DIR,     PROC_DIR_ROOT         },
     { "/self",         PROC_NODE_SYMLINK, PROC_LINK_SELF        },
     { "/mounts",       PROC_NODE_SYMLINK, PROC_LINK_ROOT_MOUNTS },
+    { "/cpuinfo",      PROC_NODE_FILE,    PROC_FILE_CPUINFO     },
     { "/<pid>",        PROC_NODE_DIR,     PROC_DIR_PID          },
     { "/<pid>/fd",     PROC_NODE_DIR,     PROC_DIR_FD           },
     { "/<pid>/maps",   PROC_NODE_FILE,    PROC_FILE_MAPS        },
@@ -23,8 +27,9 @@ const proc_static_node_t proc_nodes[] = {
 };
 
 const dirent_static_t root_children[] = {
-    { "self",   DT_LNK },
-    { "mounts", DT_LNK },
+    { "self",    DT_LNK },
+    { "mounts",  DT_LNK },
+    { "cpuinfo", DT_REG },
 };
 
 const dirent_static_t pid_children[] = {
@@ -35,6 +40,16 @@ const dirent_static_t pid_children[] = {
     { "exe",    DT_LNK },
     { "cwd",    DT_LNK },
 };
+
+static int fmt_int(int v, char *out, size_t out_size) {
+    char tmp[16]; int n = 0;
+    if (v == 0) tmp[n++] = '0';
+    while (v > 0) { tmp[n++] = '0' + (v % 10); v /= 10; }
+    if (n >= (int)out_size) return -1;
+    for (int k = 0; k < n; k++) out[k] = tmp[n - 1 - k];
+    out[n] = '\0';
+    return n;
+}
 
 static bool starts_with(const char *s, const char *prefix) {
     while (*prefix) {
@@ -170,6 +185,132 @@ static size_t build_mounts(char *out) {
     return pos;
 }
 
+static void buf_append_uint(char *buf, size_t *pos, size_t cap, uint32_t v) {
+    char tmp[16]; int n = 0;
+    if (v == 0) tmp[n++] = '0';
+    while (v > 0) { tmp[n++] = '0' + (v % 10); v /= 10; }
+    char fwd[16];
+    for (int k = 0; k < n; k++) fwd[k] = tmp[n - 1 - k];
+    fwd[n] = '\0';
+    buf_append(buf, pos, cap, fwd);
+}
+
+static size_t build_cpuinfo(char *out) {
+    size_t pos = 0; out[0] = '\0';
+    size_t cap = PROCFS_MAX_CONTENT;
+
+    const char *vendor   = get_cpu_vendor();
+    const char *model_nm = get_cpu_name();
+    uint32_t family      = get_cpu_family();
+    uint32_t model       = get_cpu_model();
+    uint32_t stepping    = get_cpu_stepping();
+    uint32_t cores       = get_cpu_cores();
+    uint32_t threads     = get_cpu_threads();
+    uint32_t freq        = get_cpu_freq();
+
+    // Some extra stuff
+    uint32_t clflush_size = 64;
+    uint32_t cache_alignment = 64;
+    uint32_t phys_bits = 32;
+    uint32_t virt_bits = 32;
+
+    // Clamp silently, freq can be 0 if HPET not present
+    if (!cores || cores > (uint32_t)cpu_count) cores = (uint32_t)cpu_count;
+    if (!threads || threads > (uint32_t)cpu_count) threads = (uint32_t)cpu_count;
+
+    // Build the flags string from real CPUID data
+    static const struct { cpu_feature_t feat; const char *name; } flag_map[] = {
+        { CPU_FEATURE_FPU,    "fpu"    },
+        { CPU_FEATURE_SSE,    "sse"    },
+        { CPU_FEATURE_SSE2,   "sse2"   },
+        { CPU_FEATURE_SSE3,   "pni"    },
+        { CPU_FEATURE_SSSE3,  "ssse3"  },
+        { CPU_FEATURE_SSE41,  "sse4_1" },
+        { CPU_FEATURE_SSE42,  "sse4_2" },
+        { CPU_FEATURE_AVX,    "avx"    },
+        { CPU_FEATURE_AVX2,   "avx2"   },
+        { CPU_FEATURE_POPCNT, "popcnt" },
+        { CPU_FEATURE_AES,    "aes"    },
+        { CPU_FEATURE_NX,     "nx"     },
+        { CPU_FEATURE_XSAVE,  "xsave"  },
+    };
+    int flag_count = (int)(sizeof(flag_map) / sizeof(flag_map[0]));
+
+    char freq_str[32];
+    {
+        uint32_t mhz = freq;
+        char tmp[16]; int n = 0;
+        if (mhz == 0) { tmp[n++] = '0'; }
+        while (mhz > 0) { tmp[n++] = '0' + (mhz % 10); mhz /= 10; }
+        int k;
+        for (k = 0; k < n; k++) freq_str[k] = tmp[n - 1 - k];
+        freq_str[k++] = '.';
+        freq_str[k++] = '0';
+        freq_str[k++] = '0';
+        freq_str[k++] = '0';
+        freq_str[k]   = '\0';
+    }
+
+    {
+        unsigned int eax, ebx, ecx, edx;
+        unsigned int max_standard_leaf = 0;
+        unsigned int max_extended_leaf = 0;
+
+        __cpuid(0, max_standard_leaf, ebx, ecx, edx);
+        if (max_standard_leaf >= 1) {
+            __cpuid(1, eax, ebx, ecx, edx);
+            unsigned int clflush_chunks = (ebx >> 8) & 0xFF;
+            if (clflush_chunks > 0) {
+                clflush_size = clflush_chunks * 8;
+                cache_alignment = clflush_size;
+            }
+        }
+
+        __cpuid(0x80000000, max_extended_leaf, ebx, ecx, edx);
+        if (max_extended_leaf >= 0x80000008) {
+            __cpuid(0x80000008, eax, ebx, ecx, edx);
+            phys_bits = eax & 0xFF;
+            virt_bits = (eax >> 8) & 0xFF;
+        }
+    }
+
+    for (int i = 0; i < cpu_count; i++) {
+        char num[16];
+        fmt_int(i, num, sizeof(num));
+
+        buf_append(out, &pos, cap, "processor\t: "); buf_append(out, &pos, cap, num); buf_append(out, &pos, cap, "\n");
+        buf_append(out, &pos, cap, "vendor_id\t: "); buf_append(out, &pos, cap, vendor[0] ? vendor : "unknown"); buf_append(out, &pos, cap, "\n");
+        buf_append(out, &pos, cap, "cpu family\t: "); buf_append_uint(out, &pos, cap, family); buf_append(out, &pos, cap, "\n");
+        buf_append(out, &pos, cap, "model\t\t: "); buf_append_uint(out, &pos, cap, model); buf_append(out, &pos, cap, "\n");
+        buf_append(out, &pos, cap, "model name\t: "); buf_append(out, &pos, cap, model_nm[0] ? model_nm : "Unknown"); buf_append(out, &pos, cap, "\n");
+        buf_append(out, &pos, cap, "stepping\t: "); buf_append_uint(out, &pos, cap, stepping); buf_append(out, &pos, cap, "\n");
+        buf_append(out, &pos, cap, "cpu MHz\t\t: "); buf_append(out, &pos, cap, freq_str); buf_append(out, &pos, cap, "\n");
+        buf_append(out, &pos, cap, "physical id\t: 0\n");
+        buf_append(out, &pos, cap, "siblings\t: "); buf_append_uint(out, &pos, cap, threads); buf_append(out, &pos, cap, "\n");
+        buf_append(out, &pos, cap, "core id\t\t: "); buf_append_uint(out, &pos, cap, (uint32_t)i % cores); buf_append(out, &pos, cap, "\n");
+        buf_append(out, &pos, cap, "cpu cores\t: "); buf_append_uint(out, &pos, cap, cores); buf_append(out, &pos, cap, "\n");
+        buf_append(out, &pos, cap, "apicid\t\t: "); buf_append_uint(out, &pos, cap, (uint32_t)i); buf_append(out, &pos, cap, "\n");
+        buf_append(out, &pos, cap, "initial apicid\t: "); buf_append_uint(out, &pos, cap, (uint32_t)i); buf_append(out, &pos, cap, "\n");
+        buf_append(out, &pos, cap, "fpu\t\t: "); buf_append(out, &pos, cap, cpu_has_feature(CPU_FEATURE_FPU) ? "yes" : "no"); buf_append(out, &pos, cap, "\n");
+        buf_append(out, &pos, cap, "fpu_exception\t: "); buf_append(out, &pos, cap, cpu_has_feature(CPU_FEATURE_FPU) ? "yes" : "no"); buf_append(out, &pos, cap, "\n");
+        buf_append(out, &pos, cap, "wp\t\t: yes\n");
+        buf_append(out, &pos, cap, "flags\t\t:");
+        for (int f = 0; f < flag_count; f++) {
+            if (cpu_has_feature(flag_map[f].feat)) {
+                buf_append(out, &pos, cap, " ");
+                buf_append(out, &pos, cap, flag_map[f].name);
+            }
+        }
+        buf_append(out, &pos, cap, "\n");
+        buf_append(out, &pos, cap, "clflush size\t: ");  buf_append_uint(out, &pos, cap, clflush_size); buf_append(out, &pos, cap, "\n");
+        buf_append(out, &pos, cap, "cache_alignment\t: ");  buf_append_uint(out, &pos, cap, cache_alignment);  buf_append(out, &pos, cap, "\n");
+        buf_append(out, &pos, cap, "address sizes\t: "); buf_append_uint(out, &pos, cap, phys_bits);  buf_append(out, &pos, cap, " bits physical, "); buf_append_uint(out, &pos, cap, virt_bits); buf_append(out, &pos, cap, " bits virtual\n");
+        buf_append(out, &pos, cap, "power management:\n");
+        buf_append(out, &pos, cap, "\n");
+    }
+    return pos;
+}
+
 static int copy_str(const char *src, char *out, size_t out_size) {
     if (!src || !src[0]) return -1;
     size_t len = strlen(src);
@@ -179,22 +320,13 @@ static int copy_str(const char *src, char *out, size_t out_size) {
     return (int)len;
 }
 
-static int fmt_int(int v, char *out, size_t out_size) {
-    char tmp[16]; int n = 0;
-    if (v == 0) tmp[n++] = '0';
-    while (v > 0) { tmp[n++] = '0' + (v % 10); v /= 10; }
-    if (n >= (int)out_size) return -1;
-    for (int k = 0; k < n; k++) out[k] = tmp[n - 1 - k];
-    out[n] = '\0';
-    return n;
-}
-
 size_t get_procfs_content(const proc_node_t *node, char *out) {
     switch (node->entry) {
-    case PROC_FILE_MAPS:   return build_maps(node->pid, out);
-    case PROC_FILE_MOUNTS: return build_mounts(out);
-    case PROC_FILE_AUXV:   return build_auxv(node->pid, out);
-    default:               return 0;
+        case PROC_FILE_MAPS:    return build_maps(node->pid, out);
+        case PROC_FILE_MOUNTS:  return build_mounts(out);
+        case PROC_FILE_AUXV:    return build_auxv(node->pid, out);
+        case PROC_FILE_CPUINFO: return build_cpuinfo(out);
+        default:                return 0;
     }
 }
 

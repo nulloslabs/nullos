@@ -1,17 +1,20 @@
 #include <freestanding/stddef.h>
 #include <freestanding/stdint.h>
 #include <freestanding/signal.h>
+#include <main/string.h>
 #include <main/spinlocks.h>
 #include <main/sched.h>
 #include <io/ttys.h>
 #include <io/terminal.h>
 #include <io/keyboard.h>
+#include <io/ptys.h>
 
 static tty_t ttys[NUM_TTYS];
 spinlock_t tty_lock = SPINLOCK_INIT;
 
 // Track which TTY receives keyboard input (no VT switching yet, so we use the last active TTY)
 static int keyboard_tty = 0;
+static int keyboard_pty = -1;
 
 // NOTE: Another static function in syscall_impls.c is exactly named deliver_sig_to_task, watch out!
 static void deliver_sig_to_task(int idx, int sig) {
@@ -70,10 +73,14 @@ tty_t *get_tty(int idx) {
 // Write a string directly into the active TTY's input ring.
 // Used to inject multi-byte ANSI escape sequences for special keys.
 static void write_tty_input_str(const char *s) {
-    tty_t *t = &ttys[keyboard_tty];
-    while (*s) {
-        write_tty_ring(&t->input, s, 1);
-        s++;
+    if (keyboard_pty >= 0) {
+        write_tty_ring(&ptys[keyboard_pty].s2m, s, (int)strlen(s));
+    } else {
+        tty_t *t = &ttys[keyboard_tty];
+        while (*s) {
+            write_tty_ring(&t->input, s, 1);
+            s++;
+        }
     }
 }
 
@@ -190,7 +197,24 @@ void tty_process_scancode(uint8_t sc) {
     else if ((lflags & ISIG) && vsusp && c == (char)vsusp) sig = SIGTSTP;
     int echo = 0;
 
-    if (sig) {
+    if (keyboard_pty >= 0) {
+        // Keyboard input goes to the PTY master's s2m ring (simulates a
+        // terminal emulator writing to the master side).
+        if (sig) {
+            pty_signal_pgrp(keyboard_pty, sig);
+            if (!(lflags & NOFLSH)) {
+                ptys[keyboard_pty].m2s.head = ptys[keyboard_pty].m2s.tail = 0;
+            }
+            echo = (lflags & ECHO) != 0;
+        } else {
+            if (kbd_alt_pressed()) {
+                char esc = '\033';
+                write_tty_ring(&ptys[keyboard_pty].s2m, &esc, 1);
+            }
+            write_tty_ring(&ptys[keyboard_pty].s2m, &c, 1);
+            echo = (lflags & ECHO) != 0;
+        }
+    } else if (sig) {
         tty_signal_pgrp(keyboard_tty, sig);
         if (!(lflags & NOFLSH)) {
             t->input.head = t->input.tail = 0;
@@ -249,6 +273,19 @@ int tty_signal_pgrp(int tty_idx, int sig) {
 void set_keyboard_tty(int tty_idx) {
     if (tty_idx >= 0 && tty_idx < NUM_TTYS) {
         keyboard_tty = tty_idx;
+        keyboard_pty = -1;  // Switching to a real TTY disables PTY keyboard
+    }
+}
+
+void set_keyboard_pty(int pty_idx) {
+    if (pty_idx >= 0 && pty_idx < NUM_PTYS) {
+        keyboard_pty = pty_idx;
+    }
+}
+
+void clear_keyboard_pty(int pty_idx) {
+    if (keyboard_pty == pty_idx) {
+        keyboard_pty = -1;
     }
 }
 

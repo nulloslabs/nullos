@@ -133,4 +133,5 @@ void sys_pipe2(syscall_frame_t *frame);
 void sys_getsockopt(syscall_frame_t *frame);
 void sys_setsockopt(syscall_frame_t *frame);
 void sys_getrandom(syscall_frame_t *frame);
+void sys_sched_getaffinity(syscall_frame_t *frame);
 void sys_rseq(syscall_frame_t *frame);

@@ -120,27 +120,43 @@ static uint64_t parse_octal(const char *str) {
     return val;
 }
 
-static bool tar_name_matches(const char *tar_name, const char *norm) {
-    if (strcmp(tar_name, norm) == 0) return true;
-
-    // Try matching tar_name with trailing slash stripped
-    size_t tlen = strlen(tar_name);
-    if (tlen > 1 && tar_name[tlen - 1] == '/') {
-        // Compare tar_name without trailing slash vs norm
-        if (strncmp(tar_name, norm, tlen - 1) == 0 && norm[tlen - 1] == '\0') return true;
+static int compare_tar_names(const char *a, const char *b) {
+    int i = 0;
+    while (i < 100) {
+        char c1 = a[i];
+        if (c1 == '/' && (i == 99 || a[i+1] == '\0' || a[i+1] == '/')) c1 = '\0';
+        char c2 = b[i];
+        if (c2 == '/' && (i == 99 || b[i+1] == '\0' || b[i+1] == '/')) c2 = '\0';
+        
+        if (c1 == '\0' && c2 == '\0') return 0;
+        if (c1 == '\0') return -1;
+        if (c2 == '\0') return 1;
+        if (c1 != c2) return (unsigned char)c1 - (unsigned char)c2;
+        i++;
     }
+    return 0;
+}
 
-    // Try matching norm with trailing slash appended vs tar_name
-    size_t nlen = strlen(norm);
-    if (nlen > 0 && norm[nlen - 1] != '/') {
-        char norm_slash[256];
-        strncpy(norm_slash, norm, sizeof(norm_slash) - 2);
-        norm_slash[sizeof(norm_slash) - 2] = '\0';
-        strcat(norm_slash, "/");
-        if (strcmp(tar_name, norm_slash) == 0) return true;
+static void swap_ptrs(uint8_t **a, uint8_t **b) {
+    uint8_t *t = *a; *a = *b; *b = t;
+}
+
+static void quicksort_tar_ptrs(uint8_t **arr, int low, int high) {
+    if (low < high) {
+        struct tar_header *pivot = (struct tar_header *)arr[high];
+        int i = low - 1;
+        for (int j = low; j < high; j++) {
+            struct tar_header *h = (struct tar_header *)arr[j];
+            if (compare_tar_names(h->name, pivot->name) < 0) {
+                i++;
+                swap_ptrs(&arr[i], &arr[j]);
+            }
+        }
+        swap_ptrs(&arr[i + 1], &arr[high]);
+        int pi = i + 1;
+        quicksort_tar_ptrs(arr, low, pi - 1);
+        quicksort_tar_ptrs(arr, pi + 1, high);
     }
-
-    return false;
 }
 
 static bool find_tar_symlink(const char *abs_path, char *resolved_abs, size_t resolved_size) {
@@ -151,7 +167,7 @@ static bool find_tar_symlink(const char *abs_path, char *resolved_abs, size_t re
     for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
         if (modified_files[i].is_active && !modified_files[i].is_tombstone &&
             (modified_files[i].mode & 0xF000) == 0xA000 &&
-            tar_name_matches(modified_files[i].path, norm)) {
+            compare_tar_names(modified_files[i].path, norm) == 0) {
             char target[101];
             strncpy(target, (const char *)modified_files[i].data, 100);
             target[100] = '\0';
@@ -164,11 +180,9 @@ static bool find_tar_symlink(const char *abs_path, char *resolved_abs, size_t re
     if (!tar_symlinks) return false;
 
     for (int i = 0; i < tar_symlink_count; i++) {
-        if (tar_name_matches(tar_symlinks[i].path, norm)) {
-            char target[101];
-            strncpy(target, tar_symlinks[i].target, 100);
-            target[100] = '\0';
-            resolve_link_target(abs_path, target, resolved_abs, resolved_size);
+        if (compare_tar_names(tar_symlinks[i].path, norm) == 0) {
+            strncpy(resolved_abs, tar_symlinks[i].target, resolved_size - 1);
+            resolved_abs[resolved_size - 1] = '\0';
             return true;
         }
     }
@@ -320,7 +334,7 @@ static bool tar_has_entry(const char *norm_path) {
         struct tar_header *h = (struct tar_header *)ptr;
         if (h->name[0] == '\0') break;
         uint64_t size = parse_octal(h->size);
-        if (tar_name_matches(h->name, norm_path)) return true;
+        if (compare_tar_names(h->name, norm_path) == 0) return true;
         ptr += 512 + (size + 511) / 512 * 512;
     }
     return false;
@@ -412,34 +426,69 @@ rootfs_file_t read_rootfs(const char *path) {
 
         // 2. Check TAR archive
         if (tar_archive_start != NULL) {
-            uint8_t *ptr = tar_archive_start;
-            while (1) {
-                struct tar_header *h = (struct tar_header *)ptr;
-                if (h->name[0] == '\0') break;
-
-                uint64_t size = parse_octal(h->size);
-                if (tar_name_matches(h->name, norm)) {
-                    char type = h->typeflag[0];
-                    if (type == '1' || type == '2') {
-                        char target[101];
-                        strncpy(target, h->linkname, 100);
-                        target[100] = '\0';
-                        char current_abs[256];
-                        get_absolute_path(current_path, current_abs, sizeof(current_abs));
-                        resolve_link_target(current_abs, target, current_path, sizeof(current_path));
-                        found_link = true;
+            if (tar_entry_ptrs) {
+                int low = 0, high = tar_total_count - 1;
+                while (low <= high) {
+                    int mid = low + (high - low) / 2;
+                    struct tar_header *h = (struct tar_header *)tar_entry_ptrs[mid];
+                    int cmp = compare_tar_names(h->name, norm);
+                    if (cmp == 0) {
+                        char type = h->typeflag[0];
+                        if (type == '1' || type == '2') {
+                            char target[101];
+                            strncpy(target, h->linkname, 100);
+                            target[100] = '\0';
+                            char current_abs[256];
+                            get_absolute_path(current_path, current_abs, sizeof(current_abs));
+                            resolve_link_target(current_abs, target, current_path, sizeof(current_path));
+                            found_link = true;
+                            break;
+                        }
+                        if (type == '0' || type == '\0' || type == '5') {
+                            result.size = (size_t)parse_octal(h->size);
+                            result.data = (void *)((uint8_t*)h + 512);
+                            result.mode = (type == '5') ? ((uint32_t)parse_octal(h->mode) | 0040000) : ((uint32_t)parse_octal(h->mode) | 0100000);
+                            result.uid = (uid_t)parse_octal(h->uid);
+                            result.gid = (gid_t)parse_octal(h->gid);
+                            return result;
+                        }
                         break;
-                    }
-                    if (type == '0' || type == '\0' || type == '5') {
-                        result.size = size;
-                        result.data = ptr + 512;
-                        result.mode = (type == '5') ? ((uint32_t)parse_octal(h->mode) | 0040000) : ((uint32_t)parse_octal(h->mode) | 0100000);
-                        result.uid = (uid_t)parse_octal(h->uid);
-                        result.gid = (gid_t)parse_octal(h->gid);
-                        return result;
+                    } else if (cmp < 0) {
+                        low = mid + 1;
+                    } else {
+                        high = mid - 1;
                     }
                 }
-                ptr += 512 + (size + 511) / 512 * 512;
+            } else {
+                uint8_t *ptr = tar_archive_start;
+                while (1) {
+                    struct tar_header *h = (struct tar_header *)ptr;
+                    if (h->name[0] == '\0') break;
+
+                    uint64_t size = parse_octal(h->size);
+                    if (compare_tar_names(h->name, norm) == 0) {
+                        char type = h->typeflag[0];
+                        if (type == '1' || type == '2') {
+                            char target[101];
+                            strncpy(target, h->linkname, 100);
+                            target[100] = '\0';
+                            char current_abs[256];
+                            get_absolute_path(current_path, current_abs, sizeof(current_abs));
+                            resolve_link_target(current_abs, target, current_path, sizeof(current_path));
+                            found_link = true;
+                            break;
+                        }
+                        if (type == '0' || type == '\0' || type == '5') {
+                            result.size = size;
+                            result.data = ptr + 512;
+                            result.mode = (type == '5') ? ((uint32_t)parse_octal(h->mode) | 0040000) : ((uint32_t)parse_octal(h->mode) | 0100000);
+                            result.uid = (uid_t)parse_octal(h->uid);
+                            result.gid = (gid_t)parse_octal(h->gid);
+                            return result;
+                        }
+                    }
+                    ptr += 512 + (size + 511) / 512 * 512;
+                }
             }
         }
         if (!found_link) break;
@@ -476,37 +525,69 @@ static rootfs_file_t stat_rootfs_ex(const char *path, bool follow_final) {
 
     // check TAR, return the entry as-is (no final-component following here)
     if (tar_archive_start) {
-        uint8_t *ptr = tar_archive_start;
-        while (1) {
-            struct tar_header *h = (struct tar_header *)ptr;
-            if (h->name[0] == '\0') break;
-            uint64_t size = parse_octal(h->size);
-            if (tar_name_matches(h->name, norm)) {
-                uint32_t mode = (uint32_t)parse_octal(h->mode);
-                char type = h->typeflag[0];
-                switch (type) {
-                    case '0': case '\0': mode |= 0100000; break; // S_IFREG
-                    case '2':            mode |= 0120000; break; // S_IFLNK
-                    case '5':            mode |= 0040000; break; // S_IFDIR
-                    case '3':            mode |= 0020000; break; // S_IFCHR
-                    case '4':            mode |= 0060000; break; // S_IFBLK
-                    case '6':            mode |= 0010000; break; // S_IFIFO
+        if (tar_entry_ptrs) {
+            int low = 0, high = tar_total_count - 1;
+            while (low <= high) {
+                int mid = low + (high - low) / 2;
+                struct tar_header *h = (struct tar_header *)tar_entry_ptrs[mid];
+                int cmp = compare_tar_names(h->name, norm);
+                if (cmp == 0) {
+                    uint32_t mode = (uint32_t)parse_octal(h->mode);
+                    char type = h->typeflag[0];
+                    switch (type) {
+                        case '0': case '\0': mode |= 0100000; break; // S_IFREG
+                        case '2':            mode |= 0120000; break; // S_IFLNK
+                        case '5':            mode |= 0040000; break; // S_IFDIR
+                        case '3':            mode |= 0020000; break; // S_IFCHR
+                        case '4':            mode |= 0060000; break; // S_IFBLK
+                        case '6':            mode |= 0010000; break; // S_IFIFO
+                    }
+                    void *data_ptr = (type == '2') ? (void *)h->linkname : (void *)((uint8_t*)h + 512);
+                    size_t data_size = (type == '2') ? strnlen(h->linkname, 100) : (size_t)parse_octal(h->size);
+                    rootfs_file_t result = {
+                        .data = data_ptr,
+                        .size = data_size,
+                        .mode = mode,
+                        .uid  = (uid_t)parse_octal(h->uid),
+                        .gid  = (gid_t)parse_octal(h->gid),
+                    };
+                    return result;
+                } else if (cmp < 0) {
+                    low = mid + 1;
+                } else {
+                    high = mid - 1;
                 }
-                // Symlinks carry their target in the linkname header field,
-                // not in a data section (their size is 0). Point file.data at
-                // h->linkname so readlink() returns the right string.
-                void *data_ptr = (type == '2') ? (void *)h->linkname : (void *)(ptr + 512);
-                size_t data_size = (type == '2') ? strnlen(h->linkname, 100) : (size_t)size;
-                rootfs_file_t result = {
-                    .data = data_ptr,
-                    .size = data_size,
-                    .mode = mode,
-                    .uid  = (uid_t)parse_octal(h->uid),
-                    .gid  = (gid_t)parse_octal(h->gid),
-                };
-                return result;
             }
-            ptr += 512 + (size + 511) / 512 * 512;
+        } else {
+            uint8_t *ptr = tar_archive_start;
+            while (1) {
+                struct tar_header *h = (struct tar_header *)ptr;
+                if (h->name[0] == '\0') break;
+                uint64_t size = parse_octal(h->size);
+                if (compare_tar_names(h->name, norm) == 0) {
+                    uint32_t mode = (uint32_t)parse_octal(h->mode);
+                    char type = h->typeflag[0];
+                    switch (type) {
+                        case '0': case '\0': mode |= 0100000; break; // S_IFREG
+                        case '2':            mode |= 0120000; break; // S_IFLNK
+                        case '5':            mode |= 0040000; break; // S_IFDIR
+                        case '3':            mode |= 0020000; break; // S_IFCHR
+                        case '4':            mode |= 0060000; break; // S_IFBLK
+                        case '6':            mode |= 0010000; break; // S_IFIFO
+                    }
+                    void *data_ptr = (type == '2') ? (void *)h->linkname : (void *)(ptr + 512);
+                    size_t data_size = (type == '2') ? strnlen(h->linkname, 100) : (size_t)size;
+                    rootfs_file_t result = {
+                        .data = data_ptr,
+                        .size = data_size,
+                        .mode = mode,
+                        .uid  = (uid_t)parse_octal(h->uid),
+                        .gid  = (gid_t)parse_octal(h->gid),
+                    };
+                    return result;
+                }
+                ptr += 512 + (size + 511) / 512 * 512;
+            }
         }
     }
 
@@ -580,9 +661,10 @@ int write_rootfs_partial(const char *path, const void *data, uint64_t off, uint6
             // Grow geometrically (1.5x) to absorb future small writes
             // without a realloc each time.  Never shrink; the goal is to
             // stabilise large-file copy loops like dd/tar.
-            uint64_t grow = ent->capacity + (ent->capacity >> 1);
+            uint64_t grow = ent->capacity * 2;
+            if (grow < new_size) grow = new_size + (new_size >> 1);
             if (grow < 512) grow = 512;
-            uint64_t cap = (grow > new_size) ? grow : new_size;
+            uint64_t cap = grow;
             void *realloced = realloc(ent->data, (size_t)cap);
             if (!realloced) {
                 // Fall back to exact-size allocation.
@@ -867,26 +949,23 @@ int next_rootfs_child(int *index, const char *dir_norm, char *child_name, size_t
             const char *name = tar_name;
             if (name[0] == '.' && name[1] == '/') name += 2;
 
-            size_t nlen = strlen(name);
-            if (nlen > 1 && name[nlen - 1] == '/') nlen--;
+            char abs_entry[256];
+            abs_entry[0] = '/';
+            strncpy(abs_entry + 1, name, sizeof(abs_entry) - 2);
+            abs_entry[sizeof(abs_entry) - 1] = '\0';
 
-            if (!overlay_has_path_n(tar_name, full_len)) {
-                char abs_entry[256];
-                abs_entry[0] = '/';
-                strncpy(abs_entry + 1, name, sizeof(abs_entry) - 2);
-                abs_entry[sizeof(abs_entry) - 1] = '\0';
+            // Strip trailing slash on directory entries (./etc/ -> etc)
+            // so the "no '/' in child name" direct-child test below
+            // doesn't reject directories outright.
+            size_t plen = strlen(abs_entry);
+            if (plen > 1 && abs_entry[plen - 1] == '/') abs_entry[--plen] = '\0';
 
-                // Strip trailing slash on directory entries (./etc/ -> etc)
-                // so the "no '/' in child name" direct-child test below
-                // doesn't reject directories outright.
-                size_t plen = strlen(abs_entry);
-                if (plen > 1 && abs_entry[plen - 1] == '/') abs_entry[--plen] = '\0';
+            if (strncmp(abs_entry, prefix, prefix_len) == 0) {
+                const char *child = abs_entry + prefix_len;
+                if (*child && !strchr(child, '/') &&
+                    strcmp(child, ".") != 0 && strcmp(child, "..") != 0) {
 
-                if (strncmp(abs_entry, prefix, prefix_len) == 0) {
-                    const char *child = abs_entry + prefix_len;
-                    if (*child && !strchr(child, '/') &&
-                        strcmp(child, ".") != 0 && strcmp(child, "..") != 0) {
-
+                    if (!overlay_has_path_n(tar_name, full_len)) {
                         strncpy(child_name, child, child_name_size - 1);
                         child_name[child_name_size - 1] = '\0';
                         *child_type = (type == '5') ? DT_DIR :
@@ -976,6 +1055,7 @@ void init_rootfs(void) {
                 uint64_t size = parse_octal(h->size);
                 ptr += 512 + (size + 511) / 512 * 512;
             }
+            quicksort_tar_ptrs(tar_entry_ptrs, 0, tar_total_count - 1);
         } else {
             tar_total_count = 0;
         }

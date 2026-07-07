@@ -44,6 +44,3 @@ endif
 STRIPFLAGS = 
 KERNELFILE = nullkrnl
 SUBDIR = kernel
-
-undefine KERNEL
-undefine ARCH

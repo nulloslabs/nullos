@@ -514,6 +514,11 @@ void exit_task(int status) {
         current_task_ptr->fpu_area = NULL;
     }
 
+    if (current_task_ptr->ctx && current_task_ptr->ctx != &kernel_context) {
+        destroy_vmm_context(current_task_ptr->ctx);
+        current_task_ptr->ctx = NULL;
+    }
+
     // Notify parent with SIGCHLD and wake it if it is waiting
     for (int i = 0; i < MAX_TASKS; i++) {
         if (tasks[i].state != TASK_DEAD && tasks[i].pid == my_ppid) {

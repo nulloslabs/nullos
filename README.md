@@ -26,8 +26,9 @@ A secure, fast and privacy-focused hobby OS.
 
 | Tool | Purpose |
 | :--- | :--- |
-| `gcc` | Compiling kernel files and userspace files |
-| `ld` | Linking kernel and userspace |
+| `docker` | Required on MacOS, needed for Makefiles |
+| `gcc` | Compiling kernel files |
+| `ld` | Linking kernel |
 | `make` | Build automation |
 | `xorriso` | ISO image creation |
 | `qemu-system-x86_64` | x86_64 system emulation |
@@ -50,7 +51,7 @@ make
 **3. Run in QEMU:**
     
 ```bash
-make run
+make qemu
 ```
 
 ## 📜 License

@@ -254,6 +254,40 @@ vmm_context_t* create_vmm_context(void) {
     return ctx;
 }
 
+void destroy_vmm_context(vmm_context_t* ctx) {
+    if (!ctx || !ctx->pml4) return;
+    for (int i = 0; i < 256; i++) {
+        if (ctx->pml4[i] & VMM_PRESENT) {
+            uint64_t pdpt_phys = ctx->pml4[i] & ~0xFFFULL;
+            uint64_t* pdpt = (uint64_t*)phys_to_virt(pdpt_phys);
+            for (int j = 0; j < 512; j++) {
+                if (pdpt[j] & VMM_PRESENT) {
+                    if (pdpt[j] & (1ULL << 7)) continue;
+                    uint64_t pd_phys = pdpt[j] & ~0xFFFULL;
+                    uint64_t* pd = (uint64_t*)phys_to_virt(pd_phys);
+                    for (int k = 0; k < 512; k++) {
+                        if (pd[k] & VMM_PRESENT) {
+                            if (pd[k] & (1ULL << 7)) continue;
+                            uint64_t pt_phys = pd[k] & ~0xFFFULL;
+                            uint64_t* pt = (uint64_t*)phys_to_virt(pt_phys);
+                            for (int l = 0; l < 512; l++) {
+                                if (pt[l] & VMM_PRESENT) {
+                                    pfree((void*)(pt[l] & ~0xFFFULL));
+                                }
+                            }
+                            pfree((void*)pt_phys);
+                        }
+                    }
+                    pfree((void*)pd_phys);
+                }
+            }
+            pfree((void*)pdpt_phys);
+        }
+    }
+    pfree((void*)((uint64_t)ctx->pml4 - hhdm_req.response->offset));
+    free(ctx);
+}
+
 vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
     if (!parent) return NULL;
     if (!parent->pml4) { return NULL; }

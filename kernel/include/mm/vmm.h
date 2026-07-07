@@ -43,6 +43,7 @@ void memset_vmm(vmm_context_t* ctx, uint64_t virt_dest, int val, size_t size);
 
 void switch_vmm_context(vmm_context_t* ctx);
 vmm_context_t* create_vmm_context(void);
+void destroy_vmm_context(vmm_context_t* ctx);
 vmm_context_t* clone_vmm_context(vmm_context_t* parent);
 void* vmalloc_ex(vmm_context_t* ctx, size_t size, uint64_t flags);
 void* vmalloc_user_ex(vmm_context_t* ctx, size_t size);

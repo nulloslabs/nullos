@@ -104,6 +104,7 @@ const syscall_fn_t syscall_table[] = {
     [__NR_clock_gettime]   = sys_clock_gettime,
     [__NR_tkill]           = sys_tkill,
     [__NR_futex]           = sys_futex,
+    [__NR_sched_getaffinity] = sys_sched_getaffinity,
     [__NR_getdents64]      = sys_getdents64,
     [__NR_set_tid_address] = sys_set_tid_address,
     [__NR_exit_group]      = sys_exit_group,

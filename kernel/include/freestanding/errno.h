@@ -11,6 +11,7 @@
 #define EBADF 9
 #define ECHILD 10
 #define EAGAIN 11
+#define EWOULDBLOCK EAGAIN
 #define ENOMEM 12
 #define EACCES 13
 #define EFAULT 14
@@ -36,12 +37,12 @@
 #define EDOM 33
 #define ERANGE 34
 #define EDEADLK 35
+#define EDEADLOCK EDEADLK
 #define ENAMETOOLONG 36
 #define ENOLCK 37
 #define ENOSYS 38
 #define ENOTEMPTY 39
 #define ELOOP 40
-#define EWOULDBLOCK EAGAIN
 #define ENOMSG 42
 #define EIDRM 43
 #define ECHRNG 44
@@ -58,7 +59,6 @@
 #define ENOANO 55
 #define EBADRQC 56
 #define EBADSLT 57
-#define EDEADLOCK EDEADLK
 #define EBFONT 59
 #define ENOSTR 60
 #define ENODATA 61

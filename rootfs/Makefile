@@ -17,7 +17,6 @@ rootfs:
 		mkdir -p main packages && \
 		mkdir -p main/home main/root main/dev main/proc main/etc main/var main/usr && \
 		mkdir -p main/home/user main/etc/init.d main/usr/bin main/usr/sbin main/usr/lib main/usr/include && \
-		# No var/run or var/tmp because no tmpfs && \
 		mkdir -p main/var/db main/var/cache main/var/log main/var/lib && \
 		ln -snf usr/bin main/bin && \
 		ln -snf usr/sbin main/sbin && \
@@ -59,11 +58,21 @@ rootfs:
 			done; \
 		fi; \
 		rm -rf main/.* && \
-		main/usr/bin/busybox --list-full | grep -v '^bin/busybox$$' | while read applet; do \
-			dir="main/$$(dirname $$applet)" && \
-			target=$$(realpath --relative-to="$$dir" main/usr/bin/busybox) && \
-			ln -sf "$$target" "main/$$applet"; \
-		done; \
+		if [ "$(KERNEL)" = "Darwin" ]; then \
+			docker run --rm -v "$(PWD)":"$(PWD)" -w "$(PWD)" alpine sh -c ' \
+				main/usr/bin/busybox --list-full | grep -v "^bin/busybox$$" | while read applet; do \
+					dir="main/$$(dirname $$applet)" && \
+					target=$$(realpath --relative-to="$$dir" main/usr/bin/busybox) && \
+					ln -sf "$$target" "main/$$applet"; \
+				done \
+			'; \
+		else \
+			main/usr/bin/busybox --list-full | grep -v '^bin/busybox$$' | while read applet; do \
+				dir="main/$$(dirname $$applet)" && \
+				target=$$(realpath --relative-to="$$dir" main/usr/bin/busybox) && \
+				ln -sf "$$target" "main/$$applet"; \
+			done; \
+		fi && \
 		(cd main && ln -sf sbin/init init) && \
 		rm -f main/linuxrc && \
 		printf "  %-7s %s\n" "TAR" "$(SUBDIR)/rootfs.tar.gz" && \

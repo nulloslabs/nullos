@@ -101,6 +101,7 @@
 #define __NR_clock_gettime 228
 #define __NR_tkill 200
 #define __NR_futex 202
+#define __NR_sched_getaffinity 204
 #define __NR_getdents64 217
 #define __NR_set_tid_address 218
 #define __NR_exit_group 231

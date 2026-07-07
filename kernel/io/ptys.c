@@ -152,6 +152,8 @@ void retain_pty_master(int idx) {
 void release_pty_master(int idx) {
     if (idx < 0 || idx >= NUM_PTYS) return;
 
+    clear_keyboard_pty(idx);
+
     bool destroy = false;
     uint64_t irq;
     spin_lock_irqsave(&pty_lock, &irq);
@@ -216,7 +218,7 @@ int read_pty_master(int idx, char *buf, int len) {
     int got = 0;
     while (got == 0) {
         uint64_t irq; spin_lock_irqsave(&pty_lock, &irq);
-        if (!p->allocated || p->slave_refs == 0) { spin_unlock_irqrestore(&pty_lock, irq); return -EIO; }
+        if (!p->allocated) { spin_unlock_irqrestore(&pty_lock, irq); return -1; }
         got = read_tty_ring(&p->s2m, buf, len);
         spin_unlock_irqrestore(&pty_lock, irq);
 

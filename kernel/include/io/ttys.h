@@ -29,4 +29,6 @@ int get_tty_ring_count(tty_ring_t *r);
 void tty_process_scancode(uint8_t sc);
 int tty_signal_pgrp(int tty_idx, int sig);
 void set_keyboard_tty(int tty_idx);
+void set_keyboard_pty(int pty_idx);
+void clear_keyboard_pty(int pty_idx);
 void init_ttys(void);
