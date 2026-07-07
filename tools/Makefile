@@ -13,7 +13,7 @@ tools: Makefile config.mk
 	@if [ ! -f limine-binary/limine-bios-cd.bin ] || [ config.mk -nt limine-binary/limine-bios-cd.bin ] || [ Makefile -nt limine-binary/limine-bios-cd.bin ]; then \
 		LIMINE_URL=$$(curl -sL https://api.github.com/repos/Limine-Bootloader/Limine/releases/latest | grep -m 1 "browser_download_url.*limine-binary.tar.xz" | cut -d '"' -f4) && \
 		curl -sLo limine-binary.tar.xz "$$LIMINE_URL" && \
-		tar -xf limine-binary.tar.xz; \
+		tar -xf limine-binary.tar.xz && rm -rf limine-binary.tar.xz; \
 	fi
 	@if [ ! -f limine-binary/limine ] || [ config.mk -nt limine-binary/limine ] || [ Makefile -nt limine-binary/limine ]; then \
 		printf "  %-7s %s\n" "CC" "$(SUBDIR)/limine-binary/limine.o" && \

@@ -8,5 +8,5 @@ nullkrnl*
 iso/main/
 rootfs/main/
 rootfs/packages/
-tools/limine/
+tools/limine-binary/
 kernel/include/limine/
