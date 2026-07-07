@@ -54,10 +54,14 @@ rootfs:
 				repo=$$(dirname $$p) && \
 				name=$$(basename $$p) && \
 				curl -sLo packages/$$name.pkg.tar.zst https://archlinux.org/packages/$$repo/x86_64/$$name/download/ && \
-				tar --zstd -xf packages/$$name.pkg.tar.zst -C main; \
+				if [ "$(KERNEL)" = "Darwin" ]; then \
+					docker run --rm -v "$(PWD)":"$(PWD)" -w "$(PWD)" alpine sh -c 'apk add --no-cache zstd >/dev/null 2>&1 && tar --zstd -xf packages/$$name.pkg.tar.zst -C main'; \
+				else \
+					tar --zstd -xf packages/$$name.pkg.tar.zst -C main; \
+				fi; \
 			done; \
 		fi; \
-		rm -rf main/.* && \
+		find main -maxdepth 1 -name '.*' ! -name '.' ! -name '..' -exec rm -rf {} + && \
 		if [ "$(KERNEL)" = "Darwin" ]; then \
 			docker run --rm -v "$(PWD)":"$(PWD)" -w "$(PWD)" alpine sh -c ' \
 				main/usr/bin/busybox --list-full | grep -v "^bin/busybox$$" | while read applet; do \
