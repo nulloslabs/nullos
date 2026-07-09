@@ -182,6 +182,11 @@ static void normalize_path_str(char *path) {
     path[255] = '\0';
 }
 
+static int proc_self_idx(void) {
+    if (!current_task_ptr) return -1;
+    return current_task;  // current_task is the running task's index
+}
+
 static void resolve_path_symlinks_ex(const char *path, char *out, size_t out_size, bool follow_final) {
     char work[256];
     strncpy(work, path, sizeof(work) - 1);
@@ -231,13 +236,50 @@ static void resolve_path_symlinks_ex(const char *path, char *out, size_t out_siz
         rootfs_file_t file = stat_rootfs_nofollow(prefix);
         work[end] = saved;
 
+        // Follow the prefix if it's a symlink — from either the rootfs overlay
+        // OR the synthetic procfs layer (e.g. /proc/<pid>/cwd -> /root,
+        // /proc/<pid>/exe -> /usr/bin/...).  This is what makes
+        // "ls -l /proc/self/cwd/bin" work: the "/proc/self/cwd" prefix gets
+        // resolved to "/root" before the rootfs lookup.
+        //
+        // Some procfs symlinks are deliberately SKIPPED:
+        //   - PROC_LINK_SELF, PROC_LINK_ROOT_MOUNTS :
+        //       Their targets are relative procfs paths (e.g. "/proc/self" ->
+        //       "<pid>"). Resolving them here would destroy the /proc prefix
+        //       (turning "/proc/self/fd/0" into "/1/fd/0" which is no longer
+        //       a procfs path), so children under /proc/self/fd/* would all
+        //       fail to resolve.
+        //   - PROC_LINK_FD : Its target is the fd-table path, which may itself
+        //       be a procfs path (recursive resolution) or a non-existent
+        //       pseudo-path (e.g. "pipe:"). Resolving it inline would either
+        //       loop forever or break the final-component lookup below.
+        char link_target[256];
+        bool followed = false;
         if (file.mode && S_ISLNK(file.mode) && file.data) {
+            resolve_link_target(prefix, (const char *)file.data, link_target, sizeof(link_target));
+            followed = true;
+        } else if (is_procfs_path(prefix)) {
+            int self = proc_self_idx();
+            proc_node_t pn;
+            if (resolve_procfs_nofollow(prefix, self, &pn) &&
+                pn.type == PROC_NODE_SYMLINK &&
+                pn.entry != PROC_LINK_FD &&
+                pn.entry != PROC_LINK_SELF &&
+                pn.entry != PROC_LINK_ROOT_MOUNTS) {
+                char target[256];
+                int tlen = read_procfs_link(&pn, self, target, sizeof(target));
+                if (tlen >= 0) {
+                    resolve_link_target(prefix, target, link_target, sizeof(link_target));
+                    followed = true;
+                }
+            }
+        }
+
+        if (followed) {
             link_count++;
-            char link_abs[256];
-            resolve_link_target(prefix, (const char *)file.data, link_abs, sizeof(link_abs));
 
             char rebuilt[256];
-            strncpy(rebuilt, link_abs, sizeof(rebuilt) - 1);
+            strncpy(rebuilt, link_target, sizeof(rebuilt) - 1);
             rebuilt[sizeof(rebuilt) - 1] = '\0';
             if (saved) {
                 size_t cur_len = strlen(rebuilt);
@@ -408,9 +450,10 @@ static bool stat_virtual_device(const char *abs_path, struct stat *kst) {
     return false;
 }
 
-static int proc_self_idx(void) {
-    if (!current_task_ptr) return -1;
-    return current_task;  // current_task is the running task's index
+static uint64_t path_to_ino(const char *path) {
+    uint64_t h = 5381;
+    while (*path) h = h * 33 ^ (unsigned char)*path++;
+    return h ? h : 1;  /* never return 0 */
 }
 
 static bool stat_proc(const char *abs_path, const char *orig_path, struct stat *kst, bool follow_self) {
@@ -431,8 +474,36 @@ static bool stat_proc(const char *abs_path, const char *orig_path, struct stat *
         kst->st_mode = 0040555;  // dr-xr-xr-x
         kst->st_size = 0;
     } else if (n.type == PROC_NODE_SYMLINK) {
+        // For stat() (follow), if the procfs symlink points at a real file/dir
+        // (e.g. /proc/self/cwd -> /root), stat the TARGET — that's what
+        // "follow the link" means and what makes opendir() see a directory.
+        // For lstat() (no follow), report the link itself.
+        char linkbuf[256];
+        int linklen = read_procfs_link(&n, self, linkbuf, sizeof(linkbuf));
+        if (follow_self && linklen >= 0) {
+            char target_abs[256];
+            if (linkbuf[0] == '/') {
+                strncpy(target_abs, linkbuf, sizeof(target_abs) - 1);
+                target_abs[sizeof(target_abs) - 1] = '\0';
+            } else {
+                resolve_link_target(abs_path, linkbuf, target_abs, sizeof(target_abs));
+            }
+            // Try virtual device first (e.g. /dev/tty0), then rootfs.
+            if (stat_virtual_device(target_abs, kst)) return true;
+            rootfs_file_t f = read_rootfs(target_abs);
+            if (f.mode) {
+                kst->st_mode = f.mode;
+                kst->st_uid = f.uid; kst->st_gid = f.gid;
+                kst->st_size = f.size;
+                kst->st_blocks = (f.size + 511) / 512;
+                kst->st_dev = 1;
+                kst->st_ino = path_to_ino(target_abs);
+                return true;
+            }
+        }
+        // lstat() or target not resolvable: report the synthetic symlink.
         kst->st_mode = 0120777;  // lrwxrwxrwx (symlink)
-        kst->st_size = 0;
+        kst->st_size = (linklen < 0) ? 0 : (off_t)linklen;
     } else {
         // Regular procfs file (maps, mounts): size is the content length.
         kst->st_mode = 0100444;  // -r--r--r--
@@ -442,7 +513,11 @@ static bool stat_proc(const char *abs_path, const char *orig_path, struct stat *
     return true;
 }
 
-static int proc_open_common(const char *abs_path, uint32_t flags) {
+// Returns: >=0 = opened fd, <0 = -errno,  1 = "not procfs, fall through".
+// When a procfs symlink resolves to a real rootfs/devtmpfs file, the symlink
+// target is written back into `abs_path` (bounded by `abs_size`) and 1 is
+// returned so the caller's normal open path handles the resolved target.
+static int proc_open_common(char *abs_path, size_t abs_size, uint32_t flags) {
     if (!is_procfs_path(abs_path)) return 1;  // not procfs
     int self = proc_self_idx();
     proc_node_t n;
@@ -452,9 +527,31 @@ static int proc_open_common(const char *abs_path, uint32_t flags) {
     if (is_procfs_dir(&n)) {
         return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_PROC, flags);
     }
-    // Symlink nodes are openable but reads aren't meaningful;
-    // we still allow open so readlink/stat work, matching Linux behavior.
+    // Symlink nodes: rewrite abs_path to the real target and fall through,
+    // so opendir()/cat/<symlink> act on the underlying file/dir
+    // (e.g. /proc/self/cwd -> /root). readlink/lstat still consult the proc
+    // node directly (they don't go through open), so they keep working.
     if (n.type == PROC_NODE_SYMLINK) {
+        char target[256];
+        int tlen = read_procfs_link(&n, self, target, sizeof(target));
+        if (tlen < 0) return -ENOENT;
+        char target_abs[256];
+        if (target[0] == '/') {
+            strncpy(target_abs, target, sizeof(target_abs) - 1);
+            target_abs[sizeof(target_abs) - 1] = '\0';
+        } else {
+            // Relative targets (e.g. "self" -> "<pid>") resolve against /proc.
+            resolve_link_target(abs_path, target, target_abs, sizeof(target_abs));
+        }
+        // Only fall through if the target is a real file/dir. If not (e.g.
+        // /proc/<pid>/exe pointing at a path that's gone, or /proc/<pid>/fd/<n>
+        // pointing at a pipe/socket), return a proc fd so readlink/stat work.
+        rootfs_file_t f = read_rootfs(target_abs);
+        if (f.mode) {
+            strncpy(abs_path, target_abs, abs_size - 1);
+            abs_path[abs_size - 1] = '\0';
+            return 1;  // fall through to rootfs/devtmpfs/devpts open path
+        }
         return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_PROC, flags);
     }
     // Regular procfs files (maps, mounts, auxv, cpuinfo) are readable.
@@ -1799,7 +1896,7 @@ void sys_open(syscall_frame_t *frame) {
 
     // procfs: /proc, /proc/self, /proc/<pid>, /proc/<pid>/{maps,mounts,exe,...}
     {
-        int pr = proc_open_common(abs_path, flags);
+        int pr = proc_open_common(abs_path, sizeof(abs_path), flags);
         if (pr != 1) { frame->rax = (uint64_t)pr; return; }
     }
 
@@ -1870,12 +1967,6 @@ void sys_access(syscall_frame_t *frame) {
     }
 }
 
-static uint64_t path_to_ino(const char *path) {
-    uint64_t h = 5381;
-    while (*path) h = h * 33 ^ (unsigned char)*path++;
-    return h ? h : 1;  /* never return 0 */
-}
-
 void sys_stat(syscall_frame_t *frame) {
     const char *user_path = (const char *)frame->rdi;
     struct stat *st = (struct stat *)frame->rsi;
@@ -1938,14 +2029,25 @@ void sys_lstat(syscall_frame_t *frame) {
     char abs_path[256];
     build_abs_path(path, abs_path, sizeof(abs_path));
 
-    // Preserve trailing slash so lstat() can follow the symlink if requested
+    // Preserve trailing slash so lstat() can follow the symlink if requested.
+    // Per POSIX, lstat("symlink/") must follow the symlink (the trailing slash
+    // means "the directory the link points to", not the link itself).
+    bool has_trailing_slash = false;
     size_t path_len = strlen(path);
     if (path_len > 0 && path[path_len - 1] == '/') {
-        size_t abs_len = strlen(abs_path);
-        if (abs_len > 0 && abs_path[abs_len - 1] != '/' && abs_len + 1 < sizeof(abs_path)) {
-            abs_path[abs_len] = '/';
-            abs_path[abs_len + 1] = '\0';
-        }
+        has_trailing_slash = true;
+    }
+
+    // Resolve symlinks in the PATH PREFIX (but not the final component when
+    // there's no trailing slash).  This is critical so that paths like
+    // "/proc/self/cwd/bin" get the intermediate "/proc/self/cwd" symlink
+    // resolved to "/root", yielding "/root/bin" before the rootfs lookup.
+    // Without this, the literal "/proc/self/cwd/bin" is looked up and fails.
+    {
+        char resolved[256];
+        resolve_path_symlinks_ex(abs_path, resolved, sizeof(resolved), has_trailing_slash);
+        strncpy(abs_path, resolved, sizeof(abs_path) - 1);
+        abs_path[sizeof(abs_path) - 1] = '\0';
     }
 
     struct stat kst = {0};
@@ -1954,7 +2056,7 @@ void sys_lstat(syscall_frame_t *frame) {
         frame->rax = 0;
         return;
     }
-    if (stat_proc(abs_path, path, &kst, false)) {
+    if (stat_proc(abs_path, path, &kst, has_trailing_slash)) {
         write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
         frame->rax = 0;
         return;
@@ -2051,13 +2153,32 @@ void sys_fstatat(syscall_frame_t *frame) {
     int br = build_abs_path_at(dirfd, path, abs_path, sizeof(abs_path));
     if (br < 0) { frame->rax = (uint64_t)br; return; }
 
+    // Mirror sys_lstat: resolve symlinks in the path PREFIX (and the final
+    // component too when the caller asks to follow it).  This is essential
+    // for fstatat() on entries listed under a procfs symlink directory, e.g.
+    // ls -l /proc/self/cwd/ walks each child with fstatat(dirfd, "bin", ...)
+    // which reconstructs abs_path "/proc/self/cwd/bin"; the "/proc/self/cwd"
+    // prefix must be resolved to "/root" before the rootfs lookup.
+    bool has_trailing_slash = false;
+    size_t path_len = strlen(path);
+    if (path_len > 0 && path[path_len - 1] == '/') {
+        has_trailing_slash = true;
+    }
+    bool follow_final = ((flags & AT_SYMLINK_NOFOLLOW) == 0) || has_trailing_slash;
+    {
+        char resolved[256];
+        resolve_path_symlinks_ex(abs_path, resolved, sizeof(resolved), follow_final);
+        strncpy(abs_path, resolved, sizeof(abs_path) - 1);
+        abs_path[sizeof(abs_path) - 1] = '\0';
+    }
+
     struct stat kst = {0};
     if (stat_virtual_device(abs_path, &kst)) {
         write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
         frame->rax = 0;
         return;
     }
-    if (stat_proc(abs_path, path, &kst, (flags & AT_SYMLINK_NOFOLLOW) == 0)) {
+    if (stat_proc(abs_path, path, &kst, follow_final)) {
         write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
         frame->rax = 0;
         return;
@@ -4336,6 +4457,15 @@ void sys_rmdir(syscall_frame_t *frame) {
     char abs_path[256];
     build_abs_path(path_buf, abs_path, sizeof(abs_path));
 
+    // /dev, /proc, and their children are kernel-synthesized (devtmpfs/devpts/
+    // procfs). They cannot be removed — reject before the rootfs stat lookup.
+    if (is_mounted_under(abs_path, "devtmpfs", NULL) ||
+        is_mounted_under(abs_path, "devpts", NULL) ||
+        is_procfs_path(abs_path)) {
+        frame->rax = (uint64_t)-EPERM;
+        return;
+    }
+
     rootfs_file_t file = stat_rootfs(abs_path);
     if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
     if (!S_ISDIR(file.mode)) { frame->rax = (uint64_t)-ENOTDIR; return; }
@@ -4378,6 +4508,16 @@ void sys_unlink(syscall_frame_t *frame) {
     char abs_path[256];
     get_absolute_path(path_buf, abs_path, sizeof(abs_path));
 
+    // /dev, /proc, and their children are synthesized by the kernel (devtmpfs,
+    // devpts, procfs). They cannot be unlinked — reject before the rootfs
+    // stat lookup, which would return ENOENT for these virtual entries.
+    if (is_mounted_under(abs_path, "devtmpfs", NULL) ||
+        is_mounted_under(abs_path, "devpts", NULL) ||
+        is_procfs_path(abs_path)) {
+        frame->rax = (uint64_t)-EPERM;
+        return;
+    }
+
     // Don't follow the final component: unlink must remove the link itself,
     // not its target.
     rootfs_file_t file = stat_rootfs_nofollow(abs_path);
@@ -4419,6 +4559,16 @@ void sys_readlink(syscall_frame_t *frame) {
 
     char abs_path[256];
     build_abs_path(path, abs_path, sizeof(abs_path));
+
+    // Resolve symlinks in the PATH PREFIX only (follow_final=false): we want
+    // to read the link target of the final component itself, not follow it.
+    // This turns "/proc/self/cwd/bin" into "/bin" before the rootfs lookup.
+    {
+        char resolved[256];
+        resolve_path_symlinks_ex(abs_path, resolved, sizeof(resolved), false);
+        strncpy(abs_path, resolved, sizeof(abs_path) - 1);
+        abs_path[sizeof(abs_path) - 1] = '\0';
+    }
 
     // procfs symlinks: /proc/<pid>/exe, /proc/<pid>/cwd, /proc/<pid>/fd/<n>
     if (is_procfs_path(abs_path)) {
@@ -5275,7 +5425,7 @@ void sys_openat(syscall_frame_t *frame) {
 
     // procfs: /proc, /proc/self, /proc/<pid>, /proc/<pid>/{maps,mounts,exe,...}
     {
-        int pr = proc_open_common(abs_path, flags);
+        int pr = proc_open_common(abs_path, sizeof(abs_path), flags);
         if (pr != 1) { frame->rax = (uint64_t)pr; return; }
     }
 
@@ -5317,6 +5467,15 @@ void sys_unlinkat(syscall_frame_t *frame) {
     int res = build_abs_path_at(dirfd, path_buf, abs_path, sizeof(abs_path));
 
     if (res < 0) { frame->rax = (uint64_t)res; return; }
+
+    // /dev, /proc, and their children are synthesized by the kernel (devtmpfs,
+    // devpts, procfs). They cannot be removed — reject before the rootfs stat.
+    if (is_mounted_under(abs_path, "devtmpfs", NULL) ||
+        is_mounted_under(abs_path, "devpts", NULL) ||
+        is_procfs_path(abs_path)) {
+        frame->rax = (uint64_t)-EPERM;
+        return;
+    }
 
     // Don't follow the final component: unlinkat must remove the link itself.
     rootfs_file_t file = stat_rootfs_nofollow(abs_path);
@@ -5374,6 +5533,16 @@ void sys_readlinkat(syscall_frame_t *frame) {
     char abs_path[256];
     int br = build_abs_path_at(dirfd, path, abs_path, sizeof(abs_path));
     if (br < 0) { frame->rax = (uint64_t)br; return; }
+
+    // Resolve symlinks in the PATH PREFIX only (follow_final=false): we want
+    // to read the link target of the final component itself, not follow it.
+    // This turns "/proc/self/cwd/bin" into "/bin" before the rootfs lookup.
+    {
+        char resolved[256];
+        resolve_path_symlinks_ex(abs_path, resolved, sizeof(resolved), false);
+        strncpy(abs_path, resolved, sizeof(abs_path) - 1);
+        abs_path[sizeof(abs_path) - 1] = '\0';
+    }
 
     if (is_procfs_path(abs_path)) {
         int self = proc_self_idx();

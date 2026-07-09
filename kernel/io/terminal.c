@@ -109,6 +109,17 @@ static void backbuffer_reload_from_fb(struct limine_framebuffer *fb) {
     }
 }
 
+// Check whether the backbuffer pixel format matches the VRAM format exactly
+// so we can use memcpy instead of per-pixel color conversion.  The backbuffer
+// stores 0x00RRGGBB (R at bits 16..23, G at 8..15, B at 0..7).  This is a
+// native match for 32bpp XRGB framebuffers (the overwhelmingly common case).
+static inline bool fb_format_matches_bb(struct limine_framebuffer *fb) {
+    return fb->bpp == 32 &&
+           fb->red_mask_size   == 8 && fb->red_mask_shift   == 16 &&
+           fb->green_mask_size == 8 && fb->green_mask_shift == 8  &&
+           fb->blue_mask_size  == 8 && fb->blue_mask_shift  == 0;
+}
+
 static void flush_backbuffer(struct limine_framebuffer *fb) {
     if (!back_buffer_initialized || !back_buffer || !back_buffer_available) return;
     if (!fb || !fb->address) return;
@@ -129,13 +140,25 @@ static void flush_backbuffer(struct limine_framebuffer *fb) {
     }
 
     uint8_t *fb_addr = (uint8_t *)fb->address;
+    uint64_t bpp = fb->bpp;
+
+    // Fast path: 32bpp XRGB — backbuffer IS native pixel format, just memcpy.
+    if (fb_format_matches_bb(fb)) {
+        uint32_t *bb = back_buffer;
+        for (uint64_t y = 0; y < height; y++) {
+            memcpy(fb_addr + y * fb->pitch,
+                   bb + y * width,
+                   width * sizeof(uint32_t));
+        }
+        return;
+    }
+
     uint8_t r_size = fb->red_mask_size;
     uint8_t r_shift = fb->red_mask_shift;
     uint8_t g_size = fb->green_mask_size;
     uint8_t g_shift = fb->green_mask_shift;
     uint8_t b_size = fb->blue_mask_size;
     uint8_t b_shift = fb->blue_mask_shift;
-    uint8_t bpp = fb->bpp;
 
     for (uint64_t y = 0; y < height; y++) {
         uint64_t fb_row_offset = y * fb->pitch;
@@ -189,13 +212,24 @@ static void flush_region_backbuffer(struct limine_framebuffer *fb, uint64_t x, u
     if (y + h > fb->height) h = fb->height - y;
 
     uint8_t *fb_addr = (uint8_t *)fb->address;
+    uint64_t bpp = fb->bpp;
+
+    // Fast path: 32bpp XRGB — memcpy each row slice directly.
+    if (fb_format_matches_bb(fb)) {
+        for (uint64_t row = 0; row < h; row++) {
+            memcpy(fb_addr + (y + row) * fb->pitch + x * sizeof(uint32_t),
+                   back_buffer + (y + row) * back_buffer_width + x,
+                   w * sizeof(uint32_t));
+        }
+        return;
+    }
+
     uint8_t r_size = fb->red_mask_size;
     uint8_t r_shift = fb->red_mask_shift;
     uint8_t g_size = fb->green_mask_size;
     uint8_t g_shift = fb->green_mask_shift;
     uint8_t b_size = fb->blue_mask_size;
     uint8_t b_shift = fb->blue_mask_shift;
-    uint8_t bpp = fb->bpp;
 
     for (uint64_t row = 0; row < h; row++) {
         uint64_t fb_row_offset = (y + row) * fb->pitch;
@@ -258,19 +292,24 @@ static void scroll_region_both(int n_lines, uint32_t bg) {
     uint64_t top = region_set ? region_top : 0;
     uint64_t bot = region_set ? region_bottom : fb->height;
     if (bot <= top || bot > fb->height) { top = 0; bot = fb->height; }
-    if (lh >= bot - top) {
+    uint64_t reg_height = bot - top;
+    if (lh >= reg_height) {
         // Whole region cleared
-        if (back_buffer_available) fill_rect_backbuffer(0, top, back_buffer_width, bot - top, bg);
-        for (uint64_t y = top; y < bot; y++)
-            for (uint64_t x = 0; x < fb->width; x++)
-                put_pixel_fb(x, y, bg);
+        if (back_buffer_available) {
+            fill_rect_backbuffer(0, top, back_buffer_width, bot - top, bg);
+            flush_backbuffer(fb);
+        } else {
+            for (uint64_t y = top; y < bot; y++)
+                for (uint64_t x = 0; x < fb->width; x++)
+                    put_pixel_fb(x, y, bg);
+        }
         return;
     }
 
-    uint64_t reg_height = bot - top;
-
-    // 1. Scroll the backbuffer (RAM, fast memmove)
     if (back_buffer_available) {
+        // Fast path: only touch the backbuffer (RAM), then flush to VRAM
+        // in one shot via flush_backbuffer (memcpy for 32bpp XRGB).
+        // This avoids the catastrophic VRAM memmove that was here before.
         uint64_t reg_bytes = back_buffer_pitch;
         if (n_lines > 0) {
             memmove(back_buffer + top * back_buffer_width,
@@ -283,11 +322,9 @@ static void scroll_region_both(int n_lines, uint32_t bg) {
                     (reg_height - lh) * reg_bytes);
             fill_rect_backbuffer(0, top, back_buffer_width, lh, bg);
         }
-    }
-
-    // 2. Scroll the live framebuffer directly (raw byte memmove on VRAM,
-    //    much faster than pixel-by-pixel flush_backbuffer).
-    if (fb->address) {
+        flush_backbuffer(fb);
+    } else {
+        // No backbuffer: direct VRAM operations (legacy path)
         uint8_t *fb_addr = (uint8_t *)fb->address;
         uint64_t pitch = fb->pitch;
         if (n_lines > 0) {
@@ -299,9 +336,8 @@ static void scroll_region_both(int n_lines, uint32_t bg) {
                     fb_addr + top * pitch,
                     (reg_height - lh) * pitch);
         }
-        // Clear the newly exposed line(s) on the live FB
-        uint64_t clear_y = (n_lines > 0) ? (bot - lh) : top;
-        for (uint64_t y = clear_y; y < clear_y + lh; y++)
+        for (uint64_t y = (n_lines > 0) ? (bot - lh) : top;
+             y < ((n_lines > 0) ? bot : (top + lh)); y++)
             for (uint64_t x = 0; x < fb->width; x++)
                 put_pixel_fb(x, y, bg);
     }

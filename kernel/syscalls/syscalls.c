@@ -132,6 +132,26 @@ extern void syscall_entry(void);
 void syscall_dispatch(syscall_frame_t *frame) {
     current_task_ptr->orig_rax = frame->rax;
 
+    // Check for pending signals on ENTRY too, not just on exit. Without this,
+    // a signal pended while the task was preempted by the timer (which doesn't
+    // call check_signals) would only be noticed after the syscall completes —
+    // adding up to one full syscall's latency (e.g. a large write() to the
+    // terminal) before SIGINT/SIGTERM/etc. are acted upon. Checking on entry
+    // means a Ctrl+C that arrives during a timer-preempt is handled before
+    // the next syscall even starts.
+    //
+    // If check_signals set up a custom handler (it rewrote frame->rcx to the
+    // handler address) or terminated/stopped the task (it doesn't return),
+    // we must NOT proceed with the syscall — the frame now describes the
+    // signal handler trampoline, not the original syscall.
+    uint64_t saved_rcx = frame->rcx;
+    check_signals(frame);
+    if (frame->rcx != saved_rcx) {
+        // A signal handler was installed; frame is now set up for sysret to
+        // the handler. Skip the syscall entirely.
+        return;
+    }
+
     if (frame->rax < (sizeof(syscall_table) / sizeof(syscall_table[0])) && syscall_table[frame->rax]) {
         syscall_table[frame->rax](frame);
     } else {

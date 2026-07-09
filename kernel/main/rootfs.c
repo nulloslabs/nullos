@@ -19,10 +19,16 @@ static uint8_t *tar_decompressed = NULL;
 static uint8_t **tar_entry_ptrs = NULL;
 static int tar_total_count = 0;
 
-struct tar_symlink {
-    char path[128];
-    char target[128];
-};
+// Tombstone bitmap: one byte per SORTED tar entry (indexed the same way as
+// tar_entry_ptrs[]). When a tar-backed path is deleted (unlink/rmdir), the
+// byte at its sorted index is set to 1 so subsequent read/stat/getdents calls
+// hide the original. This removes the old MAX_MODIFIED_FILES-based tombstone
+// storage, which exhausted and caused "rm -rf /" to fail with ENOTEMPTY once
+// the overlay table filled up.
+static uint8_t *tar_tombstone_bits = NULL;
+
+// struct tar_symlink moved to rootfs.h so other translation units (and
+// future debug tooling) can inspect the symlink table without re-declaring it.
 static struct tar_symlink *tar_symlinks = NULL;
 static int tar_symlink_count = 0;
 static modified_file_t modified_files[MAX_MODIFIED_FILES];
@@ -159,6 +165,52 @@ static void quicksort_tar_ptrs(uint8_t **arr, int low, int high) {
     }
 }
 
+// Binary-search the sorted tar_entry_ptrs[] for the index of `norm_path`.
+// Returns the sorted index, or -1 if not found. Used by every tar lookup site
+// to consult the tombstone bitmap in O(log N).
+static int tar_tombstone_idx(const char *norm_path) {
+    if (!tar_entry_ptrs || tar_total_count <= 0) return -1;
+    int low = 0, high = tar_total_count - 1;
+    while (low <= high) {
+        int mid = low + (high - low) / 2;
+        struct tar_header *h = (struct tar_header *)tar_entry_ptrs[mid];
+        int cmp = compare_tar_names(h->name, norm_path);
+        if (cmp == 0) return mid;
+        if (cmp < 0) low = mid + 1;
+        else high = mid - 1;
+    }
+    return -1;
+}
+
+static bool tar_tombstone_get(const char *norm_path) {
+    int idx = tar_tombstone_idx(norm_path);
+    if (idx < 0 || !tar_tombstone_bits) return false;
+    return tar_tombstone_bits[idx] != 0;
+}
+
+static void tar_tombstone_set(const char *norm_path) {
+    int idx = tar_tombstone_idx(norm_path);
+    if (idx >= 0 && tar_tombstone_bits) tar_tombstone_bits[idx] = 1;
+}
+
+static void tar_tombstone_clear(const char *norm_path) {
+    int idx = tar_tombstone_idx(norm_path);
+    if (idx >= 0 && tar_tombstone_bits) tar_tombstone_bits[idx] = 0;
+}
+
+// Variant for the getdents walks that hold the tar header's own name (which
+// may carry a trailing slash on directories) plus its precomputed length.
+// Strips the trailing slash then does the bitmap lookup.
+static bool tar_tombstone_get_n(const char *tar_name, size_t len) {
+    char buf[128];
+    while (len > 0 && tar_name[len - 1] == '/') len--;
+    if (len == 0) return false;
+    size_t n = len < sizeof(buf) - 1 ? len : sizeof(buf) - 1;
+    memcpy(buf, tar_name, n);
+    buf[n] = '\0';
+    return tar_tombstone_get(buf);
+}
+
 static bool find_tar_symlink(const char *abs_path, char *resolved_abs, size_t resolved_size) {
     char norm[256];
     normalize_path(abs_path, norm, sizeof(norm));
@@ -176,11 +228,14 @@ static bool find_tar_symlink(const char *abs_path, char *resolved_abs, size_t re
         }
     }
 
-    // Fall back to tar symlinks
+    // Fall back to tar symlinks. Skip any whose tar entry has been
+    // tombstoned (deleted) — they must not be followed during path resolution,
+    // or a deleted symlink would still redirect lookups to its old target.
     if (!tar_symlinks) return false;
 
     for (int i = 0; i < tar_symlink_count; i++) {
         if (compare_tar_names(tar_symlinks[i].path, norm) == 0) {
+            if (tar_tombstone_get(tar_symlinks[i].path)) return false;
             strncpy(resolved_abs, tar_symlinks[i].target, resolved_size - 1);
             resolved_abs[resolved_size - 1] = '\0';
             return true;
@@ -266,6 +321,11 @@ static void add_modified_file(const char *path, void *data, size_t size, size_t 
             modified_files[i].uid = uid;
             modified_files[i].gid = gid;
             modified_files[i].is_tombstone = false;
+            // Recreating a previously-deleted tar-backed path must clear the
+            // tombstone, otherwise the new overlay entry would never be seen
+            // (callers consult the tombstone bitmap directly via
+            // tar_tombstone_get_n / tar_tombstone_get).
+            tar_tombstone_clear(path);
             return;
         }
     }
@@ -282,62 +342,24 @@ static void add_modified_file(const char *path, void *data, size_t size, size_t 
             modified_files[i].uid = uid;
             modified_files[i].gid = gid;
             modified_files[i].is_tombstone = false;
+            tar_tombstone_clear(path);
             return;
         }
     }
 }
 
-// Drop a tombstone: mark `norm_path` (already in "./foo/bar" form) as deleted
-// so the tar archive entry beneath it is hidden. If an overlay entry exists at
-// that path, the caller has already removed it (or never had one); a tombstone
-// is recorded regardless so the tar original — if any — stays gone.
+// Drop a tombstone: mark the SORTED tar entry for `norm_path` (already in
+// "./foo/bar" form) as deleted so read/stat/getdents hide the original.
+// Uses the per-entry bitmap instead of the overlay array, so there is no
+// MAX_MODIFIED_FILES ceiling and "rm -rf /" no longer exhausts the table.
 static void add_tombstone(const char *norm_path) {
-    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
-        if (modified_files[i].is_active && strcmp(modified_files[i].path, norm_path) == 0) {
-            if (modified_files[i].data) free(modified_files[i].data);
-            modified_files[i].data = NULL;
-            modified_files[i].size = 0;
-            modified_files[i].mode = 0;
-            modified_files[i].is_tombstone = true;
-            return;
-        }
-    }
-
-    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
-        if (!modified_files[i].is_active) {
-            modified_files[i].is_active = true;
-            strncpy(modified_files[i].path, norm_path, sizeof(modified_files[i].path) - 1);
-            modified_files[i].path[sizeof(modified_files[i].path) - 1] = '\0';
-            modified_files[i].data = NULL;
-            modified_files[i].size = 0;
-            modified_files[i].mode = 0;
-            modified_files[i].is_tombstone = true;
-            return;
-        }
-    }
+    tar_tombstone_set(norm_path);
 }
 
-static bool overlay_has_path_n(const char *norm_path, size_t len) {
-    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
-        if (!modified_files[i].is_active) continue;
-        const char *p = modified_files[i].path;
-        if (strlen(p) == len && strncmp(p, norm_path, len) == 0)
-            return true;
-    }
-    return false;
-}
-
+// Returns true if the sorted tar index table contains `norm_path`.
+// Uses the binary-search index (O(log n)) instead of the old linear walk.
 static bool tar_has_entry(const char *norm_path) {
-    if (!tar_archive_start) return false;
-    uint8_t *ptr = tar_archive_start;
-    while (1) {
-        struct tar_header *h = (struct tar_header *)ptr;
-        if (h->name[0] == '\0') break;
-        uint64_t size = parse_octal(h->size);
-        if (compare_tar_names(h->name, norm_path) == 0) return true;
-        ptr += 512 + (size + 511) / 512 * 512;
-    }
-    return false;
+    return tar_tombstone_idx(norm_path) >= 0;
 }
 
 static void get_norm_path_ex(const char *path, char *out_norm, size_t out_size, bool follow_final);
@@ -397,16 +419,11 @@ rootfs_file_t read_rootfs(const char *path) {
         char norm[256];
         get_norm_path(current_path, norm, sizeof(norm));
 
-        // 1. Check overlay
+        // 1. Check overlay (live entries only; tombstones live in the bitmap
+        //    so modified_files[] never carries an is_tombstone marker anymore).
         bool found_link = false;
         for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
             if (modified_files[i].is_active && strcmp(modified_files[i].path, norm) == 0) {
-                // Tombstone: this path was deleted (it shadowed a tar entry).
-                // Stop here and report "not found" — do NOT fall through to
-                // the tar archive, or the deleted file would reappear.
-                if (modified_files[i].is_tombstone) {
-                    return result;
-                }
                 if ((modified_files[i].mode & 0xF000) == 0xA000) {
                     char current_abs[256];
                     get_absolute_path(current_path, current_abs, sizeof(current_abs));
@@ -423,6 +440,9 @@ rootfs_file_t read_rootfs(const char *path) {
             }
         }
         if (found_link) continue;
+
+        // If the tar entry beneath us is tombstoned, report not found.
+        if (tar_tombstone_get(norm)) return result;
 
         // 2. Check TAR archive
         if (tar_archive_start != NULL) {
@@ -506,12 +526,6 @@ static rootfs_file_t stat_rootfs_ex(const char *path, bool follow_final) {
     // check overlay first
     for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
         if (modified_files[i].is_active && strcmp(modified_files[i].path, norm) == 0) {
-            // Tombstone: deleted. Report as missing; don't expose the tar
-            // original hiding underneath.
-            if (modified_files[i].is_tombstone) {
-                rootfs_file_t empty = {0};
-                return empty;
-            }
             rootfs_file_t result = {
                 .data = modified_files[i].data,
                 .size = modified_files[i].size,
@@ -521,6 +535,12 @@ static rootfs_file_t stat_rootfs_ex(const char *path, bool follow_final) {
             };
             return result;
         }
+    }
+
+    // Tombstoned tar entry: deleted.
+    if (tar_tombstone_get(norm)) {
+        rootfs_file_t empty = {0};
+        return empty;
     }
 
     // check TAR, return the entry as-is (no final-component following here)
@@ -774,22 +794,49 @@ int rmdir_rootfs(const char *path) {
             modified_files[i].path[norm_len] == '/') return -ENOTEMPTY;
     }
 
-    // check TAR for any children (tombstones hide tar entries, so a tar child
-    // that has been deleted is already invisible — no need to skip it here
-    // because the tombstone above already means "not present")
-    if (tar_archive_start) {
-        uint8_t *ptr = tar_archive_start;
-        while (1) {
-            struct tar_header *h = (struct tar_header *)ptr;
-            if (h->name[0] == '\0') break;
-            uint64_t size = parse_octal(h->size);
-            // skip this tar entry if a tombstone hides it
-            if (!overlay_has_path_n(h->name, strlen(h->name))) {
-                if (strncmp(h->name, norm, norm_len) == 0 &&
-                    h->name[norm_len] == '/' &&
-                    strlen(h->name) > norm_len + 1) return -ENOTEMPTY;
-            }
-            ptr += 512 + (size + 511) / 512 * 512;
+    // check TAR for any children. Use the SORTED pointer array so we can
+    // binary-search for the first entry >= "<norm>/" and then walk forward
+    // only as long as the prefix matches — O(log N + matches) instead of a
+    // full O(N) linear scan per rmdir() call. This is what made `rm -rf`
+    // slow: every directory removal re-walked the whole 6k-entry archive.
+    if (tar_entry_ptrs && tar_total_count > 0) {
+        // Build "<norm>/" as the lower-bound search key. compare_tar_names
+        // treats a trailing '/' as a terminator, so this finds the first
+        // entry whose name sorts at or after the directory's children.
+        char key[258];
+        size_t klen = norm_len;
+        if (klen + 1 < sizeof(key)) {
+            memcpy(key, norm, klen);
+            key[klen] = '/';
+            key[klen + 1] = '\0';
+        } else {
+            memcpy(key, norm, sizeof(key) - 1);
+            key[sizeof(key) - 1] = '\0';
+        }
+
+        int low = 0, high = tar_total_count - 1, first = tar_total_count;
+        while (low <= high) {
+            int mid = low + (high - low) / 2;
+            struct tar_header *h = (struct tar_header *)tar_entry_ptrs[mid];
+            if (compare_tar_names(h->name, key) < 0) low = mid + 1;
+            else { first = mid; high = mid - 1; }
+        }
+
+        // Walk forward from `first` while the entry is a child of <norm>.
+        // Because the array is sorted, once we pass the children range we
+        // can stop immediately — no need to scan the rest of the archive.
+        for (int i = first; i < tar_total_count; i++) {
+            struct tar_header *h = (struct tar_header *)tar_entry_ptrs[i];
+            // If this entry doesn't start with "<norm>/", we've passed the
+            // children block (sorted order) — stop scanning.
+            if (strncmp(h->name, norm, norm_len) != 0 ||
+                h->name[norm_len] != '/') break;
+
+            // Skip tombstoned (deleted) children — they're invisible.
+            if (tar_tombstone_bits && tar_tombstone_bits[i]) continue;
+
+            // Direct child: directory is not empty.
+            if (strlen(h->name) > norm_len + 1) return -ENOTEMPTY;
         }
     }
 
@@ -885,7 +932,7 @@ int get_rootfs_entry(int index, directory_entry_t *entry) {
             size_t nlen = strlen(h->name);
             if (nlen > 1 && h->name[nlen - 1] == '/') nlen--;
 
-            if (!overlay_has_path_n(h->name, nlen)) {
+            if (!tar_tombstone_get_n(h->name, nlen)) {
                 if (count == index) {
                     if (nlen >= sizeof(entry->name)) nlen = sizeof(entry->name) - 1;
                     memcpy(entry->name, h->name, nlen);
@@ -965,7 +1012,7 @@ int next_rootfs_child(int *index, const char *dir_norm, char *child_name, size_t
                 if (*child && !strchr(child, '/') &&
                     strcmp(child, ".") != 0 && strcmp(child, "..") != 0) {
 
-                    if (!overlay_has_path_n(tar_name, full_len)) {
+                    if (!tar_tombstone_get_n(tar_name, full_len)) {
                         strncpy(child_name, child, child_name_size - 1);
                         child_name[child_name_size - 1] = '\0';
                         *child_type = (type == '5') ? DT_DIR :
@@ -1056,6 +1103,16 @@ void init_rootfs(void) {
                 ptr += 512 + (size + 511) / 512 * 512;
             }
             quicksort_tar_ptrs(tar_entry_ptrs, 0, tar_total_count - 1);
+
+            // Allocate the tombstone bitmap — one byte per sorted tar entry,
+            // indexed identically to tar_entry_ptrs[] so the binary-search
+            // index returned by tar_tombstone_idx() is a direct bitmap key.
+            // This replaces the old overlay-array tombstone slots and removes
+            // the MAX_MODIFIED_FILES ceiling that broke `rm -rf /`.
+            tar_tombstone_bits = malloc((size_t)tar_total_count);
+            if (tar_tombstone_bits) {
+                memset(tar_tombstone_bits, 0, (size_t)tar_total_count);
+            }
         } else {
             tar_total_count = 0;
         }

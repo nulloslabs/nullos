@@ -19,16 +19,14 @@ tools:
 	@$(MAKE) -C ../tools
 
 iso: tools kernel rootfs
-	@if [ -f $(OUTFILE) ] || [ $(OUTFILE) -nt ../kernel/nullkrnl ] || \
-	    [ $(OUTFILE) -nt Makefile ] || \
-	    [ $(OUTFILE) -nt config.mk ] || \
-	    [ $(OUTFILE) -nt ../rootfs/rootfs.tar.gz ] || \
-	    [ $(OUTFILE) -nt ../config/limine.conf ] || \
-		[ $(OUTFILE) -nt ../tools/limine-binary/limine ] || \
-	    [ $(OUTFILE) -nt ../tools/limine-binary/limine-bios.sys ] || [ $(OUTFILE) -nt ../tools/limine-binary/limine-bios-cd.bin ] || [ $(OUTFILE) -nt ../tools/limine-binary/limine-uefi-cd.sys ] || \
-		[ $(OUTFILE) -nt ../tools/limine-binary/BOOTX64.EFI ]; then \
-		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/system.iso is already up to date"; \
-	else \
+	@if [ ! -f $(OUTFILE) ] || [ ../kernel/nullkrnl -nt $(OUTFILE) ] || \
+	    [ Makefile -nt $(OUTFILE) ] || \
+	    [ config.mk -nt $(OUTFILE) ] || \
+	    [ ../rootfs/rootfs.tar.gz -nt $(OUTFILE) ] || \
+	    [ ../config/limine.conf -nt $(OUTFILE) ] || \
+		[ ../tools/limine-binary/limine -nt $(OUTFILE) ] || \
+	    [ ../tools/limine-binary/limine-bios.sys -nt $(OUTFILE) ] || [ ../tools/limine-binary/limine-bios-cd.bin -nt $(OUTFILE) ] || [ ../tools/limine-binary/limine-uefi-cd.sys -nt $(OUTFILE) ] || \
+		[ ../tools/limine-binary/BOOTX64.EFI -nt $(OUTFILE) ]; then \
 		printf "  %-7s %s\n" "XORRISO" "$(SUBDIR)/system.iso" && \
 		mkdir -p main/boot main/EFI/BOOT && \
 		cp ../tools/limine-binary/limine-bios.sys ../tools/limine-binary/limine-bios-cd.bin ../tools/limine-binary/limine-uefi-cd.bin main/boot && \
@@ -38,6 +36,8 @@ iso: tools kernel rootfs
 		cp ../config/limine.conf main/boot && \
 		$(XORRISO) -as mkisofs $(XORRISOFLAGS) main -o $(OUTFILE) > /dev/null 2>&1 && \
 		../tools/limine-binary/limine bios-install $(OUTFILE) > /dev/null 2>&1; \
+	else \
+		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/system.iso is already up to date"; \
 	fi
 
 clean:

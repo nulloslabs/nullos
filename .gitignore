@@ -9,4 +9,5 @@ iso/main/
 rootfs/main/
 rootfs/packages/
 tools/limine-binary/
+tools/limine-binary.tar.xz
 kernel/include/limine/

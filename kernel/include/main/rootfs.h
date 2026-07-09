@@ -25,6 +25,14 @@ struct tar_header {
     char version[2];
 };
 
+// A tar hardlink (typeflag '1') or symlink (typeflag '2') cached from the
+// archive during init_rootfs() so path resolution can chase link targets
+// without re-walking the whole tar each time.
+struct tar_symlink {
+    char path[128];
+    char target[128];
+};
+
 typedef struct {
     void* data;      // Pointer to the actual file content
     uint64_t size;   // Actual size of the file in bytes

@@ -353,6 +353,20 @@ static bool procfs_resolve_impl(const char *abs_path, const char *orig_path, int
     const char *rel = abs_path + 5;
     if (strcmp(rel, "/") == 0) rel = "";  // treat "/proc/" same as "/proc"
 
+    // Strip trailing slashes from rel into a cleaned copy so pattern matching
+    // works for paths like "/proc/self/", "/proc/1/", "/proc/1/fd/". Without
+    // this, the trailing '/' breaks match_pattern's end-of-string check.
+    char rel_clean[256];
+    {
+        size_t rlen = strlen(rel);
+        if (rlen > 1 && rel[rlen - 1] == '/') {
+            strncpy(rel_clean, rel, sizeof(rel_clean) - 1);
+            rel_clean[sizeof(rel_clean) - 1] = '\0';
+            while (rlen > 1 && rel_clean[rlen - 1] == '/') rel_clean[--rlen] = '\0';
+            rel = rel_clean;
+        }
+    }
+
     // build_abs_path_at() normalizes trailing slashes away, so use the original
     // user path as a hint that /proc/self/ must follow the link even for lstat().
     const char *orig_rel = (orig_path && starts_with(orig_path, "/proc")) ? orig_path + 5 : rel;

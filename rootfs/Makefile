@@ -8,7 +8,6 @@ endif
 include config.mk
 
 .DEFAULT_GOAL := all
-PACKAGE_NAMES := core/glibc core/ncurses core/readline extra/busybox core/bash
 
 all: rootfs
 

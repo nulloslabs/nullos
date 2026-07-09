@@ -7,8 +7,26 @@
 void *memcpy(void *dest, const void *src, size_t n) {
     uint8_t *d = (uint8_t *)dest;
     const uint8_t *s = (const uint8_t *)src;
-    for (size_t i = 0; i < n; i++) {
-        d[i] = s[i];
+
+    // Align destination to 8 bytes for word-sized copies
+    while (n > 0 && ((uintptr_t)d & 7)) {
+        *d++ = *s++;
+        n--;
+    }
+
+    // Copy 64 bits at a time
+    uint64_t *d64 = (uint64_t *)d;
+    const uint64_t *s64 = (const uint64_t *)s;
+    while (n >= 8) {
+        *d64++ = *s64++;
+        n -= 8;
+    }
+
+    // Handle remaining bytes
+    d = (uint8_t *)d64;
+    s = (const uint8_t *)s64;
+    while (n--) {
+        *d++ = *s++;
     }
     return dest;
 }
@@ -18,14 +36,42 @@ void *memmove(void *dest, const void *src, size_t n) {
     const uint8_t *s = (const uint8_t *)src;
 
     if (d < s) {
-        // Copy forward
-        for (size_t i = 0; i < n; i++) {
-            d[i] = s[i];
+        // Copy forward using 64-bit words when possible
+        while (n > 0 && ((uintptr_t)d & 7)) {
+            *d++ = *s++;
+            n--;
+        }
+        uint64_t *d64 = (uint64_t *)d;
+        const uint64_t *s64 = (const uint64_t *)s;
+        while (n >= 8) {
+            *d64++ = *s64++;
+            n -= 8;
+        }
+        d = (uint8_t *)d64;
+        s = (const uint8_t *)s64;
+        while (n--) {
+            *d++ = *s++;
         }
     } else {
         // Copy backward to handle overlap
-        for (size_t i = n; i > 0; i--) {
-            d[i - 1] = s[i - 1];
+        d += n;
+        s += n;
+        while (n > 0 && ((uintptr_t)d & 7)) {
+            *--d = *--s;
+            n--;
+        }
+        uint64_t *d64 = (uint64_t *)d;
+        const uint64_t *s64 = (const uint64_t *)s;
+        while (n >= 8) {
+            d64--;
+            s64--;
+            *d64 = *s64;
+            n -= 8;
+        }
+        d = (uint8_t *)d64;
+        s = (const uint8_t *)s64;
+        while (n--) {
+            *--d = *--s;
         }
     }
     return dest;
@@ -33,8 +79,28 @@ void *memmove(void *dest, const void *src, size_t n) {
 
 void *memset(void *s, int c, size_t n) {
     uint8_t *p = (uint8_t *)s;
-    for (size_t i = 0; i < n; i++) {
-        p[i] = (uint8_t)c;
+
+    // Align to 8 bytes
+    while (n > 0 && ((uintptr_t)p & 7)) {
+        *p++ = (uint8_t)c;
+        n--;
+    }
+
+    // Fill 64 bits at a time
+    uint64_t word = (uint8_t)c;
+    word |= word << 8;
+    word |= word << 16;
+    word |= word << 32;
+    uint64_t *p64 = (uint64_t *)p;
+    while (n >= 8) {
+        *p64++ = word;
+        n -= 8;
+    }
+
+    // Handle remaining bytes
+    p = (uint8_t *)p64;
+    while (n--) {
+        *p++ = (uint8_t)c;
     }
     return s;
 }
