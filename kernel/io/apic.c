@@ -3,23 +3,18 @@
 #include <io/io.h>
 #include <mm/vmm.h>
 #include <main/string.h>
-#include <io/terminal.h>
 #include <main/machine_info.h>
 #include <io/ioapic.h>
 #include <main/madt.h>
 #include <main/msr.h>
+#include <main/log.h>
 
 enum apic_mode current_apic_mode = APIC_NONE;
 volatile uint32_t *lapic_base = NULL;
 
 // xAPIC MMIO helpers
-static uint32_t lapic_read(uint32_t reg) {
-    return lapic_base[reg / 4];
-}
-
-static void lapic_write(uint32_t reg, uint32_t val) {
-    lapic_base[reg / 4] = val;
-}
+static uint32_t lapic_read(uint32_t reg) { return lapic_base[reg / 4]; }
+static void lapic_write(uint32_t reg, uint32_t val) { lapic_base[reg / 4] = val; }
 
 // --- Detection ---
 enum apic_mode detect_apic(void) {
@@ -57,38 +52,6 @@ static void init_x2apic_for_cpu(void) {
 
     // Set SVR: enable + vector 0xFF
     write_msr(X2APIC_MSR_SVR, LAPIC_SVR_ENABLE | 0xFF);
-}
-
-void init_apic_for_cpu(void) {
-    if (current_apic_mode == APIC_X2APIC) {
-        init_x2apic_for_cpu();
-    } else if (current_apic_mode == APIC_XAPIC) {
-        uint64_t msr = read_msr(MSR_APIC_BASE);
-        uint64_t base_phys = msr & 0xFFFFF000ULL;
-        init_xapic_for_cpu(base_phys);
-    }
-}
-
-void init_apic(void) {
-    init_apic_for_cpu();
-    if (current_apic_mode == APIC_X2APIC) {
-        printf("apic: initialized x2apic\n");
-    } else if (current_apic_mode == APIC_XAPIC) {
-        printf("apic: initialized xapic\n");
-    } else {
-        printf("apic: no apic found, falling back to pic\n");
-        return;
-    }
-
-    disable_pic();
-
-    if (ioapic_phys_addr) {
-        init_ioapic(phys_to_virt((uint64_t)ioapic_phys_addr));
-        ioapic_route_irq(1, 33, 0, 0);
-        for (int i = 0; i < 4; i++) {
-            ioapic_route_irq(10 + i, 43, 0, IOAPIC_ACTIVE_LOW | IOAPIC_TRIGGER_LEVEL);
-        }
-    }
 }
 
 // --- EOI ---
@@ -202,5 +165,37 @@ void send_init_apic(uint32_t target_apic_id) {
         lapic_write(LAPIC_ICR_HI, target_apic_id << 24);
         lapic_write(LAPIC_ICR_LO, command);
         while (lapic_read(LAPIC_ICR_LO) & (1 << 12));
+    }
+}
+
+void init_apic_for_cpu(void) {
+    if (current_apic_mode == APIC_X2APIC) {
+        init_x2apic_for_cpu();
+    } else if (current_apic_mode == APIC_XAPIC) {
+        uint64_t msr = read_msr(MSR_APIC_BASE);
+        uint64_t base_phys = msr & 0xFFFFF000ULL;
+        init_xapic_for_cpu(base_phys);
+    }
+}
+
+void init_apic(void) {
+    init_apic_for_cpu();
+    if (current_apic_mode == APIC_X2APIC) {
+        log("initialized x2apic");
+    } else if (current_apic_mode == APIC_XAPIC) {
+        log("initialized xapic");
+    } else {
+        log("no apic found, falling back to pic");
+        return;
+    }
+
+    disable_pic();
+
+    if (ioapic_phys_addr) {
+        init_ioapic(phys_to_virt((uint64_t)ioapic_phys_addr));
+        ioapic_route_irq(1, 33, 0, 0);
+        for (int i = 0; i < 4; i++) {
+            ioapic_route_irq(10 + i, 43, 0, IOAPIC_ACTIVE_LOW | IOAPIC_TRIGGER_LEVEL);
+        }
     }
 }

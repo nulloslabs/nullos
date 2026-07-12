@@ -1,13 +1,12 @@
 *.o
 *.d
 nullkrnl*
-*.unstripped
-*.tar.gz
+*.cpio.gz
 *.iso
 
 iso/main/
-rootfs/main/
-rootfs/packages/
+initrd/main/
+initrd/packages/
 tools/limine-binary/
 tools/limine-binary.tar.xz
 kernel/include/limine/

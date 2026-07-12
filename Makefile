@@ -12,8 +12,8 @@ all: iso
 kernel:
 	@$(MAKE) -C kernel
 
-rootfs:
-	@$(MAKE) -C rootfs
+initrd:
+	@$(MAKE) -C initrd
 
 tools:
 	@$(MAKE) -C tools
@@ -27,14 +27,14 @@ qemu:
 
 clean:
 	@$(MAKE) -C kernel clean
-	@$(MAKE) -C rootfs clean
+	@$(MAKE) -C initrd clean
 	@$(MAKE) -C tools clean
 	@$(MAKE) -C iso clean
 
 mrproper:
 	@$(MAKE) -C kernel mrproper
-	@$(MAKE) -C rootfs mrproper
+	@$(MAKE) -C initrd mrproper
 	@$(MAKE) -C tools mrproper
 	@$(MAKE) -C iso mrproper
 
-.PHONY: all tools kernel rootfs iso qemu clean mrproper
+.PHONY: all tools kernel initrd iso qemu clean mrproper

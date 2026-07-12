@@ -1,8 +1,8 @@
 #include <freestanding/stdint.h>
 #include <main/acpi.h>
 #include <io/hpet.h>
-#include <io/terminal.h>
 #include <main/panic.h>
+#include <main/log.h>
 #include <io/pit.h>
 #include <mm/mm.h>
 
@@ -60,5 +60,5 @@ void init_hpet(void) {
     hpet_period = (uint32_t)(*hpet_capabilities >> 32);
     if (hpet_period == 0) { hpet_base = 0; return; }
     *hpet_config |= 1;
-    printf("hpet: initialized hpet\n");
+    log("initialized hpet");
 }

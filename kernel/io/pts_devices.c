@@ -1,8 +1,7 @@
+#include <freestanding/errno.h>
 #include <io/pts_devices.h>
 #include <io/ptys.h>
-#include <freestanding/errno.h>
-
-extern int get_pts_idx(const char *name);
+#include <io/devpts.h>
 
 uint64_t read_pts_device(const char* name, void* buf, uint64_t count, uint64_t offset) {
     int idx = get_pts_idx(name);

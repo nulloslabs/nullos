@@ -2,7 +2,7 @@
 #include <io/terminal.h>
 #include <io/framebuffer.h>
 #include <main/panic.h>
-#include <main/rootfs.h>
+#include <io/initrd.h>
 #include <io/devices.h>
 #include <mm/mm.h>
 // Are we there yet?
@@ -36,6 +36,8 @@
 #include <io/ptys.h>
 #include <main/rng.h>
 #include <io/serial.h>
+#include <io/tmpfs.h>
+#include <io/ps2_keyboard.h>
 // Lets never do that again.
 
 void kmain(void) {
@@ -52,8 +54,9 @@ void kmain(void) {
     init_mm();
     init_pmm();
     init_vmm();
-    init_rootfs();
+    init_initrd();
     init_devices();
+    init_tmpfs();
     init_ttys();
     init_ptys();
     init_acpi();
@@ -62,10 +65,11 @@ void kmain(void) {
     init_apic();
     init_hpet();
     init_rtc();
-    init_pit(250);
+    init_pit();
     init_rng();
     init_sched();
     init_pci();
+    flush_ps2_keyboard_controller();
     cache_machine_info();
     cache_utsname();
     init_pci_drivers();

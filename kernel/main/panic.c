@@ -2,16 +2,23 @@
 #include <freestanding/stddef.h>
 #include <freestanding/stdarg.h>
 #include <freestanding/signal.h>
-#include <io/terminal.h>
 #include <main/panic.h>
 #include <main/halt.h>
 #include <main/sched.h>
 #include <mm/vmm.h>
 #include <syscalls/syscalls.h>
 #include <syscalls/syscall_impls.h>
+#include <io/terminal.h>
 
+static const char* panic_basename(const char* path) {
+    const char* base = path;
+    for (const char* p = path; *p; p++) {
+        if (*p == '/') base = p + 1;
+    }
+    return base;
+}
 
-__attribute__((noreturn)) void panic(const char *msg, ...) {
+__attribute__((noreturn)) void panicat(const char* file, const char *msg, ...) {
     cli();
 
     va_list args;
@@ -21,7 +28,7 @@ __attribute__((noreturn)) void panic(const char *msg, ...) {
     uint64_t rsp;
     __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
 
-    printf("kernel panic: ");
+    printf("kernel panic at %s: ", panic_basename(file));
 
     vprintf(msg, args);
     printf("\n");
@@ -57,7 +64,6 @@ static int exception_to_signal(int vector) {
     }
 }
 
-
 void exception_panic(exception_frame_t *frame) {
     const char *reason = "";
 
@@ -77,13 +83,6 @@ void exception_panic(exception_frame_t *frame) {
 
     // Check if the fault came from user mode (Ring 3)
     if ((frame->cs & 3) != 0) {
-        static int fault_count = 0;
-        if (++fault_count <= 10) {  // Only log first 10 to avoid spam
-            printf("[exception] pid=%d vector=%d rip=%p err=%llx\n",
-                   current_task_ptr->pid, frame->vector, (void*)frame->rip, 
-                   (unsigned long long)frame->error_code);
-        }
-        
         int sig = exception_to_signal(frame->vector);
 
         current_task_ptr->pending_signals |= (1ULL << sig);
@@ -129,7 +128,7 @@ void exception_panic(exception_frame_t *frame) {
 
     // Kernel fault, panic as before
     cli();
-    printf("kernel panic: %s\n", reason);
+    printf("kernel panic at <unknown>: %s\n", reason);
     printf("\nregisters:\n");
     printf(" rip: %p\n", frame->rip);
     printf(" rsp: %p\n", frame->rsp);

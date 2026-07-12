@@ -32,5 +32,7 @@ typedef struct {
     uint64_t ss;
 } __attribute__((packed)) exception_frame_t;
 
-__attribute__((noreturn)) void panic(const char *msg, ...);
+__attribute__((noreturn)) void panicat(const char* file, const char *msg, ...);
+#define panic(fmt, ...) panicat(__FILE__, fmt, ##__VA_ARGS__)
+
 void exception_panic(exception_frame_t *frame);

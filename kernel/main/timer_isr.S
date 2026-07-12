@@ -45,11 +45,16 @@ isr32:
     mov es, ax
 
     // scheduler
+    // Only poll USB HCDs + schedule a task switch if sched_lock is not held.
+    // Blocking read paths (read_pts, read_pty_master, read_dev_tty, ...)
+    // do "int $32" to yield while holding sched_lock, so this check
+    // prevents those software-interrupt yields from driving USB polling
+    // (which would also incorrectly heat up the typematic repeat timer
+    // and make USB keyboard auto-repeat run way too fast).
     mov eax, [rip + sched_lock]
     test eax, eax
     jnz .skip_switch
 
-    // poll USB (only if we are allowed to switch/preempt)
     mov rbx, rsp
     and rsp, -16
     call poll_usb_hcds

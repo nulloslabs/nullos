@@ -3,6 +3,7 @@
 #include <io/keyboard.h>
 #include <io/io.h>
 #include <io/ttys.h>
+#include <main/log.h>
 
 static uint8_t ps2_repeat_key = 0;
 static int ps2_repeat_timer = 0;
@@ -25,4 +26,9 @@ void handle_ps2_scancode(uint8_t sc) {
     }
     // Feed the active TTY's ring buffer with the ASCII character
     tty_process_scancode(sc);
+}
+
+void flush_ps2_keyboard_controller(void) {
+    while (inb(0x64) & 1) inb(0x60);
+    log("flushed ps2 keyboard controller");
 }

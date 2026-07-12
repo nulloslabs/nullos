@@ -2,11 +2,6 @@
 
 #include <freestanding/stdint.h>
 
-#define USER_ADDR_MAX 0x0000800000000000ULL
-
-#define user_addr_ok(addr, size) ((uint64_t)(addr) < USER_ADDR_MAX && (uint64_t)(size) <= USER_ADDR_MAX - (uint64_t)(addr))
-#define user_ptr_ok(ptr, size) user_addr_ok((uint64_t)(ptr), (uint64_t)(size))
-
 typedef struct {
     uint64_t rax;
     uint64_t rbx;

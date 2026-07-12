@@ -6,8 +6,8 @@
 #include <mm/vmm.h>
 #include <main/panic.h>
 #include <main/limine_req.h>
-#include <io/terminal.h>
 #include <main/spinlocks.h>
+#include <main/log.h>
 
 #define BOOTSTRAP_HEAP_SIZE (16 * 1024 * 1024ULL)
 #define KERNEL_HEAP_BASE    0xffffb00000000000ULL
@@ -185,7 +185,7 @@ void init_mm(void) {
             free_list_start->next    = NULL;
             entry->base   += BOOTSTRAP_HEAP_SIZE;
             entry->length -= BOOTSTRAP_HEAP_SIZE;
-            printf("mm: initialized mm\n");
+            log("initialized mm");
             return;
         }
     }

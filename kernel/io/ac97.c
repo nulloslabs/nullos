@@ -6,6 +6,7 @@
 #include <mm/vmm.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
+#include <main/log.h>
 
 uint16_t nam_base = 0;
 uint16_t nabm_base = 0;
@@ -179,6 +180,8 @@ void init_ac97(pci_device_t *dev) {
     }
 
     pci_request_irq(dev, poll_ac97);
+
+    log("initialized ac97");
 
     ac97_ready = true;
 }

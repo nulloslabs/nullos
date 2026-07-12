@@ -4,8 +4,8 @@
 #include <main/string.h>
 #include <main/machine_info.h>
 #include <io/hpet.h>
-#include <io/terminal.h>
 #include <main/limine_req.h>
+#include <main/log.h>
 
 static uint64_t round_up_ram(uint64_t x) {
     if (x >= (1024ULL * 1024 * 1024)) {
@@ -220,5 +220,5 @@ void cache_machine_info(void) {
     get_total_ram();
     get_free_ram();
     get_used_ram();
-    printf("machine info: cached machine info\n");
+    log("cached machine info");
 }

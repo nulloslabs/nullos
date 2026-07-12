@@ -2,7 +2,7 @@
 #include <main/rng.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
-#include <io/terminal.h>
+#include <main/log.h>
 #include <io/hpet.h>
 #include <io/tsc.h>
 #include <io/pit.h>
@@ -143,5 +143,5 @@ bool is_rng_seeded(void) {
 void init_rng(void) {
     regen_rng();
     rng_seeded = true;
-    printf("rng: initialized rng\n");
+    log("initialized rng");
 }

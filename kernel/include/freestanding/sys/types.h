@@ -2,12 +2,14 @@
 
 #if defined(__i386__)
 typedef long ssize_t;
+typedef long long off64_t;
 typedef unsigned long long dev_t;
 typedef unsigned int nlink_t;
 typedef unsigned long long ino_t;
 typedef long long blkcnt_t;
 #elif defined(__x86_64__)
 typedef int ssize_t;
+typedef long off64_t;
 typedef unsigned long dev_t;
 typedef unsigned long nlink_t;
 typedef unsigned long ino_t;

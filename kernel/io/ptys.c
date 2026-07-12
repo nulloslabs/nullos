@@ -1,13 +1,12 @@
+#include <freestanding/errno.h>
 #include <io/devtmpfs.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
-#include <freestanding/errno.h>
-#include <io/terminal.h>
 #include <io/ptys.h>
 #include <io/ttys.h>
-
 #include <freestanding/signal.h>
 #include <main/sched.h>
+#include <main/log.h>
 
 pty_t ptys[NUM_PTYS];
 spinlock_t pty_lock = SPINLOCK_INIT;
@@ -75,7 +74,16 @@ uint64_t read_pts(int idx, void *buf, uint64_t count, uint64_t offset) {
 
         if (got == 0) {
             if (signal_pending()) return (uint64_t)-EINTR;
+            // Release sched_lock so the timer ISR (isr32) is actually
+            // allowed to: (1) poll the USB keyboard, and (2) switch to
+            // another task. Without this release, syscall_entry holds
+            // sched_lock across the whole read() and isr32 bails out at
+            // its .skip_switch check, so the USB HCDs are never polled
+            // and NO keys (arrows or letters) ever reach userspace.
+            current_task_ptr->state = TASK_READY;
+            spin_unlock(&sched_lock);
             __asm__ volatile("int $32");
+            spin_lock(&sched_lock);
         }
     }
     return (uint64_t)got;
@@ -224,7 +232,13 @@ int read_pty_master(int idx, char *buf, int len) {
 
         if (got == 0) {
             if (signal_pending()) return -EINTR;
+            // See read_pts(): release sched_lock so isr32 can poll the
+            // USB keyboard and call schedule(). Otherwise the kernel spin
+            // here while holding sched_lock, blocking ALL keyboard input.
+            current_task_ptr->state = TASK_READY;
+            spin_unlock(&sched_lock);
             __asm__ volatile("int $32");
+            spin_lock(&sched_lock);
         }
     }
     return got;
@@ -282,4 +296,5 @@ void init_ptys(void) {
         ptys[i].master_refs = 0;
         ptys[i].slave_refs = 0;
     }
+    log("initialized ptys");
 }

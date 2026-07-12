@@ -4,10 +4,11 @@
 #include <main/string.h>
 #include <main/spinlocks.h>
 #include <main/sched.h>
+#include <main/log.h>
 #include <io/ttys.h>
-#include <io/terminal.h>
 #include <io/keyboard.h>
 #include <io/ptys.h>
+#include <io/terminal.h>
 
 static tty_t ttys[NUM_TTYS];
 spinlock_t tty_lock = SPINLOCK_INIT;
@@ -274,6 +275,10 @@ void set_keyboard_tty(int tty_idx) {
     if (tty_idx >= 0 && tty_idx < NUM_TTYS) {
         keyboard_tty = tty_idx;
         keyboard_pty = -1;  // Switching to a real TTY disables PTY keyboard
+        uint64_t irq;
+        spin_lock_irqsave(&tty_lock, &irq);
+        ttys[tty_idx].input.head = ttys[tty_idx].input.tail = 0;
+        spin_unlock_irqrestore(&tty_lock, irq);
     }
 }
 
@@ -306,4 +311,5 @@ void init_ttys(void) {
         ttys[i].termios.c_cc[VEOF]   = 0x04;
         ttys[i].termios.c_cc[VSUSP]  = 0x1A;
     }
+    log("initialized ttys");
 }

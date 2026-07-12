@@ -1,16 +1,16 @@
 #include <freestanding/stdint.h>
 #include <freestanding/stddef.h>
+#include <main/string.h>
+#include <main/acpi.h>
+#include <main/log.h>
 #include <io/uhci.h>
 #include <io/usb.h>
 #include <io/pci.h>
 #include <io/io.h>
-#include <io/terminal.h>
 #include <io/usb_keyboard.h>
+#include <io/hpet.h>
 #include <mm/mm.h>
 #include <mm/vmm.h>
-#include <main/string.h>
-#include <io/hpet.h>
-#include <main/acpi.h>
 
 static uhci_controller_t uhci_controllers[MAX_UHCI_CONTROLLERS];
 static int uhci_count = 0;
@@ -44,11 +44,7 @@ static int uhci_check_td(uhci_td_t *td) {
     return 0; // success
 }
 
-// ============================================================================
-// Transfer stubs
-// ============================================================================
-static int uhci_control_transfer(usb_hcd_t *hcd, usb_device_t *dev,
-                                  usb_setup_packet_t *setup, void *data, uint16_t length) {
+static int uhci_control_transfer(usb_hcd_t *hcd, usb_device_t *dev, usb_setup_packet_t *setup, void *data, uint16_t length) {
     uhci_controller_t *ctrl = (uhci_controller_t *)hcd->hcd_data;
     uint8_t addr = dev->address;
     int low_speed = (dev->speed == USB_SPEED_LOW);
@@ -96,8 +92,7 @@ static int uhci_control_transfer(usb_hcd_t *hcd, usb_device_t *dev,
     return ret;
 }
 
-static int uhci_interrupt_transfer(usb_hcd_t *hcd, usb_device_t *dev,
-                                    uint8_t endpoint, void *data, uint16_t length) {
+static int uhci_interrupt_transfer(usb_hcd_t *hcd, usb_device_t *dev, uint8_t endpoint, void *data, uint16_t length) {
     uhci_controller_t *ctrl = (uhci_controller_t *)hcd->hcd_data;
     uint8_t addr = dev->address;
     int low_speed = (dev->speed == USB_SPEED_LOW);
@@ -133,9 +128,6 @@ static int uhci_bulk_transfer(usb_hcd_t *hcd, usb_device_t *dev,
     return -1;
 }
 
-// ============================================================================
-// Hot-plug: poll ports for connect/disconnect changes
-// ============================================================================
 void poll_uhci_ports(void) {
     for (int c = 0; c < uhci_count; c++) {
         uhci_controller_t *ctrl = &uhci_controllers[c];
@@ -152,7 +144,7 @@ void poll_uhci_ports(void) {
 
                 if (status & UHCI_PORT_CCS) {
                     int ls = (status & UHCI_PORT_LSDA) ? 1 : 0;
-                    printf("uhci[%d]: port %d: device connected (speed=%s)\n", c, i, ls ? "low" : "full");
+                    log("port %d: device connected", i);
 
                     // Clear pending state on new connection
                     ctrl->pending_dev = NULL;
@@ -172,7 +164,7 @@ void poll_uhci_ports(void) {
                     init_usb_keyboard(&ctrl->hcd, ls ? USB_SPEED_LOW : USB_SPEED_FULL, i);
                 } else {
                     // Device disconnected
-                    printf("uhci[%d]: port %d: device disconnected\n", c, i);
+                    log("port %d: device disconnected", i);
                     // Clear pending on disconnect and remove keyboard from list
                     for (int k = 0; k < kbd_total; k++) {
                         if (kbd_list[k].hcd == &ctrl->hcd &&
@@ -238,9 +230,102 @@ void poll_uhci_ports(void) {
     }
 }
 
-// ============================================================================
-// Initialization
-// ============================================================================
+bool is_uhci_ready(void) {
+    return uhci_count > 0;
+}
+
+void rescan_uhci_ports(int ctrl_idx, int port_hint) {
+    int start = (ctrl_idx < 0) ? 0 : ctrl_idx;
+    int end   = (ctrl_idx < 0) ? uhci_count : (ctrl_idx + 1);
+
+    // Clamp to valid range
+    if (start >= uhci_count) start = 0;
+    if (end   > uhci_count)  end   = uhci_count;
+
+    for (int c = start; c < end; c++) {
+        uhci_controller_t *ctrl = &uhci_controllers[c];
+        if (!ctrl->initialized) continue;
+
+        uint16_t io_base = ctrl->io_base;
+        uint16_t port_regs[] = { UHCI_PORTSC1, UHCI_PORTSC2 };
+        uint16_t num_ports = ctrl->num_ports ? ctrl->num_ports : 2;
+
+        int port_start = 0;
+        int port_end = (num_ports < 2) ? num_ports : 2;
+        if (port_hint >= 0 && port_hint < port_end) {
+            port_start = port_hint;
+            port_end = port_hint + 1;
+        }
+
+        for (int i = port_start; i < port_end; i++) {
+            uint16_t status = inw(io_base + port_regs[i]);
+
+            // Skip completely invalid ports (0x0000 = no port register / invalid I/O)
+            if (status == 0x0000) {
+                log("port %d: invalid/absent port register, skipping", i);
+                continue;
+            }
+
+            // Clear any stale CSC from the ownership transition
+            if (status & UHCI_PORT_CSC) {
+                outw(io_base + port_regs[i], status | UHCI_PORT_CSC);
+                status = inw(io_base + port_regs[i]);
+                log("port %d: cleared csc", i);
+            }
+
+            // Skip ports that are already enabled (already enumerated)
+            if (status & UHCI_PORT_PED) {
+                log("port %d: skipping (already enabled)", i);
+                continue;
+            }
+
+            // Wait for CCS to appear — the routing matrix may take a few ms
+            if (!(status & UHCI_PORT_CCS)) {
+                // Quick check: give the routing matrix just 5ms to settle
+                sleep(5);
+                status = inw(io_base + port_regs[i]);
+                if (status & UHCI_PORT_CSC) {
+                    outw(io_base + port_regs[i], status | UHCI_PORT_CSC);
+                    status = inw(io_base + port_regs[i]);
+                }
+                if (!(status & UHCI_PORT_CCS)) {
+                    log("port %d: no device, skipping", i);
+                    continue;
+                }
+            }
+
+            // 100ms debounce per USB 2.0 §9.1.2
+            sleep(100);
+
+            int ls = (status & UHCI_PORT_LSDA) ? 1 : 0;
+            log("port %d: companion handoff device", i);
+
+            ctrl->pending_dev = NULL;
+            ctrl->pending_buf = NULL;
+            if (ctrl->intr_qh) ctrl->intr_qh->element_link_ptr = UHCI_PTR_TERMINATE;
+
+            outw(io_base + port_regs[i], UHCI_PORT_RESET);
+            sleep(50);
+            outw(io_base + port_regs[i], 0);
+            sleep(10);
+            outw(io_base + port_regs[i], UHCI_PORT_PED);
+            sleep(10);
+
+            status = inw(io_base + port_regs[i]);
+            outw(io_base + port_regs[i], status | UHCI_PORT_CSC | UHCI_PORT_PEDC);
+
+            if (!(status & UHCI_PORT_PED)) {
+                log("port %d: port not enabled after handoff reset", i);
+                continue;
+            }
+
+            register_usb_hcd(&ctrl->hcd);
+            init_usb_keyboard(&ctrl->hcd, ls ? USB_SPEED_LOW : USB_SPEED_FULL, i);
+            log("port %d: handoff device enumerated", i);
+        }
+    }
+}
+
 void init_uhci(pci_device_t *dev) {
     if (uhci_count >= MAX_UHCI_CONTROLLERS) return;
 
@@ -248,7 +333,7 @@ void init_uhci(pci_device_t *dev) {
     uint64_t io_base = (uint64_t)(bar4 & ~0x03);
 
     if (io_base == 0) {
-        printf("uhci: no i/o base found\n");
+        log("no io base found");
         return;
     }
 
@@ -319,7 +404,7 @@ void init_uhci(pci_device_t *dev) {
     ctrl->pending_buf = NULL;
     ctrl->pending_td = uhci_alloc_td();
 
-    printf("uhci[%d]: initialized (io=0x%04x)\n", uhci_count, (uint16_t)io_base);
+    log("initialized uhci");
     uhci_count++;
 
     // Initial port scan - detect already-connected devices
@@ -342,110 +427,6 @@ void init_uhci(pci_device_t *dev) {
 
             register_usb_hcd(&ctrl->hcd);
             init_usb_keyboard(&ctrl->hcd, ls ? USB_SPEED_LOW : USB_SPEED_FULL, i);
-        }
-    }
-}
-// ============================================================================
-// Companion query/notification for EHCI handoff
-// ============================================================================
-bool is_uhci_ready(void) {
-    return uhci_count > 0;
-}
-
-// Scan the companion controller at ctrl_idx for newly handed-off devices.
-// ctrl_idx  < 0 => all initialized controllers.
-// port_hint < 0 => all ports on selected controller(s), otherwise only that port.
-void rescan_uhci_ports(int ctrl_idx, int port_hint) {
-    int start = (ctrl_idx < 0) ? 0 : ctrl_idx;
-    int end   = (ctrl_idx < 0) ? uhci_count : (ctrl_idx + 1);
-
-    // Clamp to valid range
-    if (start >= uhci_count) start = 0;
-    if (end   > uhci_count)  end   = uhci_count;
-
-    for (int c = start; c < end; c++) {
-        uhci_controller_t *ctrl = &uhci_controllers[c];
-        if (!ctrl->initialized) continue;
-
-        uint16_t io_base = ctrl->io_base;
-        uint16_t port_regs[] = { UHCI_PORTSC1, UHCI_PORTSC2 };
-        uint16_t num_ports = ctrl->num_ports ? ctrl->num_ports : 2;
-
-        int port_start = 0;
-        int port_end = (num_ports < 2) ? num_ports : 2;
-        if (port_hint >= 0 && port_hint < port_end) {
-            port_start = port_hint;
-            port_end = port_hint + 1;
-        }
-
-        for (int i = port_start; i < port_end; i++) {
-            uint16_t status = inw(io_base + port_regs[i]);
-            printf("uhci[%d]: port %d: initial status=0x%04x (ccs=%d, ped=%d, csc=%d)\n",
-                   c, i, status, !!(status & UHCI_PORT_CCS), !!(status & UHCI_PORT_PED), !!(status & UHCI_PORT_CSC));
-
-            // Skip completely invalid ports (0x0000 = no port register / invalid I/O)
-            if (status == 0x0000) {
-                printf("uhci[%d]: port %d: invalid/absent port register (0x0000), skipping\n", c, i);
-                continue;
-            }
-
-            // Clear any stale CSC from the ownership transition
-            if (status & UHCI_PORT_CSC) {
-                outw(io_base + port_regs[i], status | UHCI_PORT_CSC);
-                status = inw(io_base + port_regs[i]);
-                printf("uhci[%d]: port %d: cleared csc, new status=0x%04x\n", c, i, status);
-            }
-
-            // Skip ports that are already enabled (already enumerated)
-            if (status & UHCI_PORT_PED) {
-                printf("uhci[%d]: port %d: skipping (already enabled)\n", c, i);
-                continue;
-            }
-
-            // Wait for CCS to appear — the routing matrix may take a few ms
-            if (!(status & UHCI_PORT_CCS)) {
-                // Quick check: give the routing matrix just 5ms to settle
-                sleep(5);
-                status = inw(io_base + port_regs[i]);
-                if (status & UHCI_PORT_CSC) {
-                    outw(io_base + port_regs[i], status | UHCI_PORT_CSC);
-                    status = inw(io_base + port_regs[i]);
-                }
-                if (!(status & UHCI_PORT_CCS)) {
-                    printf("uhci[%d]: port %d: no device, skipping\n", c, i);
-                    continue;
-                }
-            }
-
-            // 100ms debounce per USB 2.0 §9.1.2
-            sleep(100);
-
-            int ls = (status & UHCI_PORT_LSDA) ? 1 : 0;
-            printf("uhci[%d]: port %d: companion handoff device (speed=%s)\n",
-                   c, i, ls ? "low" : "full");
-
-            ctrl->pending_dev = NULL;
-            ctrl->pending_buf = NULL;
-            if (ctrl->intr_qh) ctrl->intr_qh->element_link_ptr = UHCI_PTR_TERMINATE;
-
-            outw(io_base + port_regs[i], UHCI_PORT_RESET);
-            sleep(50);
-            outw(io_base + port_regs[i], 0);
-            sleep(10);
-            outw(io_base + port_regs[i], UHCI_PORT_PED);
-            sleep(10);
-
-            status = inw(io_base + port_regs[i]);
-            outw(io_base + port_regs[i], status | UHCI_PORT_CSC | UHCI_PORT_PEDC);
-
-            if (!(status & UHCI_PORT_PED)) {
-                printf("uhci[%d]: port %d: port not enabled after handoff reset\n", c, i);
-                continue;
-            }
-
-            register_usb_hcd(&ctrl->hcd);
-            init_usb_keyboard(&ctrl->hcd, ls ? USB_SPEED_LOW : USB_SPEED_FULL, i);
-            printf("uhci[%d]: port %d: handoff device enumerated\n", c, i);
         }
     }
 }

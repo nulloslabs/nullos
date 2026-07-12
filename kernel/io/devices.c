@@ -1,15 +1,16 @@
 #include <freestanding/errno.h>
-#include <io/devices.h>
-#include <io/devtmpfs.h>
-#include <io/ttys.h>
-#include <io/ptys.h>
-#include <io/terminal.h>
-#include <io/keyboard.h>
 #include <main/string.h>
 #include <main/limine_req.h>
 #include <main/panic.h>
 #include <main/strings.h>
 #include <main/rng.h>
+#include <main/log.h>
+#include <io/terminal.h>
+#include <io/devices.h>
+#include <io/devtmpfs.h>
+#include <io/ttys.h>
+#include <io/ptys.h>
+#include <io/keyboard.h>
 #include <syscalls/syscall_impls.h>
 
 devtmpfs_device_t devtmpfs_devices[MAX_DEVTMPFS_DEVICES];
@@ -274,5 +275,5 @@ void init_devices(void) {
 
     register_device("urandom", read_urandom, write_urandom);
 
-    printf("devices: initialized devices\n");
+    log("initialized devices");
 }

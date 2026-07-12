@@ -3,9 +3,9 @@
 #include <freestanding/stdarg.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
+#include <main/log.h>
 #include <io/io.h>
 #include <io/serial.h>
-#include <io/terminal.h>
 
 static spinlock_t serial_lock = SPINLOCK_INIT;
 static const uint16_t serial_ports[] = { COM1, COM2, COM3, COM4 };
@@ -306,5 +306,5 @@ void init_serial_ports(void) {
         // Enable the port for use.
         outb(port + 4, 0x0F);
     }
-    printf("serial: initialized serial ports\n");
+    log("initialized serial ports");
 }

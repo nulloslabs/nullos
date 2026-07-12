@@ -1,10 +1,11 @@
 #include <freestanding/stdint.h>
+#include <freestanding/errno.h>
 #include <main/fd.h>
 #include <main/string.h>
-#include <freestanding/errno.h>
 #include <main/sched.h>
 #include <io/ptys.h>
 #include <io/sockets.h>
+#include <mm/mm.h>
 
 flock_obj_t global_flocks[128];
 
@@ -69,8 +70,13 @@ int free_fd(fd_table_t *table, int fd) {
         int idx = pty_slave_path_idx(table->entries[fd].path);
         if (idx >= 0)
             release_pty_slave(idx);
-    } else if (table->entries[fd].type == FD_PIPE || table->entries[fd].type == FD_SOCKET) { release_unix_handle((unix_handle_t *)table->entries[fd].handle); 
-    } else if (table->entries[fd].type == FD_FILE && table->entries[fd].handle != NULL) { release_flock_obj((flock_obj_t *)table->entries[fd].handle); }
+    } else if (table->entries[fd].type == FD_PIPE || table->entries[fd].type == FD_SOCKET) {
+        release_unix_handle((unix_handle_t *)table->entries[fd].handle);
+    } else if (table->entries[fd].type == FD_FILE && table->entries[fd].handle != NULL) {
+        release_flock_obj((flock_obj_t *)table->entries[fd].handle);
+    } else if (table->entries[fd].type == FD_EPOLL) {
+        free(table->entries[fd].handle);
+    }
     table->entries[fd].open   = false;
     table->entries[fd].type   = FD_NONE;
     table->entries[fd].offset = 0;

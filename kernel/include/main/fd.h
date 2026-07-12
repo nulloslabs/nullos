@@ -9,13 +9,16 @@
 // File descriptor types
 typedef enum {
     FD_NONE = 0,
-    FD_FILE = 1,        // rootfs file
+    FD_FILE = 1,        // initrd file
     FD_STREAM = 2,      // std(in/out/err) device
     FD_DEV = 3,         // char device
     FD_PTY_MASTER = 4,  // open pty master (path encodes index as "ptm:N")
     FD_PIPE = 5,
     FD_SOCKET = 6,
     FD_PROC = 7,        // /proc node (regular file: maps, mounts; offset-tracked)
+    FD_EPOLL = 8,       // epoll instance
+    FD_EPOLL_H = 9,     // (reserved)
+    FD_TMPFS = 10,      // file/dir on a tmpfs mount (handle stores inode index)
 } fd_type_t;
 
 typedef struct {

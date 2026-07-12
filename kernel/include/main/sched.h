@@ -45,6 +45,7 @@ typedef struct {
     pid_t waiting_for;
     char cwd[256];
     char exe[256];
+    char name[16];   // thread/process name (prctl PR_SET_NAME), NUL-terminated, max 16 bytes incl. NUL
     vma_table_t vmas;
     uint64_t auxv_blob[16];
     int auxv_blob_words;

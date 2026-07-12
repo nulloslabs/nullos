@@ -9,14 +9,27 @@ include config.mk
 
 .DEFAULT_GOAL := all
 
-all: rootfs
+all: initrd
 
-rootfs:
-	@if [ ! -f rootfs.tar.gz ] || [ ! -d main ] || [ Makefile -nt rootfs.tar.gz ] || [ config.mk -nt rootfs.tar.gz ] || [ -n "$$(find main -newer rootfs.tar.gz 2>/dev/null | head -1)" ]; then \
+initrd:
+	@current_names="$$(for p in $(PACKAGE_NAMES); do basename $$p; done)"; \
+	cached_names="$$(ls packages/*.pkg.tar.zst 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.pkg\.tar\.zst$$//')"; \
+	missing="$$(for n in $$current_names; do echo "$$cached_names" | grep -qxF "$$n" || echo missing_$$n; done)"; \
+	extra="$$(for n in $$cached_names; do echo "$$current_names" | grep -qxF "$$n" || echo extra_$$n; done)"; \
+	if [ -n "$$extra" ]; then \
+		for n in $$cached_names; do \
+			echo "$$current_names" | grep -qxF "$$n" || rm -f packages/$$n.pkg.tar.zst; \
+		done; \
+	fi; \
+	if [ ! -f $(OUTFILE) ] || [ ! -d main ] || [ Makefile -nt $(OUTFILE) ] || [ config.mk -nt $(OUTFILE) ] || [ -n "$$missing" ] || [ -n "$$extra" ] || [ -n "$$(find main -newer $(OUTFILE) 2>/dev/null | head -1)" ]; then \
+		rm -rf main && \
 		mkdir -p main packages && \
-		mkdir -p main/home main/root main/dev main/proc main/etc main/var main/usr && \
+		mkdir -p main/home main/root main/dev main/proc main/etc main/var main/usr main/tmp main/run && \
 		mkdir -p main/home/user main/etc/init.d main/usr/bin main/usr/sbin main/usr/lib main/usr/include && \
-		mkdir -p main/var/db main/var/cache main/var/log main/var/lib && \
+		mkdir -p main/var/db main/var/cache main/var/log main/var/lib main/var/tmp && \
+		chmod 1777 main/tmp main/var/tmp && \
+		chmod 755 main/run && \
+		ln -snf ../run main/var/run && \
 		ln -snf usr/bin main/bin && \
 		ln -snf usr/sbin main/sbin && \
 		ln -snf usr/lib main/lib && \
@@ -34,6 +47,8 @@ rootfs:
 			'mkdir -p /dev/pts' \
 			'mount -t devpts devpts /dev/pts' \
 			'mount -t proc proc /proc' \
+			'mount -t tmpfs tmpfs /tmp' \
+			'mount -t tmpfs run /run' \
 			> main/etc/init.d/rcS && \
 		chmod +x main/etc/init.d/rcS && \
 		printf '%s\n' \
@@ -48,19 +63,18 @@ rootfs:
 		chmod 644 main/etc/passwd main/etc/group && \
 		chmod 600 main/etc/shadow && \
 		printf "\nWelcome to NullOS!\n\nAn OS that's fast, secure and private.\n\n" > main/etc/motd && \
-		if [ ! -f rootfs.tar.gz ] || [ -n "$$(for p in $(PACKAGE_NAMES); do name=$$(basename $$p); [ -f packages/$$name.pkg.tar.zst ] || echo missing_$$name; [ -f packages/$$name.pkg.tar.zst ] && [ packages/$$name.pkg.tar.zst -nt rootfs.tar.gz ] && echo stale_$$name; done)" ]; then \
-			for p in $(PACKAGE_NAMES); do \
-				repo=$$(dirname $$p) && \
-				name=$$(basename $$p) && \
-				curl -sLo packages/$$name.pkg.tar.zst https://archlinux.org/packages/$$repo/x86_64/$$name/download/ && \
-				if [ "$(KERNEL)" = "Darwin" ]; then \
-					docker run --rm -v "$(PWD)":"$(PWD)" -w "$(PWD)" alpine sh -c 'apk add --no-cache zstd >/dev/null 2>&1 && tar --zstd -xf packages/$$name.pkg.tar.zst -C main'; \
-				else \
-					tar --zstd -xf packages/$$name.pkg.tar.zst -C main; \
-				fi; \
-			done; \
-		fi; \
-		find main -maxdepth 1 -name '.*' ! -name '.' ! -name '..' -exec rm -rf {} + && \
+		for p in $(PACKAGE_NAMES); do \
+			repo=$$(dirname $$p) && \
+			name=$$(basename $$p) && \
+			[ -f packages/$$name.pkg.tar.zst ] || \
+			(curl -fsL -o packages/$$name.pkg.tar.zst https://archlinux.org/packages/$$repo/x86_64/$$name/download/ || \
+			 curl -fsL -o packages/$$name.pkg.tar.zst https://archlinux.org/packages/$$repo/any/$$name/download/) && \
+			if [ "$(KERNEL)" = "Darwin" ]; then \
+				docker run --rm -v "$(PWD)":"$(PWD)" -w "$(PWD)" alpine sh -c 'apk add --no-cache zstd >/dev/null 2>&1 && tar --zstd -xf packages/$$name.pkg.tar.zst -C main'; \
+			else \
+				tar --zstd -xf packages/$$name.pkg.tar.zst -C main; \
+			fi; \
+		done && \
 		if [ "$(KERNEL)" = "Darwin" ]; then \
 			docker run --rm -v "$(PWD)":"$(PWD)" -w "$(PWD)" alpine sh -c ' \
 				main/usr/bin/busybox --list-full | grep -v "^bin/busybox$$" | while read applet; do \
@@ -78,18 +92,18 @@ rootfs:
 		fi && \
 		(cd main && ln -sf sbin/init init) && \
 		rm -f main/linuxrc && \
-		printf "  %-7s %s\n" "TAR" "$(SUBDIR)/rootfs.tar.gz" && \
-		$(TAR) $(TARFLAGS) -f $(OUTFILE) -C main .; \
+		printf "  %-7s %s\n" "CPIO" "$(SUBDIR)/$(OUTFILE)" && \
+		(cd main && find . -print0 | $(CPIO) $(CPIOFLAGS) 2>/dev/null) | gzip -9 > $(OUTFILE); \
 	else \
-		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/rootfs.tar.gz is already up to date"; \
+		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/$(OUTFILE) is already up to date"; \
 	fi
 
 clean:
-	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/rootfs.tar.gz"
-	@rm -rf rootfs.tar.gz
+	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/$(OUTFILE)"
+	@rm -rf $(OUTFILE)
 
 mrproper: clean
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/ $(SUBDIR)/packages/"
 	@rm -rf main packages
 
-.PHONY: all rootfs clean mrproper
+.PHONY: all initrd clean mrproper

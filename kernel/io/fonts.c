@@ -1,5 +1,5 @@
 #include <freestanding/stdint.h>
-#include <main/rootfs.h>
+#include <io/initrd.h>
 #include <io/fonts.h>
 #include <io/terminal.h>
 #include <main/string.h>
@@ -7,6 +7,7 @@
 #include <limine/limine.h>
 #include <main/limine_req.h>
 #include <main/halt.h>
+#include <main/log.h>
 
 unsigned char current_font[16384];
 uint8_t current_font_w = 0;
@@ -686,7 +687,7 @@ void change_font(const char *path, uint8_t w, uint8_t h) {
     if (!w || !h) return; // Sanity check if width or height is 0
     if (devtmpfs_device_exists(path)) return;
 
-    rootfs_file_t file = read_rootfs(path);
+    initrd_file_t file = read_initrd(path);
 
     if (!file.data || file.size == 0 || file.size > 16384) return; // Sanity check if the file dosent exist, empty or too big
     if (256 * h * w / 8 != file.size) return; // Sanity check if the filesize is valid or not
@@ -714,5 +715,5 @@ void init_default_font(void) {
         // We can't print the output without the font, so just silently halt
         halt();
     }
-    printf("fonts: initialized %dx%d font\n", current_font_w, current_font_h); // Now we can use functions like printf() again!
+    log("initialized %dx%d font", current_font_w, current_font_h); // Now we can use functions like log() again!
 }

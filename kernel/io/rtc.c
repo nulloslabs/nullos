@@ -1,8 +1,8 @@
 #include <freestanding/stdint.h>
 #include <io/io.h>
 #include <io/rtc.h>
-#include <io/terminal.h>
 #include <main/timekeeping.h>
+#include <main/log.h>
 
 #define CMOS_ADDR 0x70
 #define CMOS_DATA 0x71
@@ -145,10 +145,10 @@ uint64_t read_rtc_unix_time(void) {
 void init_rtc(void) {
     uint64_t unix_seconds = read_rtc_unix_time();
     if (!unix_seconds) {
-        printf("rtc: failed to read rtc\n");
+        log("failed to read rtc");
         return;
     }
 
     time_seed_realtime_us(unix_seconds * 1000000ULL);
-    printf("rtc: initialized rtc\n");
+    log("initialized rtc");
 }

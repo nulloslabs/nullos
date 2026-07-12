@@ -1,8 +1,8 @@
 #include <main/sse.h>
 #include <main/string.h>
 #include <main/machine_info.h>
-#include <io/terminal.h>
 #include <main/panic.h>
+#include <main/log.h>
 
 extern void save_fpu_xsave(void *area);
 extern void save_fpu_fxsave(void *area);
@@ -82,5 +82,5 @@ void init_sse_for_cpu(void) {
 
 void init_sse(void) {
     init_sse_for_cpu();
-    printf("sse: enabled sse\n");
+    log("enabled sse");
 }

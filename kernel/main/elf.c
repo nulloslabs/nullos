@@ -2,14 +2,13 @@
 #include <freestanding/sys/types.h>
 #include <freestanding/sys/stat.h>
 #include <main/elf.h>
-#include <main/rootfs.h>
+#include <io/initrd.h>
 #include <main/msr.h>
 #include <main/spinlocks.h>
 #include <main/rng.h>
 #include <main/string.h>
 #include <io/devtmpfs.h>
 #include <io/procfs.h>
-#include <io/terminal.h>
 #include <mm/mm.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
@@ -20,6 +19,15 @@ static uint64_t aslr_random_offset(uint64_t max_pages) {
     uint64_t val;
     get_random_bytes(&val, sizeof(val));
     return (val % max_pages) * PAGE_SIZE;
+}
+
+// Set the task's thread name from the basename of its exe path
+// (mirrors Linux's PR_SET_NAME default of the executable's basename).
+static void set_task_name_from_path(task_t *t, const char *path) {
+    const char *base = path;
+    for (const char *p = path; *p; p++) if (*p == '/') base = p + 1;
+    strncpy(t->name, base, sizeof(t->name) - 1);
+    t->name[sizeof(t->name) - 1] = '\0';
 }
 
 static uint64_t setup_stack(vmm_context_t *ctx, uint64_t v_rsp, char **argv, char **envp, elf64_auxv_t *auxv) {
@@ -210,7 +218,7 @@ static int load_elf_segments(vmm_context_t *ctx, uint8_t *data,
 int execute_elf(const char *path, char **argv, char **envp) {
     if (devtmpfs_device_exists(path)) return -EACCES;
 
-    rootfs_file_t file = read_rootfs(path);
+    initrd_file_t file = read_initrd(path);
     if (!file.data) return -ENOENT;
 
     if (S_ISDIR(file.mode)) return -EISDIR;
@@ -254,7 +262,7 @@ int execute_elf(const char *path, char **argv, char **envp) {
     uint64_t interp_base = 0;
 
     if (interp_path) {
-        rootfs_file_t ifile = read_rootfs(interp_path);
+        initrd_file_t ifile = read_initrd(interp_path);
         if (ifile.data) {
             uint8_t *idata = (uint8_t *)ifile.data;
             elf64_ehdr_t *iehdr = (elf64_ehdr_t *)idata;
@@ -304,6 +312,7 @@ int execute_elf(const char *path, char **argv, char **envp) {
         tasks[pid].brk_start = heap_start;
         strncpy(tasks[pid].exe, path, sizeof(tasks[pid].exe) - 1);
         tasks[pid].exe[sizeof(tasks[pid].exe) - 1] = '\0';
+        set_task_name_from_path(&tasks[pid], path);
         // Hand off the VMA table we accumulated during loading.
         memcpy(&tasks[pid].vmas, &local_vmas, sizeof(vma_table_t));
         // Save auxv for /proc/<pid>/auxv
@@ -335,7 +344,7 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     if (devtmpfs_device_exists(path)) return -EACCES;
     if (is_procfs_path(path)) return -EACCES;
 
-    rootfs_file_t file = read_rootfs(path);
+    initrd_file_t file = read_initrd(path);
     if (!file.data) return -ENOENT;
 
     if (S_ISDIR(file.mode)) return -EISDIR;
@@ -379,7 +388,7 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     uint64_t interp_base = 0;
 
     if (interp_path) {
-        rootfs_file_t ifile = read_rootfs(interp_path);
+        initrd_file_t ifile = read_initrd(interp_path);
         if (ifile.data) {
             uint8_t *idata = (uint8_t *)ifile.data;
             elf64_ehdr_t *iehdr = (elf64_ehdr_t *)idata;
@@ -426,6 +435,7 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     // Record the new exe path and splice in the freshly-built VMA table.
     strncpy(current_task_ptr->exe, path, sizeof(current_task_ptr->exe) - 1);
     current_task_ptr->exe[sizeof(current_task_ptr->exe) - 1] = '\0';
+    set_task_name_from_path(current_task_ptr, path);
     memcpy(&current_task_ptr->vmas, &local_vmas, sizeof(vma_table_t));
     // Save auxv for /proc/<pid>/auxv
     {

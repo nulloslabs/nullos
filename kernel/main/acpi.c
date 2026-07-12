@@ -5,10 +5,16 @@
 #include <main/acpi.h>
 #include <main/madt.h>
 #include <io/hpet.h>
-#include <io/terminal.h>
 #include <main/halt.h>
 #include <main/spinlocks.h>
+#include <main/log.h>
 #include <mm/mm.h>
+
+/*
+  I do not know what I did here.
+  I refused to port uACPI.
+  Welp, was it worth it? One word: Yes.
+ */
 
 static struct fadt_descriptor* fadt = NULL;
 static uint16_t slp_typa = 0xFFFF;
@@ -958,33 +964,9 @@ static void parse_s5(void) {
     }
 }
 
-void init_acpi(void) {
-    if (!rsdp_req.response || !rsdp_req.response->address) return;
-    struct rsdp_descriptor* rsdp = (struct rsdp_descriptor*)rsdp_req.response->address;
-    struct acpi_header* root = (rsdp->revision >= 2 && rsdp->xsdt_address)
-        ? (struct acpi_header*)(rsdp->xsdt_address + hhdm_offset)
-        : (struct acpi_header*)((uint64_t)rsdp->rsdt_address + hhdm_offset);
-    acpi_root = root;
-    fadt = (struct fadt_descriptor*)find_acpi_table("FACP");
-
-    if (!fadt) return;
-    if (fadt->smi_cmd && fadt->acpi_enable) {
-        outb(fadt->smi_cmd, fadt->acpi_enable);
-        struct acpi_gas pm1a = {
-            .address_space_id   = 1,
-            .register_bit_width = 16,
-            .address            = fadt->pm1a_cnt_blk
-        };
-        for (int i = 0; i < 300; i++) {
-            if (read_acpi(&pm1a) & SCI_EN) break;
-            for (volatile int d = 0; d < 10000; d++) io_wait(); // Use IO wait because HPET isn't available right now.
-        }
-    }
-    parse_s5();
-    init_aml();
-    enumerate_acpi_devices();
-    printf("acpi: initialized acpi\n");
-}
+/*
+ Is poweroff() and reboot() supposed to belong in here??
+ */
 
 void poweroff(void) {
     if (!fadt) halt();
@@ -999,7 +981,7 @@ void poweroff(void) {
     if (fadt->header.revision >= 2 && fadt->x_pm1a_cnt_blk.address) pm1a = fadt->x_pm1a_cnt_blk;
     if (fadt->header.revision >= 2 && fadt->x_pm1b_cnt_blk.address) pm1b = fadt->x_pm1b_cnt_blk;
 
-    // 1. Call \_PTS(5) — ACPI spec requires this before entering S5
+    // 1. Call \_PTS(5): ACPI spec requires this before entering S5
     aml_obj_t *pts = ns_find("\\", "_PTS");
     if (pts && pts->type == AML_METHOD) {
         call_method1("_PTS", "\\", 5);
@@ -1049,4 +1031,32 @@ void reboot(void) {
     outb(0xCF9, 0x06);
     // If nothing worked, halt.
     halt();
+}
+
+void init_acpi(void) {
+    if (!rsdp_req.response || !rsdp_req.response->address) return;
+    struct rsdp_descriptor* rsdp = (struct rsdp_descriptor*)rsdp_req.response->address;
+    struct acpi_header* root = (rsdp->revision >= 2 && rsdp->xsdt_address)
+        ? (struct acpi_header*)(rsdp->xsdt_address + hhdm_offset)
+        : (struct acpi_header*)((uint64_t)rsdp->rsdt_address + hhdm_offset);
+    acpi_root = root;
+    fadt = (struct fadt_descriptor*)find_acpi_table("FACP");
+
+    if (!fadt) return;
+    if (fadt->smi_cmd && fadt->acpi_enable) {
+        outb(fadt->smi_cmd, fadt->acpi_enable);
+        struct acpi_gas pm1a = {
+            .address_space_id   = 1,
+            .register_bit_width = 16,
+            .address            = fadt->pm1a_cnt_blk
+        };
+        for (int i = 0; i < 300; i++) {
+            if (read_acpi(&pm1a) & SCI_EN) break;
+            for (volatile int d = 0; d < 10000; d++) io_wait(); // Use IO wait because HPET isn't available right now.
+        }
+    }
+    parse_s5();
+    init_aml();
+    enumerate_acpi_devices();
+    log("initialized acpi");
 }

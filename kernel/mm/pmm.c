@@ -1,8 +1,8 @@
 #include <mm/pmm.h>
 #include <main/string.h>
 #include <main/limine_req.h>
-#include <io/terminal.h>
 #include <main/spinlocks.h>
+#include <main/log.h>
 
 static uint8_t* bitmap = NULL;
 static uint8_t* ref_counts = NULL;
@@ -81,6 +81,26 @@ void pfree(void *phys_addr) {
     spin_unlock_irqrestore(&pmm_lock, flags);
 }
 
+void pfree_range(void *phys_addr, uint64_t size) {
+    if (!phys_addr || size == 0) return;
+    uint64_t start = (uint64_t)phys_addr;
+    // Align the start UP to a page boundary so we never free a partially-
+    // shared page (e.g. a page holding tail data we don't own).
+    uint64_t start_page = (start + PAGE_SIZE - 1) & ~((uint64_t)PAGE_SIZE - 1);
+    uint64_t end_page   = (start + size) & ~((uint64_t)PAGE_SIZE - 1);
+
+    uint64_t flags;
+    spin_lock_irqsave(&pmm_lock, &flags);
+    for (uint64_t pa = start_page; pa < end_page; pa += PAGE_SIZE) {
+        uint64_t page_idx = pa / PAGE_SIZE;
+        if (page_idx < max_pages && ref_counts[page_idx] > 0) {
+            ref_counts[page_idx] = 0;
+            bitmap[page_idx / 8] &= ~(1 << (page_idx % 8));
+        }
+    }
+    spin_unlock_irqrestore(&pmm_lock, flags);
+}
+
 void pref(void *phys_addr) {
     uint64_t flags;
     spin_lock_irqsave(&pmm_lock, &flags);
@@ -138,5 +158,5 @@ void init_pmm(void) {
             }
         }
     }
-    printf("pmm: initialized pmm\n");
+    log("initialized pmm");
 }

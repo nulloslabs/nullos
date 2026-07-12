@@ -1,20 +1,13 @@
-#include <io/sockets.h>
 #include <freestanding/errno.h>
-#include <main/spinlocks.h>
 #include <main/string.h>
+#include <main/spinlocks.h>
 #include <main/sched.h>
+#include <io/sockets.h>
+#include <io/tmpfs.h>
 #include <mm/mm.h>
 
 static spinlock_t registry_lock = SPINLOCK_INIT;
 static unix_binding_t bindings[UNIX_MAX_BINDINGS];
-
-static void yield_cpu(void) {
-    current_task_ptr->state = TASK_READY;
-    spin_unlock(&sched_lock);
-    __asm__ volatile("int $32");
-    spin_lock(&sched_lock);
-    current_task_ptr->state = TASK_RUNNING;
-}
 
 static unix_channel_t *create_unix_channel(void) {
     unix_channel_t *ch = malloc(sizeof(unix_channel_t));
@@ -173,7 +166,7 @@ int create_unix_socket(int domain, int type, int protocol, unix_handle_t **out) 
     unix_handle_t *h;
     if (!out) return -EINVAL;
     if (domain != UNIX_AF_UNIX && domain != UNIX_AF_LOCAL) return -EAFNOSUPPORT;
-    if (type != UNIX_SOCK_STREAM) return -ESOCKTNOSUPPORT;
+    if (type != UNIX_SOCK_STREAM && type != UNIX_SOCK_DGRAM) return -ESOCKTNOSUPPORT;
     if (protocol != 0) return -EPROTONOSUPPORT;
     h = create_unix_handle(UH_SOCKET);
     if (!h) return -ENOMEM;
@@ -236,7 +229,11 @@ int64_t read_unix_handle(unix_handle_t *h, void *buf, size_t count, uint32_t fd_
         if (done || count == 0) return (int64_t)done;
         if (writers == 0) return 0;
         if (fd_flags & O_NONBLOCK) return -EAGAIN;
-        yield_cpu();
+        current_task_ptr->state = TASK_READY;
+        spin_unlock(&sched_lock);
+        __asm__ volatile("int $32");
+        spin_lock(&sched_lock);
+        current_task_ptr->state = TASK_RUNNING;
     }
     return (int64_t)done;
 }
@@ -265,7 +262,11 @@ int64_t write_unix_handle(unix_handle_t *h, const void *buf, size_t count, uint3
 
         if (done == count || count == 0) return (int64_t)done;
         if (fd_flags & O_NONBLOCK) return done ? (int64_t)done : -EAGAIN;
-        yield_cpu();
+        current_task_ptr->state = TASK_READY;
+        spin_unlock(&sched_lock);
+        __asm__ volatile("int $32");
+        spin_lock(&sched_lock);
+        current_task_ptr->state = TASK_RUNNING;
     }
     return (int64_t)done;
 }
@@ -277,6 +278,24 @@ static int sockaddr_path(const void *addr, uint32_t addrlen, char *out, size_t o
     if (un->sun_family != UNIX_AF_UNIX && un->sun_family != UNIX_AF_LOCAL) return -EAFNOSUPPORT;
     max = addrlen - sizeof(uint16_t);
     if (max >= out_size) max = out_size - 1;
+
+    /* Abstract sockets: sun_path[0] == '\0'. Encode as '@' + hex of bytes */
+    if (un->sun_path[0] == '\0') {
+        const unsigned char *p = (const unsigned char *)un->sun_path;
+        size_t w = 0;
+        if (out_size < 2) return -EINVAL;
+        out[w++] = '@';
+        for (size_t i = 1; i < max && (w + 2) < out_size; i++) {
+            const char *hex = "0123456789abcdef";
+            unsigned char b = p[i];
+            out[w++] = hex[(b >> 4) & 0xf];
+            out[w++] = hex[b & 0xf];
+        }
+        out[w] = '\0';
+        if (!out[0]) return -EINVAL;
+        return 0;
+    }
+
     memcpy(out, un->sun_path, max);
     out[max] = '\0';
     if (!out[0]) return -EINVAL;
@@ -310,6 +329,15 @@ int bind_unix_socket(unix_handle_t *h, const void *addr, uint32_t addrlen) {
     strncpy(h->path, path, sizeof(h->path) - 1);
     h->path[sizeof(h->path) - 1] = '\0';
     spin_unlock_irqrestore(&registry_lock, flags);
+    /* Create a tmpfs socket node for filesystem-backed (non-abstract) sockets */
+    if (path[0] != '@') {
+        int in = create_tmpfs_socket(path, 0777, current_task_ptr->euid, current_task_ptr->egid);
+        if (in < 0) {
+            /* rollback registry entry */
+            unbind_unix_registry(h);
+            return in;
+        }
+    }
     return 0;
 }
 
@@ -401,7 +429,11 @@ int accept_unix_socket(unix_handle_t *h, unix_handle_t **out) {
             return 0;
         }
         spin_unlock_irqrestore(&h->lock, flags);
-        yield_cpu();
+        current_task_ptr->state = TASK_READY;
+        spin_unlock(&sched_lock);
+        __asm__ volatile("int $32");
+        spin_lock(&sched_lock);
+        current_task_ptr->state = TASK_RUNNING;
     }
 }
 

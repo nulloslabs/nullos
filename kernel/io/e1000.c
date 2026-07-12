@@ -5,8 +5,8 @@
 #include <mm/vmm.h>
 #include <main/string.h>
 #include <io/net.h>
-#include <io/terminal.h>
 #include <main/spinlocks.h>
+#include <main/log.h>
 
 static uint8_t mac_addr[6];
 static volatile uint8_t *e1000_mmio;
@@ -192,6 +192,9 @@ void init_e1000(pci_device_t *dev) {
     read_mmio32(E1000_ICR); // clear pending
 
     pci_request_irq(dev, poll_e1000);
+
+    log("initialized e1000");
+
     e1000_ready = true;
 
     static net_device_t net_dev;

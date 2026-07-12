@@ -12,17 +12,17 @@ all: iso
 kernel:
 	@$(MAKE) -C ../kernel
 
-rootfs:
-	@$(MAKE) -C ../rootfs
+initrd:
+	@$(MAKE) -C ../initrd
 
 tools:
 	@$(MAKE) -C ../tools
 
-iso: tools kernel rootfs
+iso: tools kernel initrd
 	@if [ ! -f $(OUTFILE) ] || [ ../kernel/nullkrnl -nt $(OUTFILE) ] || \
 	    [ Makefile -nt $(OUTFILE) ] || \
 	    [ config.mk -nt $(OUTFILE) ] || \
-	    [ ../rootfs/rootfs.tar.gz -nt $(OUTFILE) ] || \
+	    [ ../initrd/initrd.cpio.gz -nt $(OUTFILE) ] || \
 	    [ ../config/limine.conf -nt $(OUTFILE) ] || \
 		[ ../tools/limine-binary/limine -nt $(OUTFILE) ] || \
 	    [ ../tools/limine-binary/limine-bios.sys -nt $(OUTFILE) ] || [ ../tools/limine-binary/limine-bios-cd.bin -nt $(OUTFILE) ] || [ ../tools/limine-binary/limine-uefi-cd.sys -nt $(OUTFILE) ] || \
@@ -32,7 +32,7 @@ iso: tools kernel rootfs
 		cp ../tools/limine-binary/limine-bios.sys ../tools/limine-binary/limine-bios-cd.bin ../tools/limine-binary/limine-uefi-cd.bin main/boot && \
 		cp ../tools/limine-binary/BOOTX64.EFI main/EFI/BOOT && \
 		cp ../kernel/nullkrnl main/boot && \
-		cp ../rootfs/rootfs.tar.gz main/boot && \
+		cp ../initrd/initrd.cpio.gz main/boot && \
 		cp ../config/limine.conf main/boot && \
 		$(XORRISO) -as mkisofs $(XORRISOFLAGS) main -o $(OUTFILE) > /dev/null 2>&1 && \
 		../tools/limine-binary/limine bios-install $(OUTFILE) > /dev/null 2>&1; \
@@ -48,4 +48,4 @@ mrproper: clean
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/"
 	@rm -rf main
 
-.PHONY: all iso tools kernel rootfs userspace clean mrproper
+.PHONY: all iso tools kernel initrd userspace clean mrproper

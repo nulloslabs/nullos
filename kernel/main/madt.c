@@ -1,7 +1,7 @@
 #include <freestanding/stddef.h>
 #include <main/acpi.h>
 #include <main/madt.h>
-#include <io/terminal.h>
+#include <main/log.h>
 
 void* ioapic_phys_addr = NULL;
 
@@ -21,5 +21,5 @@ void parse_madt(void) {
         }
         ptr += rec->length;
     }
-    printf("madt: parsed madt\n");
+    log("parsed madt");
 }

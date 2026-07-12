@@ -1,6 +1,6 @@
+#include <main/log.h>
 #include <io/io.h>
 #include <io/pic.h>
-#include <io/terminal.h>
 
 void eoi_pic(void) {
     // Send EOI (End of interrupt) to master controller
@@ -13,7 +13,23 @@ void disable_pic(void) {
     // Mask all IRQs on both PICs
     outb(0x21, 0xFF);
     outb(0xA1, 0xFF);
-    printf("pic: disabled pic\n");
+    log("disabled pic");
+}
+
+void mask_pic_irq(uint8_t irq) {
+    if (irq > 15) return;
+    uint16_t port = irq < 8 ? 0x21 : 0xA1;
+    uint8_t bit = irq < 8 ? irq : irq - 8;
+    uint8_t mask = inb(port);
+    outb(port, mask | (1 << bit));
+}
+
+void unmask_pic_irq(uint8_t irq) {
+    if (irq > 15) return;
+    uint16_t port = irq < 8 ? 0x21 : 0xA1;
+    uint8_t bit = irq < 8 ? irq : irq - 8;
+    uint8_t mask = inb(port);
+    outb(port, mask & ~(1 << bit));
 }
 
 void remap_pic(void) {
@@ -29,9 +45,12 @@ void remap_pic(void) {
     outb(0x21, 0x01);
     outb(0xA1, 0x01);
     io_wait();
-    outb(0x21, 0xF8);
-    outb(0xA1, 0xE7);
-    while (inb(0x64) & 0x01) inb(0x60);
+    outb(0x21, 0xFF);
+    outb(0xA1, 0xFF);
 
-    printf("pic: remapped pic\n");
+    mask_pic_irq(0);
+    mask_pic_irq(1);
+    mask_pic_irq(11);
+
+    log("remapped pic");
 }

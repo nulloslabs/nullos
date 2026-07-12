@@ -1,6 +1,6 @@
 #include <main/gdt.h>
 #include <main/string.h>
-#include <io/terminal.h>
+#include <main/log.h>
 
 cpu_gdt_t cpu_gdts[MAX_CPUS];
 
@@ -53,4 +53,4 @@ void init_gdt_for_cpu(int cpu_index) {
 
 void set_tss_kernel_stack_for_cpu(int cpu_index, void *stack) { cpu_gdts[cpu_index].tss.rsp0 = (uint64_t)stack; }
 void set_tss_kernel_stack(void *stack) { set_tss_kernel_stack_for_cpu(0, stack); }
-void init_gdt(void) { init_gdt_for_cpu(0); printf("gdt: initialized gdt\n"); }
+void init_gdt(void) { init_gdt_for_cpu(0); log("initialized gdt"); }

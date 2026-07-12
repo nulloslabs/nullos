@@ -432,7 +432,7 @@ int read_procfs_link(const proc_node_t *node, int self, char *out, size_t out_si
     case PROC_LINK_SELF:
         return fmt_int(tasks[self].pid, out, out_size);
     case PROC_LINK_ROOT_MOUNTS:
-        return copy_str("/proc/self/mounts", out, out_size);
+        return copy_str("self/mounts", out, out_size);
     case PROC_LINK_EXE:
         return copy_str(tasks[node->pid].exe, out, out_size);
     case PROC_LINK_CWD:

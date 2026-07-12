@@ -10,9 +10,9 @@
 #include <main/sse.h>
 #include <main/fd.h>
 #include <main/msr.h>
+#include <main/log.h>
 #include <mm/mm.h>
 #include <mm/vmm.h>
-#include <io/terminal.h>
 #include <io/usb.h>
 #include <syscalls/syscall_impls.h>
 
@@ -78,6 +78,7 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
             init_fd_table(&tasks[i].fd_table);
             strcpy(tasks[i].cwd, "/");
             tasks[i].exe[0] = '\0';
+            tasks[i].name[0] = '\0';
             init_vma_table(&tasks[i].vmas);
             memset(tasks[i].sigactions, 0, sizeof(tasks[i].sigactions));
             tasks[i].pgid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->pgid;
@@ -160,6 +161,7 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
             tasks[i].ctx = child_ctx;
             strcpy(tasks[i].cwd, current_task_ptr->cwd);
             strcpy(tasks[i].exe, current_task_ptr->exe);
+            strcpy(tasks[i].name, current_task_ptr->name);
             // A forked child shares an identical address space, so its VMA
             // layout is a copy of the parent's at this instant.
             memcpy(&tasks[i].vmas, &current_task_ptr->vmas, sizeof(vma_table_t));
@@ -172,6 +174,15 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
             tasks[i].fs_base = current_task_ptr->fs_base;
             tasks[i].gs_base = current_task_ptr->gs_base;
             tasks[i].ctty_idx = current_task_ptr->ctty_idx;
+
+            // A forked child gets a FRESH canonical line buffer.  The task
+            // slot may have been reused from a previously-dead task whose
+            // stdin_buf_len/pos were non-zero; if we don't reset them here
+            // the child's first read() returns stale garbage instead of
+            // blocking for real input, which wedges getty/login/bash at the
+            // login prompt after a stray boot keypress.
+            tasks[i].stdin_buf_len = 0;
+            tasks[i].stdin_buf_pos = 0;
 
             // Inherit signal dispositions from parent (POSIX fork semantics)
             memcpy(tasks[i].sigactions, current_task_ptr->sigactions, sizeof(tasks[i].sigactions));
@@ -273,6 +284,7 @@ pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *ctx, uint64_t flag
         tasks[i].ctx        = ctx;
         strcpy(tasks[i].cwd, current_task_ptr->cwd);
         strcpy(tasks[i].exe, current_task_ptr->exe);
+        strcpy(tasks[i].name, current_task_ptr->name);
 
         // VMA layout is only meaningful when not sharing VM; for CLONE_VM the
         // child inherits the same regions.
@@ -294,6 +306,12 @@ pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *ctx, uint64_t flag
         // otherwise it inherits the parent's.
         tasks[i].fs_base  = (flags & CLONE_SETTLS) ? new_fs_base : current_task_ptr->fs_base;
         tasks[i].gs_base  = current_task_ptr->gs_base;
+
+        // Fresh canonical line buffer for the child (see clone_task): the
+        // task slot may be reused from a dead task with stale stdin_buf
+        // state, which would otherwise leak through to the child's reads.
+        tasks[i].stdin_buf_len = 0;
+        tasks[i].stdin_buf_pos = 0;
 
         memcpy(tasks[i].sigactions, current_task_ptr->sigactions, sizeof(tasks[i].sigactions));
         tasks[i].blocked_signals = current_task_ptr->blocked_signals;
@@ -565,5 +583,5 @@ void init_sched(void) {
     current_task = 0;
     current_task_ptr = &tasks[0];
 
-    printf("sched: initialized sched\n");
+    log("initialized sched");
 }

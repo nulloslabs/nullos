@@ -28,12 +28,6 @@ uint64_t fb_write_index(int idx, const void* buf, uint64_t count, uint64_t offse
     if (offset >= size) return (uint64_t)-ENOSPC;
     if (offset + count > size) count = size - offset;
     memcpy((uint8_t*)fb->address + offset, buf, count);
-    // The kernel terminal keeps a back buffer that mirrors fb0 pixels so
-    // scrolling/redraws can read cached RAM instead of VRAM. This direct
-    // write bypassed that cache, leaving it stale. Instead of re-syncing
-    // the whole screen here (expensive), just mark the cache dirty: the
-    // next full-screen terminal operation will re-read live fb data first.
-    // Only fb0 is mirrored in the back buffer.
     if (idx == 0) invalidate_terminal_backbuffer();
     return count;
 }

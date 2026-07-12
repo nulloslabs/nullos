@@ -6,6 +6,7 @@
 #include <main/string.h>
 #include <io/net.h>
 #include <main/spinlocks.h>
+#include <main/log.h>
 
 rtl8139_t rtl8139 = {0};
 
@@ -136,6 +137,9 @@ void init_rtl8139(pci_device_t *dev) {
     rtl_write16(RTL_IMR, RTL_INT_ROK | RTL_INT_TOK | RTL_INT_RER | RTL_INT_TER | RTL_INT_RXOVW);
 
     pci_request_irq(dev, poll_rtl8139);
+
+    log("initialized rtl8139");
+
     rtl8139.tx_slot = 0;
     rtl8139_ready = true;
 

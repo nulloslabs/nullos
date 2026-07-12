@@ -2,7 +2,7 @@
 #include <freestanding/asm/unistd.h>
 #include <main/sched.h>
 #include <main/msr.h>
-#include <io/terminal.h>
+#include <main/log.h>
 #include <io/ttys.h>
 #include <syscalls/syscalls.h>
 #include <syscalls/syscall_impls.h>
@@ -92,6 +92,7 @@ const syscall_fn_t syscall_table[] = {
     [__NR_getpgid]         = sys_getpgid,
     [__NR_getsid]          = sys_getsid,
     [__NR_utime]           = sys_utime,
+    [__NR_prctl]           = sys_prctl,
     [__NR_arch_prctl]      = sys_arch_prctl,
     [__NR_setrlimit]       = sys_setrlimit,
     [__NR_settimeofday]    = sys_settimeofday,
@@ -101,13 +102,17 @@ const syscall_fn_t syscall_table[] = {
     [__NR_sethostname]     = sys_sethostname,
     [__NR_setdomainname]   = sys_setdomainname,
     [__NR_gettid]          = sys_gettid,
-    [__NR_clock_gettime]   = sys_clock_gettime,
     [__NR_tkill]           = sys_tkill,
     [__NR_futex]           = sys_futex,
     [__NR_sched_getaffinity] = sys_sched_getaffinity,
+    [__NR_epoll_create]    = sys_epoll_create,
     [__NR_getdents64]      = sys_getdents64,
     [__NR_set_tid_address] = sys_set_tid_address,
+    [__NR_clock_gettime]   = sys_clock_gettime,
+    [__NR_readahead]       = sys_readahead,
     [__NR_exit_group]      = sys_exit_group,
+    [__NR_epoll_wait]      = sys_epoll_wait,
+    [__NR_epoll_ctl]       = sys_epoll_ctl,
     [__NR_tgkill]          = sys_tgkill,
     [__NR_openat]          = sys_openat,
     [__NR_fstatat]         = sys_fstatat,
@@ -119,38 +124,26 @@ const syscall_fn_t syscall_table[] = {
     [__NR_set_robust_list] = sys_set_robust_list,
     [__NR_get_robust_list] = sys_get_robust_list,
     [__NR_utimensat]       = sys_utimensat,
+    [__NR_epoll_pwait]     = sys_epoll_pwait,
+    [__NR_epoll_create1]   = sys_epoll_create1,
     [__NR_pipe2]           = sys_pipe2,
     [__NR_getsockopt]      = sys_getsockopt,
     [__NR_setsockopt]      = sys_setsockopt,
     [__NR_prlimit64]       = sys_prlimit64,
     [__NR_getrandom]       = sys_getrandom,
+    [__NR_statx]           = sys_statx,
     [__NR_rseq]            = sys_rseq,
+    [__NR_epoll_pwait2]    = sys_epoll_pwait2,
 };
 
 extern void syscall_entry(void);
 
-void syscall_dispatch(syscall_frame_t *frame) {
+void dispatch_syscall(syscall_frame_t *frame) {
     current_task_ptr->orig_rax = frame->rax;
 
-    // Check for pending signals on ENTRY too, not just on exit. Without this,
-    // a signal pended while the task was preempted by the timer (which doesn't
-    // call check_signals) would only be noticed after the syscall completes —
-    // adding up to one full syscall's latency (e.g. a large write() to the
-    // terminal) before SIGINT/SIGTERM/etc. are acted upon. Checking on entry
-    // means a Ctrl+C that arrives during a timer-preempt is handled before
-    // the next syscall even starts.
-    //
-    // If check_signals set up a custom handler (it rewrote frame->rcx to the
-    // handler address) or terminated/stopped the task (it doesn't return),
-    // we must NOT proceed with the syscall — the frame now describes the
-    // signal handler trampoline, not the original syscall.
     uint64_t saved_rcx = frame->rcx;
     check_signals(frame);
-    if (frame->rcx != saved_rcx) {
-        // A signal handler was installed; frame is now set up for sysret to
-        // the handler. Skip the syscall entirely.
-        return;
-    }
+    if (frame->rcx != saved_rcx) return;
 
     if (frame->rax < (sizeof(syscall_table) / sizeof(syscall_table[0])) && syscall_table[frame->rax]) {
         syscall_table[frame->rax](frame);
@@ -173,5 +166,5 @@ void init_syscalls_for_cpu(void) {
 
 void init_syscalls(void) {
     init_syscalls_for_cpu();
-    printf("syscalls: initialized syscalls\n");
+    log("initialized syscalls");
 }

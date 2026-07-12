@@ -1,7 +1,6 @@
 #include <freestanding/stdint.h>
 #include <freestanding/stddef.h>
 #include <io/usb.h>
-#include <io/terminal.h>
 #include <io/uhci.h>
 #include <io/usb_keyboard.h>
 #include <io/ps2_keyboard.h>

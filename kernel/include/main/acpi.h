@@ -3,8 +3,23 @@
 #include <freestanding/stdint.h>
 #include <limine/limine.h>
 
+#define ACPI_MAX_DEVICES 256
+
 #define SCI_EN (1 << 0)
 #define SLP_EN (1 << 13)
+
+#define AML_NS_MAX 4096
+#define AML_NAME_MAX 128
+#define AML_DEPTH_MAX 12
+
+#define VALUE(x) ((aml_val_t){.v=(x),.t=0})
+#define VOID     ((aml_val_t){.t=1})
+#define RET(x)   ((aml_val_t){.v=(x),.t=2})
+
+#define PM1_CNT_BM_RLD       (1u << 1)
+#define PM1_CNT_SLP_TYP_MASK (0x7u << 10)
+#define PM1_CNT_SLP_EN       (1u << 13)
+#define PM1_CNT_WRITE_MASK   (PM1_CNT_SLP_TYP_MASK | PM1_CNT_SLP_EN | PM1_CNT_BM_RLD)
 
 struct acpi_header {
     char signature[4];
@@ -93,10 +108,6 @@ struct fadt_descriptor {
     struct acpi_gas x_gpe1_blk;
 } __attribute__((packed));
 
-#define AML_NS_MAX 4096
-#define AML_NAME_MAX  128
-#define AML_DEPTH_MAX 12
-
 typedef struct {
     uint64_t args[7];
     uint64_t locals[8];
@@ -107,7 +118,6 @@ typedef struct {
 typedef enum {
     AML_NONE = 0, AML_INT, AML_METHOD, AML_REGION, AML_FIELD, AML_BUFFER
 } aml_type_t;
-
 
 // ACPI device object (represents a device in the namespace)
 typedef struct {
@@ -120,13 +130,10 @@ typedef struct {
     int        has_adr;              // 1 if _ADR exists
 } acpi_device_t;
 
-#define ACPI_MAX_DEVICES 256
-
 typedef struct {
     acpi_device_t  devices[ACPI_MAX_DEVICES];
     int            count;
 } acpi_device_registry_t;
-
 
 typedef struct {
     char       path[AML_NAME_MAX];
@@ -151,20 +158,12 @@ typedef struct {
 } aml_obj_t;
 
 typedef struct { uint64_t v; int t; } aml_val_t;
-#define VALUE(x)  ((aml_val_t){.v=(x),.t=0})
-#define VOID  ((aml_val_t){.t=1})
-#define RET(x)((aml_val_t){.v=(x),.t=2})
-
-#define PM1_CNT_BM_RLD       (1u << 1)
-#define PM1_CNT_SLP_TYP_MASK (0x7u << 10)
-#define PM1_CNT_SLP_EN       (1u << 13)
-#define PM1_CNT_WRITE_MASK   (PM1_CNT_SLP_TYP_MASK | PM1_CNT_SLP_EN | PM1_CNT_BM_RLD)
 
 void enumerate_acpi_devices(void);
 const acpi_device_t* find_acpi_pci_device(uint8_t bus, uint8_t dev, uint8_t func);
 int get_acpi_device_count(void);
 const acpi_device_registry_t* get_acpi_devices(void);
 void* find_acpi_table(const char* sig);
-void init_acpi(void);
 void poweroff(void);
 void reboot(void);
+void init_acpi(void);

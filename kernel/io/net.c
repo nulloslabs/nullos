@@ -2,7 +2,6 @@
 #include <main/string.h>
 #include <main/spinlocks.h>
 #include <io/net.h>
-#include <io/terminal.h>
 #include <io/hpet.h>
 #include <io/io.h>
 #include <mm/mm.h>
@@ -18,9 +17,7 @@ uint16_t net_checksum(const void *data, size_t len) {
 
 // Transport pseudo-header checksum (TCP and UDP)
 // Uses heap allocation to avoid VLA stack overflow
-static uint16_t transport_checksum(uint32_t src_ip, uint32_t dst_ip,
-                                    uint8_t proto,
-                                    const void *hdr, uint16_t total_len) {
+static uint16_t transport_checksum(uint32_t src_ip, uint32_t dst_ip, uint8_t proto, const void *hdr, uint16_t total_len) {
     size_t buf_size = 12 + total_len;
     uint8_t *pseudo = (uint8_t *)malloc(buf_size);
     if (!pseudo) return 0; // OOM: return 0 checksum (best effort)
@@ -132,8 +129,6 @@ bool resolve_arp(uint32_t ip, uint8_t mac_out[6]) {
     // Continue below unlocked so we don't block
     send_arp_request(ip);
     for (uint32_t i = 0; i < 1000000; i++) { if (arp_cache_valid && arp_cached_ip == ip) { memcpy(mac_out, arp_cached_mac, 6); return true; } io_wait(); }
-    printf("arp: failed to resolve %d.%d.%d.%d\n",
-        ip&0xFF,(ip>>8)&0xFF,(ip>>16)&0xFF,(ip>>24)&0xFF);
     return false;
 }
 
@@ -159,7 +154,7 @@ void handle_icmp_rx(const uint8_t *frame, uint16_t len) {
 
 bool ping_icmp(uint32_t dest_ip) {
     uint8_t gw_mac[6];
-    if (!resolve_arp(NET_GATEWAY_IP, gw_mac)) { printf("icmp: arp failed\n"); return false; }
+    if (!resolve_arp(NET_GATEWAY_IP, gw_mac)) return false;
 
     icmp_ping_seq++;
     icmp_got_reply = false;
@@ -176,18 +171,12 @@ bool ping_icmp(uint32_t dest_ip) {
 
     ip_send(dest_ip, IP_PROTO_ICMP, icmp_buf, sizeof(icmp_buf));
 
-    printf("ping %d.%d.%d.%d seq=%d\n",
-        dest_ip&0xFF,(dest_ip>>8)&0xFF,(dest_ip>>16)&0xFF,(dest_ip>>24)&0xFF,icmp_ping_seq);
-
     for (int i = 0; i < 2000; i++) {
         if (icmp_got_reply) {
-            printf("pong from %d.%d.%d.%d seq=%d\n",
-                dest_ip&0xFF,(dest_ip>>8)&0xFF,(dest_ip>>16)&0xFF,(dest_ip>>24)&0xFF,icmp_ping_seq);
             return true;
         }
         sleep(1);
     }
-    printf("ping timeout\n");
     return false;
 }
 
@@ -523,9 +512,6 @@ tcp_socket_t *tcp_connect(uint32_t remote_ip, uint16_t remote_port) {
         sleep(1);
     }
 
-    printf("tcp: connect timeout to %d.%d.%d.%d:%d\n",
-        remote_ip&0xFF,(remote_ip>>8)&0xFF,
-        (remote_ip>>16)&0xFF,(remote_ip>>24)&0xFF, remote_port);
     tcp_free(sock);
     return NULL;
 }

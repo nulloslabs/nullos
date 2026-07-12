@@ -2,6 +2,7 @@
 .global syscall_entry
 .extern sched_lock
 .extern current_task_ptr
+.extern dispatch_syscall
 
 syscall_entry:
     // switch to kernel stack
@@ -44,7 +45,7 @@ syscall_entry:
 .Llocked:
     // Now we have sched_lock, KEEP interrupts enabled during syscall
     // This allows the timer to preempt and schedule newly created tasks
-    call syscall_dispatch
+    call dispatch_syscall
     
     // Release sched_lock before returning to userspace
     cli

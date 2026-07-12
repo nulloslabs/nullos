@@ -12,7 +12,7 @@ A secure, fast and privacy-focused hobby OS.
 | Done | ACPI support |
 | Done | PCI support |
 | Done | Sound card support |
-| Done | Rootfs support |
+| Done | Initrd support |
 | Done | GZIP decompression support | No compression support. |
 | Done | GDT, IDT and SSE support |
 | Done | Modular font system |
@@ -24,21 +24,29 @@ A secure, fast and privacy-focused hobby OS.
 
 ## 🛠️ Build Requirements
 
-| Tool | Purpose |
-| :--- | :--- |
-| `docker` | Required on MacOS, needed for Makefiles |
-| `gcc` | Compiling kernel files |
-| `ld` | Linking kernel |
-| `make` | Build automation |
-| `xorriso` | ISO image creation |
-| `qemu-system-x86_64` | x86_64 system emulation |
+| Linux (x86_64) | MacOS (any) | Other (any) |
+| :--- | :--- | :--- |
+| | `docker` | |
+| `gcc` | `x86_64-elf-gcc` | `x86_64-linux-gnu-gcc` |
+| `ld` | `x86_64-elf-ld` | `x86_64-linux-gnu-ld` |
+| `strip` | `x86_64-elf-strip` | `x86_64-linux-gnu-strip` |
+| `make` | `gmake` | `gmake` |
+| `xorriso` | `xorriso` | `xorriso` |
+| `qemu-system-x86_64` | `qemu-system-x86_64` | `qemu-system-x86_64` |
+| `curl` | `curl` | `curl` |
+| `perl` | `perl` | `perl` |
+| `tar` | `tar` | `tar` |
+| `cpio` | `cpio` | `cpio` |
+| `zstd` | | `zstd` |
+| `xz` | `xz` | `xz` |
 
 ## 🚀 Getting Started
 
 **1. Clone the repository:**
 
 ```bash
-git clone https://github.com/coolguy-09/nullos.git
+# You can remove --depth=1 to clone the entire commit history (may take a while)
+git clone --depth=1 https://github.com/asmileyguy/nullos.git
 cd nullos
 ```
 
