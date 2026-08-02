@@ -4,7 +4,7 @@
 #include <uacpi/sleep.h>
 
 void poweroff(void) {
-    uacpi_status status = uacpi_enter_sleep_state_simple(UACPI_SLEEP_STATE_S5);
+    uacpi_enter_sleep_state_simple(UACPI_SLEEP_STATE_S5);
     halt();
 }
 

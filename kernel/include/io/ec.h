@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <main/spinlocks.h>
 #include <uacpi/status.h>
+#include <uacpi/namespace.h>
 
 #define EC_STATUS_OBF 0x01
 #define EC_STATUS_IBF 0x02
