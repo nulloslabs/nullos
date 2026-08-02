@@ -60,7 +60,7 @@ __attribute__((noreturn)) void kmain(void) {
     init_tmpfs();
     init_ttys();
     init_ptys();
-    init_acpi();
+    init_acpi_tables();
     parse_madt();
     detect_apic();
     init_apic();
@@ -70,6 +70,7 @@ __attribute__((noreturn)) void kmain(void) {
     init_rng();
     init_sched();
     init_pci();
+    init_acpi_namespace();
     flush_ps2_keyboard_controller();
     cache_machine_info();
     cache_utsname();

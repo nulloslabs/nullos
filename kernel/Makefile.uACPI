@@ -1,0 +1,44 @@
+include config.mk.uACPI
+
+SRC = $(wildcard uacpi/source/*.c)
+OBJ = $(patsubst uacpi/source/%.c,uacpi/build/%.o,$(SRC))
+DEP = $(OBJ:.o=.d)
+
+.DEFAULT_GOAL := all
+
+-include $(DEP)
+
+all: $(OUTFILE)
+
+$(OUTFILE): $(OBJ) FORCE
+	@needs_archive=0; \
+	for obj in $(OBJ); do \
+		if [ ! -f "$(OUTFILE)" ] || [ "config.mk" -nt "$(OUTFILE)" ] || [ "config.mk.uACPI" -nt "$(OUTFILE)" ] || [ "Makefile.uACPI" -nt "$(OUTFILE)" ] || [ "$$obj" -nt "$(OUTFILE)" ]; then \
+			needs_archive=1; break; \
+		fi; \
+	done; \
+	if [ $$needs_archive -eq 1 ]; then \
+		printf "  %-7s %s\n" "AR" "$(SUBDIR)/$(OUTFILE)" && \
+		$(AR) rcs $(OUTFILE) $(OBJ) && \
+		if [ "$(DEBUG)" -eq 0 ]; then \
+			printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/$(OUTFILE)" && \
+			$(STRIP) $(STRIPFLAGS) $(OUTFILE); \
+		fi \
+	else \
+		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/$(OUTFILE) is already up to date"; \
+	fi
+
+FORCE:
+
+uacpi/build/%.o: uacpi/source/%.c config.mk Makefile config.mk.uACPI Makefile.uACPI
+	@mkdir -p uacpi/build
+	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/$@"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+clean:
+	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/uacpi/build/"
+	@rm -rf $(BUILD)
+
+mrproper: clean
+
+.PHONY: all FORCE clean mrproper

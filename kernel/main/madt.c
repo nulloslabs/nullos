@@ -1,24 +1,25 @@
-#include <stddef.h>
-#include <main/acpi.h>
+#include <stdint.h>
+#include <uacpi/acpi.h>
+#include <uacpi/tables.h>
 #include <main/madt.h>
 #include <io/terminal.h>
-void* ioapic_phys_addr = NULL;
+
+void *ioapic_phys_addr;
 
 void parse_madt(void) {
-    struct acpi_header* madt = find_acpi_table("APIC");
-    if (!madt) return;
-
-    struct madt_header* madt_hdr = (struct madt_header*)((uint8_t*)madt + sizeof(struct acpi_header));
-    uint8_t* ptr = (uint8_t*)madt_hdr + sizeof(struct madt_header);
-    uint8_t* end = (uint8_t*)madt + madt->length;
-
-    while (ptr < end) {
-        struct madt_record* rec = (struct madt_record*)ptr;
-        if (rec->type == 1) { // IOAPIC
-            uint32_t addr = *(uint32_t*)(ptr + 4);
-            ioapic_phys_addr = (void*)(uint64_t)addr;
+    uacpi_table table;
+    if (uacpi_table_find_by_signature(ACPI_MADT_SIGNATURE, &table) != UACPI_STATUS_OK) return;
+    struct acpi_madt *madt = table.ptr;
+    struct acpi_entry_hdr *entry = madt->entries;
+    uint8_t *end = (uint8_t *)madt + madt->hdr.length;
+    while ((uint8_t *)entry + sizeof(*entry) <= end && entry->length >= sizeof(*entry) && (uint8_t *)entry + entry->length <= end) {
+        if (entry->type == ACPI_MADT_ENTRY_TYPE_IOAPIC && entry->length >= sizeof(struct acpi_madt_ioapic)) {
+            struct acpi_madt_ioapic *ioapic = (struct acpi_madt_ioapic *)entry;
+            ioapic_phys_addr = (void *)(uintptr_t)ioapic->address;
+            break;
         }
-        ptr += rec->length;
+        entry = (struct acpi_entry_hdr *)((uint8_t *)entry + entry->length);
     }
+    uacpi_table_unref(&table);
     printf("madt: parsed madt\n");
 }

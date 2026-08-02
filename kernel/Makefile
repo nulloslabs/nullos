@@ -15,8 +15,6 @@ SUBDIRS = main io mm syscalls
 
 all: kernel
 
--include $(DEP)
-
 limine_header: Makefile config.mk
 	@if [ ! -f include/limine/limine.h ] || [ "config.mk" -nt "include/limine/limine.h" ] || [ "Makefile" -nt "include/limine/limine.h" ]; then \
 		printf "  %-7s %s\n" "FETCH" "$(SUBDIR)/include/limine/limine.h" && \
@@ -26,37 +24,47 @@ limine_header: Makefile config.mk
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/include/limine/limine.h is already up to date"; \
 	fi
 
+uacpi/.git:
+	@printf "  %-7s %s\n" "FETCH" "$(SUBDIR)/uacpi/"
+	@git clone --depth=1 https://github.com/uACPI/uACPI.git uacpi
+
+uacpi: uacpi/.git config.mk.uACPI Makefile config.mk
+	@$(MAKE) -f Makefile.uACPI
+
 $(SUBDIRS): config.mk Makefile limine_header
 	@$(MAKE) -C $@
 
-kernel: linker.ld config.mk Makefile $(SUBDIRS)
+kernel: uacpi linker.ld config.mk Makefile $(SUBDIRS)
 	@needs_link=0; \
 	for obj in $(OBJ); do \
-		if [ ! -f "$(KERNELFILE)" ] || [ "config.mk" -nt "$(KERNELFILE)" ] || [ "linker.ld" -nt "$(KERNELFILE)" ] || [ "Makefile" -nt "$(KERNELFILE)" ] || [ "$$obj" -nt "$(KERNELFILE)" ]; then \
+		if [ ! -f "$(OUTFILE)" ] || [ "uacpi/build/libuacpi.a" -nt "$(OUTFILE)" ] || [ "config.mk" -nt "$(OUTFILE)" ] || [ "linker.ld" -nt "$(OUTFILE)" ] || [ "Makefile" -nt "$(OUTFILE)" ] || [ "$$obj" -nt "$(OUTFILE)" ]; then \
 			needs_link=1; break; \
 		fi; \
 	done; \
 	if [ $$needs_link -eq 1 ]; then \
-		printf "  %-7s %s\n" "LD" "$(KERNELFILE)"; \
-		$(LD) $(LDFLAGS) -o $(KERNELFILE) $(OBJ); \
+		printf "  %-7s %s\n" "LD" "$(OUTFILE)"; \
+		$(LD) $(LDFLAGS) -o $(OUTFILE) $(OBJ) $(LIBS); \
 		if [ "$(DEBUG)" -eq 0 ]; then \
-			printf "  %-7s %s\n" "STRIP" "$(KERNELFILE)"; \
-			$(STRIP) $(STRIPFLAGS) $(KERNELFILE); \
+			printf "  %-7s %s\n" "STRIP" "$(OUTFILE)"; \
+			$(STRIP) $(STRIPFLAGS) $(OUTFILE); \
 		fi; \
 	else \
-		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/$(KERNELFILE) is already up to date"; \
+		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/$(OUTFILE) is already up to date"; \
 	fi
 
 clean:
-	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/$(KERNELFILE)"
-	@rm -f $(KERNELFILE)
+	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/$(OUTFILE)"
+	@rm -f $(OUTFILE)
 	@make -C main clean
 	@make -C io clean
 	@make -C mm clean
 	@make -C syscalls clean
+	@if [ -d uacpi ]; then $(MAKE) -f Makefile.uACPI clean; fi
 
 mrproper: clean
 	@printf "  %-7s %s\n" "CLEAN" "include/limine/"
 	@rm -rf include/limine
+	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/uacpi/"
+	@rm -rf uacpi
 
-.PHONY: all kernel limine_header $(SUBDIRS) clean mrproper
+.PHONY: all kernel limine_header uacpi $(SUBDIRS) clean mrproper

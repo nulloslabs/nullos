@@ -11,7 +11,7 @@ else
 	CC = x86_64-linux-gnu-gcc
 endif
 
-CFLAGS = -Wall -m64 -I../include/ -I../include/freestanding/ -I../include/limine/ -ffreestanding -nostdlib -nostdinc -fno-builtin -nodefaultlibs -nostartfiles -fno-stack-protector -fno-pic -fno-pie -no-pie -fno-lto -fno-stack-check -mno-red-zone -mcmodel=kernel -mno-red-zone -mcmodel=kernel -mabi=sysv -MMD -MP -std=c23 -mfpmath=sse -march=x86-64 -mtune=generic
+CFLAGS = -Wall -m64 -I../include/ -I../include/freestanding/ -I../include/limine/ -I../uacpi/include/ -ffreestanding -nostdlib -nostdinc -fno-builtin -nodefaultlibs -nostartfiles -fno-stack-protector -fno-pic -fno-pie -no-pie -fno-lto -fno-stack-check -mno-red-zone -mcmodel=kernel -mno-red-zone -mcmodel=kernel -mabi=sysv -MMD -MP -std=c23 -mfpmath=sse -march=x86-64 -mtune=generic
 ifeq ($(DEBUG),1)
 	CFLAGS := -g $(CFLAGS)
 endif
@@ -28,7 +28,8 @@ else
 	LD = x86_64-linux-gnu-ld
 endif
 
-LDFLAGS = -melf_x86_64 -T linker.ld
+LDFLAGS = -melf_x86_64 -T linker.ld -L./uacpi/build/
+LIBS = -luacpi
 
 ifeq ($(KERNEL)-$(ARCH),Linux-x86_64)
 	STRIP = strip
@@ -42,5 +43,6 @@ ifeq ($(DEBUG),1)
 endif
 
 STRIPFLAGS = 
-KERNELFILE = nullkrnl
+
+OUTFILE = nullkrnl
 SUBDIR = kernel

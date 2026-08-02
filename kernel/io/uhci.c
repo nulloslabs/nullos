@@ -1,7 +1,6 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <main/string.h>
-#include <main/acpi.h>
 #include <io/terminal.h>
 #include <io/uhci.h>
 #include <io/usb.h>

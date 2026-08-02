@@ -20,4 +20,6 @@ struct idt_ptr {
 } __attribute__((packed));
 
 void load_idt_for_cpu(void);
+void idt_set_descriptor(uint8_t vector, void *isr, uint8_t flags);
+extern void isr_acpi(void);
 void init_idt(void);

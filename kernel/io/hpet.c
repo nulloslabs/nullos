@@ -1,64 +1,69 @@
 #include <stdint.h>
-#include <main/acpi.h>
+#include <uacpi/acpi.h>
+#include <uacpi/tables.h>
 #include <io/hpet.h>
-#include <main/panic.h>
 #include <io/terminal.h>
-#include <io/pit.h>
 #include <mm/vmm.h>
 
-static uintptr_t hpet_base = 0;
-static uint32_t hpet_period = 0;
+static uintptr_t hpet_base;
+static uint32_t hpet_period;
 
 void sleep(uint64_t ms) {
-    if (!hpet_base || hpet_period == 0) { panic("hpet isn't available"); }
-    volatile uint64_t* hpet_main_counter = (volatile uint64_t*)(hpet_base + 0xF0);
-    uint64_t ticks_to_wait = (ms * 1000000000ULL) / (hpet_period / 1000);
-    uint64_t start_tick = *hpet_main_counter;
-    while ((*hpet_main_counter - start_tick) < ticks_to_wait) { __asm__ volatile("pause"); }
+    if (!hpet_base || !hpet_period) return;
+    volatile uint64_t *counter = (volatile uint64_t *)(hpet_base + 0xF0);
+    uint64_t ticks = (ms * 1000000000000ULL) / hpet_period;
+    uint64_t start = *counter;
+    while (*counter - start < ticks) __asm__ volatile("pause");
 }
 
 void sleep_us(uint64_t us) {
-    if (!hpet_base || hpet_period == 0) { panic("hpet isn't available"); }
-    volatile uint64_t* hpet_main_counter = (volatile uint64_t*)(hpet_base + 0xF0);
-    uint64_t ticks_to_wait = (us * 1000000000ULL) / hpet_period;
-    uint64_t start_tick = *hpet_main_counter;
-    while ((*hpet_main_counter - start_tick) < ticks_to_wait) { __asm__ volatile("pause"); }
+    if (!hpet_base || !hpet_period) return;
+    volatile uint64_t *counter = (volatile uint64_t *)(hpet_base + 0xF0);
+    uint64_t ticks = (us * 1000000000ULL) / hpet_period;
+    uint64_t start = *counter;
+    while (*counter - start < ticks) __asm__ volatile("pause");
 }
 
 uint64_t read_hpet_counter(void) {
-    if (!hpet_base || hpet_period == 0) return 0;
-    volatile uint64_t* hpet_main_counter = (volatile uint64_t*)(hpet_base + 0xF0);
-    return *hpet_main_counter;
+    if (!hpet_base || !hpet_period) return 0;
+    return *(volatile uint64_t *)(hpet_base + 0xF0);
 }
 
-uint64_t hpet_elapsed_us(void) { if (!hpet_base || hpet_period == 0) return 0; return (read_hpet_counter() * hpet_period) / 1000000000ULL; }
+uint64_t hpet_elapsed_us(void) {
+    if (!hpet_base || !hpet_period) return 0;
+    return (read_hpet_counter() * hpet_period) / 1000000000ULL;
+}
 
 uint32_t get_hpet_freq_mhz(void) {
-    if (!hpet_base || hpet_period == 0) return 0;
-    // hpet_period is in femtoseconds, convert to MHz
+    if (!hpet_base || !hpet_period) return 0;
     return (uint32_t)(1000000000000000ULL / hpet_period / 1000000);
 }
 
 void stop_hpet(void) {
-    // Return if hpet_base is 0 (why did you even call this function if you didn't even init the HPET xD)
-    if (!hpet_base || hpet_period == 0) return;
-
-    volatile uint64_t* hpet_config = (volatile uint64_t*)(hpet_base + 0x10);
-
-    if (*hpet_config & 1) {
-        *hpet_config &= ~1ULL;
-        // Compiler barrier (juuuust in case)
-        __asm__ volatile ("" : : : "memory");
-    }
+    if (!hpet_base || !hpet_period) return;
+    volatile uint64_t *config = (volatile uint64_t *)(hpet_base + 0x10);
+    *config &= ~1ULL;
+    __asm__ volatile("" ::: "memory");
 }
 
 void init_hpet(void) {
-    uint64_t phys = 0xFED00000ULL;
-    hpet_base = (uintptr_t)vmap_mmio(phys, 1);
-    volatile uint64_t* hpet_capabilities = (volatile uint64_t*)hpet_base;
-    volatile uint64_t* hpet_config = (volatile uint64_t*)(hpet_base + 0x10);
-    hpet_period = (uint32_t)(*hpet_capabilities >> 32);
-    if (hpet_period == 0) { hpet_base = 0; return; }
-    *hpet_config |= 1;
+    uacpi_table table;
+    if (uacpi_table_find_by_signature(ACPI_HPET_SIGNATURE, &table) != UACPI_STATUS_OK) return;
+    struct acpi_hpet *hpet = table.ptr;
+    if (hpet->address.address_space_id != 0 || !hpet->address.address) {
+        uacpi_table_unref(&table);
+        return;
+    }
+    hpet_base = (uintptr_t)vmap_mmio(hpet->address.address, 1);
+    uacpi_table_unref(&table);
+    if (!hpet_base) return;
+    volatile uint64_t *capabilities = (volatile uint64_t *)hpet_base;
+    volatile uint64_t *config = (volatile uint64_t *)(hpet_base + 0x10);
+    hpet_period = (uint32_t)(*capabilities >> 32);
+    if (!hpet_period) {
+        hpet_base = 0;
+        return;
+    }
+    *config |= 1;
     printf("hpet: initialized hpet\n");
 }
