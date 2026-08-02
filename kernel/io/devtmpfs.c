@@ -1,8 +1,8 @@
 #include <io/devtmpfs.h>
 #include <main/string.h>
-#include <freestanding/errno.h>
+#include <errno.h>
 
-bool devtmpfs_device_exists(const char* name) {
+bool device_exists_on_devtmpfs(const char* name) {
     const char *dev_name = name;
     while (*dev_name == '.' || *dev_name == '/') dev_name++;
     if (strncmp(dev_name, "dev/", 4) == 0) dev_name += 4;
@@ -21,7 +21,7 @@ bool devtmpfs_device_exists(const char* name) {
     return false;
 }
 
-const char *devtmpfs_get_device_name(int index) {
+const char *get_devtmpfs_device_name(int index) {
     uint64_t irq;
     spin_lock_irqsave(&devtmpfs_lock, &irq);
 

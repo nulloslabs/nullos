@@ -1,9 +1,9 @@
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
-#include <freestanding/stdarg.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <stdarg.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
-#include <main/log.h>
+#include <io/terminal.h>
 #include <io/io.h>
 #include <io/serial.h>
 
@@ -117,7 +117,8 @@ static void double_to_str(double val, int precision, char *out, size_t out_size)
 static int serial_putchar_unlocked(uint16_t port, int c) {
     unsigned char ch = (unsigned char)c;
     // Just in case if terminal dosen't support just "\n" for newlines but needs "\r\n" instead
-    if (ch == '\n') outb(port, '\r');
+    if (ch == '\n') serial_putchar_unlocked(port, '\r');
+    while (!(inb(port + 5) & 0x20));
     outb(port, ch);
     return ch;
 }
@@ -306,5 +307,5 @@ void init_serial_ports(void) {
         // Enable the port for use.
         outb(port + 4, 0x0F);
     }
-    log("initialized serial ports");
+    printf("serial: initialized serial ports\n");
 }

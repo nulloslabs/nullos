@@ -1,6 +1,6 @@
 #pragma once
 
-#include <freestanding/stdint.h>
+#include <stdint.h>
 
 // ============================================================================
 // Shared scancode ring buffer (filled by PS/2 ISR and USB keyboard driver)

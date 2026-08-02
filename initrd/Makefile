@@ -18,11 +18,15 @@ initrd:
 	extra="$$(for n in $$cached_names; do echo "$$current_names" | grep -qxF "$$n" || echo extra_$$n; done)"; \
 	if [ -n "$$extra" ]; then \
 		for n in $$cached_names; do \
-			echo "$$current_names" | grep -qxF "$$n" || rm -f packages/$$n.pkg.tar.zst; \
+			echo "$$current_names" | grep -qxF "$$n" || { \
+				if [ -f packages/$$n.pkg.tar.zst ] && [ -d main ]; then \
+					tar --zstd -tf packages/$$n.pkg.tar.zst 2>/dev/null | grep -v '^\.' | while read f; do rm -rf "main/$$f" 2>/dev/null; done; \
+				fi; \
+				rm -f packages/$$n.pkg.tar.zst; \
+			}; \
 		done; \
 	fi; \
 	if [ ! -f $(OUTFILE) ] || [ ! -d main ] || [ Makefile -nt $(OUTFILE) ] || [ config.mk -nt $(OUTFILE) ] || [ -n "$$missing" ] || [ -n "$$extra" ] || [ -n "$$(find main -newer $(OUTFILE) 2>/dev/null | head -1)" ]; then \
-		rm -rf main && \
 		mkdir -p main packages && \
 		mkdir -p main/home main/root main/dev main/proc main/etc main/var main/usr main/tmp main/run && \
 		mkdir -p main/home/user main/etc/init.d main/usr/bin main/usr/sbin main/usr/lib main/usr/include && \
@@ -37,7 +41,7 @@ initrd:
 		ln -snf usr/lib64 main/lib64 && \
 		printf '%s\n' \
 			'::sysinit:/etc/init.d/rcS' \
-			'tty0::respawn:/sbin/getty -L tty0 115200 vt100' \
+			'tty0::respawn:/sbin/getty -L tty0 115200 linux' \
 			'::ctrlaltdel:/sbin/reboot' \
 			'::shutdown:/bin/umount -a -r' \
 			> main/etc/inittab && \
@@ -75,6 +79,7 @@ initrd:
 				tar --zstd -xf packages/$$name.pkg.tar.zst -C main; \
 			fi; \
 		done && \
+		find main -type f -name ".*" -delete && \
 		if [ "$(KERNEL)" = "Darwin" ]; then \
 			docker run --rm -v "$(PWD)":"$(PWD)" -w "$(PWD)" alpine sh -c ' \
 				main/usr/bin/busybox --list-full | grep -v "^bin/busybox$$" | while read applet; do \

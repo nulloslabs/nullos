@@ -1,7 +1,7 @@
 #pragma once
 
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
+#include <stdint.h>
+#include <stddef.h>
 
 // ============================================================================
 // USB Speeds

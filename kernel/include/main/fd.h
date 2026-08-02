@@ -1,7 +1,7 @@
 #pragma once
 
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
+#include <stdint.h>
+#include <stddef.h>
 
 #define FD_MAX 32
 #define AT_FDCWD -100

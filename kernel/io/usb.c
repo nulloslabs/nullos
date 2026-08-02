@@ -1,5 +1,5 @@
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
+#include <stdint.h>
+#include <stddef.h>
 #include <io/usb.h>
 #include <io/uhci.h>
 #include <io/usb_keyboard.h>

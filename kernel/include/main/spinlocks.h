@@ -1,6 +1,6 @@
 #pragma once
 
-#include <freestanding/stdint.h>
+#include <stdint.h>
 
 #define SPINLOCK_INIT 0
 

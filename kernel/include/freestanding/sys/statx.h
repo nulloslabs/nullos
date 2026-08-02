@@ -1,6 +1,6 @@
 #pragma once
 
-#include <freestanding/stdint.h>
+#include <stdint.h>
 
 #define STATX_TYPE        0x00000001U
 #define STATX_MODE        0x00000002U

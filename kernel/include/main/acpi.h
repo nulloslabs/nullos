@@ -1,7 +1,8 @@
 #pragma once
 
-#include <freestanding/stdint.h>
-#include <limine/limine.h>
+#include <stdint.h>
+#include <main/spinlocks.h>
+#include <limine.h>
 
 #define ACPI_MAX_DEVICES 256
 
@@ -159,11 +160,20 @@ typedef struct {
 
 typedef struct { uint64_t v; int t; } aml_val_t;
 
+extern struct fadt_descriptor* fadt;
+extern struct acpi_header* acpi_root;
+extern spinlock_t acpi_lock;
+ 
+uint32_t read_acpi(struct acpi_gas *gas);
+void write_acpi(struct acpi_gas *gas, uint32_t val);
+aml_obj_t *ns_exact(const char *path);
+aml_obj_t *ns_find(const char *scope, const char *relname);
+uint64_t fld_read(aml_obj_t *fld);
+void fld_write(aml_obj_t *fld, uint64_t val);
+void call_method1(const char *name, const char *scope, uint64_t arg);
 void enumerate_acpi_devices(void);
 const acpi_device_t* find_acpi_pci_device(uint8_t bus, uint8_t dev, uint8_t func);
 int get_acpi_device_count(void);
 const acpi_device_registry_t* get_acpi_devices(void);
 void* find_acpi_table(const char* sig);
-void poweroff(void);
-void reboot(void);
 void init_acpi(void);

@@ -1,6 +1,6 @@
-#include <freestanding/stddef.h>
-#include <freestanding/errno.h>
-#include <freestanding/linux/sched.h>
+#include <stddef.h>
+#include <errno.h>
+#include <linux/sched.h>
 #include <main/string.h>
 #include <main/halt.h>
 #include <main/panic.h>
@@ -10,7 +10,7 @@
 #include <main/sse.h>
 #include <main/fd.h>
 #include <main/msr.h>
-#include <main/log.h>
+#include <io/terminal.h>
 #include <mm/mm.h>
 #include <mm/vmm.h>
 #include <io/usb.h>
@@ -583,5 +583,5 @@ void init_sched(void) {
     current_task = 0;
     current_task_ptr = &tasks[0];
 
-    log("initialized sched");
+    printf("sched: initialized sched\n");
 }

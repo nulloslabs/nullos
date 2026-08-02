@@ -1,4 +1,4 @@
-#include <main/log.h>
+#include <io/terminal.h>
 #include <io/io.h>
 #include <io/pic.h>
 
@@ -13,7 +13,7 @@ void disable_pic(void) {
     // Mask all IRQs on both PICs
     outb(0x21, 0xFF);
     outb(0xA1, 0xFF);
-    log("disabled pic");
+    printf("pic: disabled pic\n");
 }
 
 void mask_pic_irq(uint8_t irq) {
@@ -52,5 +52,5 @@ void remap_pic(void) {
     mask_pic_irq(1);
     mask_pic_irq(11);
 
-    log("remapped pic");
+    printf("pic: remapped pic\n");
 }

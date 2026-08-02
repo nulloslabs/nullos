@@ -1,6 +1,6 @@
 #pragma once
 
-#include <freestanding/stdint.h>
+#include <stdint.h>
 
 int get_pts_idx(const char *name);
 bool devpts_device_exists(const char* name);

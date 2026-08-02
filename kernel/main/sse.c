@@ -2,14 +2,35 @@
 #include <main/string.h>
 #include <main/machine_info.h>
 #include <main/panic.h>
-#include <main/log.h>
+#include <io/terminal.h>
 
-extern void save_fpu_xsave(void *area);
-extern void save_fpu_fxsave(void *area);
-extern void restore_fpu_xsave(const void *area);
-extern void restore_fpu_fxsave(const void *area);
-extern void clear_fpu_ts(void);
-extern void init_fpu_x87(void);
+static void save_fpu_xsave(void *area) {
+    __asm__ volatile ("xsave64 (%0)"
+                      :: "r"(area), "a"(0xFFFFFFFFU), "d"(0xFFFFFFFFU)
+                      : "memory");
+}
+
+static void save_fpu_fxsave(void *area) {
+    __asm__ volatile ("fxsave64 (%0)" :: "r"(area) : "memory");
+}
+
+static void restore_fpu_xsave(const void *area) {
+    __asm__ volatile ("xrstor64 (%0)"
+                      :: "r"(area), "a"(0xFFFFFFFFU), "d"(0xFFFFFFFFU)
+                      : "memory");
+}
+
+static void restore_fpu_fxsave(const void *area) {
+    __asm__ volatile ("fxrstor64 (%0)" :: "r"(area) : "memory");
+}
+
+static void clear_fpu_ts(void) {
+    __asm__ volatile ("clts");
+}
+
+static void init_fpu_x87(void) {
+    __asm__ volatile ("fninit");
+}
 
 static bool use_xsave = false;
 static size_t cached_state_size = 0;
@@ -39,7 +60,7 @@ void init_fpu_area(void *area) {
     memset(area, 0, get_fpu_state_size());
     clear_fpu_ts();                         // ensure no #NM
     init_fpu_x87();                       // x87 to reset state
-    __asm__ volatile("ldmxcsr %0" :: "m"(mxcsr_default));
+    __asm__ volatile ("ldmxcsr %0" :: "m"(mxcsr_default));
     save_fpu_state(area);
 }
 
@@ -48,7 +69,7 @@ void init_sse_for_cpu(void) {
     if (!cpu_has_feature(CPU_FEATURE_SSE2)) panic("cpu dosen't support sse2");
 
     // Clear EM bit and set MP bit in CR0
-    __asm__ volatile(
+    __asm__ volatile (
         "mov %%cr0, %%rax\n"
         "and $~(1<<2), %%rax\n"  // clear EM
         "or  $(1<<1), %%rax\n"   // set MP
@@ -56,7 +77,7 @@ void init_sse_for_cpu(void) {
         ::: "rax"
     );
     // Set OSFXSR and OSXMMEXCPT bits in CR4
-    __asm__ volatile(
+    __asm__ volatile (
         "mov %%cr4, %%rax\n"
         "or $(1<<9), %%rax\n"    // OSFXSR
         "or $(1<<10), %%rax\n"   // OSXMMEXCPT
@@ -65,7 +86,7 @@ void init_sse_for_cpu(void) {
     );
 
     if (cpu_has_feature(CPU_FEATURE_XSAVE)) {
-        __asm__ volatile(
+        __asm__ volatile (
             "mov %%cr4, %%rax\n"
             "or $(1<<18), %%rax\n"   // OSXSAVE
             "mov %%rax, %%cr4\n"
@@ -82,5 +103,5 @@ void init_sse_for_cpu(void) {
 
 void init_sse(void) {
     init_sse_for_cpu();
-    log("enabled sse");
+    printf("sse: enabled sse\n");
 }

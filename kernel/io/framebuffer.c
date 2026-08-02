@@ -1,10 +1,11 @@
-#include <freestanding/stdint.h>
-#include <freestanding/errno.h>
-#include <limine/limine.h>
+#include <stdint.h>
+#include <errno.h>
+#include <limine.h>
 #include <main/limine_req.h>
 #include <main/string.h>
 #include <main/halt.h>
 #include <io/framebuffer.h>
+#include <io/bga.h>
 #include <io/fonts.h>
 #include <io/terminal.h>
 
@@ -49,6 +50,11 @@ void put_pixel_fb(uint32_t x, uint32_t y, uint32_t color) {
 
     uint8_t *fb_ptr = (uint8_t *)fb->address;
     uint64_t offset = y * fb->pitch + x * ((fb->bpp + 7) / 8);
+
+    if (fb->bpp == 8) {
+        fb_ptr[offset] = bga_palette_index(color);
+        return;
+    }
 
     switch (fb->bpp) {
         case 15:

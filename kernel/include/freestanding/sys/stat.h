@@ -1,8 +1,8 @@
 #pragma once
 
-#include <freestanding/stdint.h>
-#include <freestanding/sys/types.h>
-#include <freestanding/time.h>
+#include <stdint.h>
+#include <sys/types.h>
+#include <time.h>
 
 #define S_IFMT   0170000
 #define S_IFSOCK 0140000

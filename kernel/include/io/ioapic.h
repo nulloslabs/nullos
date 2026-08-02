@@ -1,6 +1,6 @@
 #pragma once
 
-#include <freestanding/stdint.h>
+#include <stdint.h>
 
 // IOAPIC register offsets (indirect via IOREGSEL/IOWIN)
 #define IOAPIC_REGSEL   0x00

@@ -1,5 +1,5 @@
-#include <freestanding/stdint.h>
-#include <freestanding/errno.h>
+#include <stdint.h>
+#include <errno.h>
 #include <main/fd.h>
 #include <main/string.h>
 #include <main/sched.h>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <freestanding/stdint.h>
+#include <stdint.h>
 
 enum rseq_cpu_id_state {
     RSEQ_CPU_ID_UNITIALIZED         = -1,

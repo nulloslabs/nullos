@@ -1,6 +1,6 @@
 #pragma once
 
-#include <freestanding/stddef.h>
+#include <stddef.h>
 
 #define LOCK_SH 1
 #define LOCK_EX 2

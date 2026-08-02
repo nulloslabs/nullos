@@ -1,6 +1,6 @@
-#include <freestanding/errno.h>
-#include <freestanding/sys/types.h>
-#include <freestanding/sys/stat.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <main/elf.h>
 #include <io/initrd.h>
 #include <main/msr.h>
@@ -216,7 +216,7 @@ static int load_elf_segments(vmm_context_t *ctx, uint8_t *data,
 }
 
 int execute_elf(const char *path, char **argv, char **envp) {
-    if (devtmpfs_device_exists(path)) return -EACCES;
+    if (device_exists_on_devtmpfs(path)) return -EACCES;
 
     initrd_file_t file = read_initrd(path);
     if (!file.data) return -ENOENT;
@@ -341,7 +341,7 @@ int execute_elf(const char *path, char **argv, char **envp) {
 int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     syscall_frame_t *frame = (syscall_frame_t *)raw_frame;
 
-    if (devtmpfs_device_exists(path)) return -EACCES;
+    if (device_exists_on_devtmpfs(path)) return -EACCES;
     if (is_procfs_path(path)) return -EACCES;
 
     initrd_file_t file = read_initrd(path);

@@ -40,20 +40,21 @@
 #include <io/ps2_keyboard.h>
 // Lets never do that again.
 
-void kmain(void) {
+__attribute__((noreturn)) void kmain(void) {
     cli();
     clrscr();
     init_serial_ports();
     init_default_font();
     show_cursor(true); // Show cursor as soon as possible
+    if (!LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision)) panic("base revision not supported");
     parse_boot_args();
     init_sse();
     init_gdt();
     init_idt();
     remap_pic();
-    init_mm();
     init_pmm();
     init_vmm();
+    init_mm();
     init_initrd();
     init_devices();
     init_tmpfs();

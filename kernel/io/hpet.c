@@ -1,10 +1,10 @@
-#include <freestanding/stdint.h>
+#include <stdint.h>
 #include <main/acpi.h>
 #include <io/hpet.h>
 #include <main/panic.h>
-#include <main/log.h>
+#include <io/terminal.h>
 #include <io/pit.h>
-#include <mm/mm.h>
+#include <mm/vmm.h>
 
 static uintptr_t hpet_base = 0;
 static uint32_t hpet_period = 0;
@@ -54,11 +54,11 @@ void stop_hpet(void) {
 
 void init_hpet(void) {
     uint64_t phys = 0xFED00000ULL;
-    hpet_base = (uintptr_t)(phys + hhdm_offset);
+    hpet_base = (uintptr_t)vmap_mmio(phys, 1);
     volatile uint64_t* hpet_capabilities = (volatile uint64_t*)hpet_base;
     volatile uint64_t* hpet_config = (volatile uint64_t*)(hpet_base + 0x10);
     hpet_period = (uint32_t)(*hpet_capabilities >> 32);
     if (hpet_period == 0) { hpet_base = 0; return; }
     *hpet_config |= 1;
-    log("initialized hpet");
+    printf("hpet: initialized hpet\n");
 }

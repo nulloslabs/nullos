@@ -1,4 +1,4 @@
-#include <freestanding/netinet/in.h>
+#include <netinet/in.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
 #include <io/net.h>
@@ -6,7 +6,7 @@
 #include <io/io.h>
 #include <mm/mm.h>
 
-uint16_t net_checksum(const void *data, size_t len) {
+uint16_t calculate_net_checksum(const void *data, size_t len) {
     const uint16_t *p = (const uint16_t *)data;
     uint32_t sum = 0;
     while (len > 1) { sum += *p++; len -= 2; }
@@ -17,7 +17,7 @@ uint16_t net_checksum(const void *data, size_t len) {
 
 // Transport pseudo-header checksum (TCP and UDP)
 // Uses heap allocation to avoid VLA stack overflow
-static uint16_t transport_checksum(uint32_t src_ip, uint32_t dst_ip, uint8_t proto, const void *hdr, uint16_t total_len) {
+static uint16_t calculate_transport_checksum(uint32_t src_ip, uint32_t dst_ip, uint8_t proto, const void *hdr, uint16_t total_len) {
     size_t buf_size = 12 + total_len;
     uint8_t *pseudo = (uint8_t *)malloc(buf_size);
     if (!pseudo) return 0; // OOM: return 0 checksum (best effort)
@@ -28,7 +28,7 @@ static uint16_t transport_checksum(uint32_t src_ip, uint32_t dst_ip, uint8_t pro
     uint16_t tlen_be = htons(total_len);
     memcpy(pseudo + 10, &tlen_be, 2);
     memcpy(pseudo + 12, hdr, total_len);
-    uint16_t cksum = net_checksum(pseudo, buf_size);
+    uint16_t cksum = calculate_net_checksum(pseudo, buf_size);
     free(pseudo);
     return cksum;
 }
@@ -39,15 +39,17 @@ static uint16_t ip_id_counter = 1;
 
 net_device_t *net_current_device = NULL;
 
-void net_register_device(net_device_t *dev) {
+void register_net_device(net_device_t *dev) {
+    if (!dev || !dev->send) return;
     uint64_t irq;
     spin_lock_irqsave(&net_lock, &irq);
     if (!net_current_device) { net_current_device = dev; }
     spin_unlock_irqrestore(&net_lock, irq);
 }
 
-static bool ip_send(uint32_t dest_ip, uint8_t proto,
-                    const void *payload, uint16_t payload_len) {
+static bool send_ip_packet(uint32_t dest_ip, uint8_t proto,
+                           const void *payload, uint16_t payload_len) {
+    if ((!payload && payload_len) || payload_len > NET_MAX_FRAME_SIZE - 14 - 20) return false;
     uint8_t gw_mac[6];
     if (!resolve_arp(NET_GATEWAY_IP, gw_mac)) return false;
 
@@ -72,7 +74,7 @@ static bool ip_send(uint32_t dest_ip, uint8_t proto,
     ip->protocol  = proto;
     ip->src       = NET_MY_IP;
     ip->dst       = dest_ip;
-    ip->checksum  = net_checksum(ip, 20);
+    ip->checksum  = calculate_net_checksum(ip, 20);
 
     memcpy(frame + 34, payload, payload_len);
     return net_current_device->send(frame, total);
@@ -102,7 +104,7 @@ static void send_arp_request(uint32_t target_ip) {
     net_current_device->send(&frame, sizeof(arp_frame_t));
 }
 
-void handle_arp_rx(const uint8_t *frame, uint16_t len) {
+void handle_arp_packet(const uint8_t *frame, uint16_t len) {
     if (len < 14 + (int)sizeof(arp_packet_t)) return;
     if (ntohs(*(const uint16_t *)(frame + 12)) != ETHERTYPE_ARP) return;
     const arp_packet_t *arp = (const arp_packet_t *)(frame + 14);
@@ -137,7 +139,7 @@ static volatile bool icmp_got_reply = false;
 static uint16_t      icmp_ping_id   = 0x4E4F;
 static uint16_t      icmp_ping_seq  = 0;
 
-void handle_icmp_rx(const uint8_t *frame, uint16_t len) {
+void handle_icmp_packet(const uint8_t *frame, uint16_t len) {
     if (len < 14 + 20 + (int)sizeof(icmp_hdr_t)) return;
     if (ntohs(*(const uint16_t *)(frame + 12)) != ETHERTYPE_IPV4) return;
     const ipv4_hdr_t *ip = (const ipv4_hdr_t *)(frame + 14);
@@ -167,9 +169,9 @@ bool ping_icmp(uint32_t dest_ip) {
     icmp->id       = htons(icmp_ping_id);
     icmp->seq      = htons(icmp_ping_seq);
     memcpy(icmp_buf + sizeof(icmp_hdr_t), "NullOS ping!", 12);
-    icmp->checksum = net_checksum(icmp_buf, sizeof(icmp_buf));
+    icmp->checksum = calculate_net_checksum(icmp_buf, sizeof(icmp_buf));
 
-    ip_send(dest_ip, IP_PROTO_ICMP, icmp_buf, sizeof(icmp_buf));
+    send_ip_packet(dest_ip, IP_PROTO_ICMP, icmp_buf, sizeof(icmp_buf));
 
     for (int i = 0; i < 2000; i++) {
         if (icmp_got_reply) {
@@ -185,8 +187,9 @@ typedef void (*udp_rx_callback_t)(uint32_t src_ip, uint16_t src_port,
                                    uint16_t dst_port, const uint8_t *data, uint16_t len);
 static udp_rx_callback_t udp_callback = NULL;
 
-bool udp_send(uint32_t dest_ip, uint16_t src_port, uint16_t dst_port,
-              const void *data, uint16_t data_len) {
+bool send_udp_packet(uint32_t dest_ip, uint16_t src_port, uint16_t dst_port,
+                     const void *data, uint16_t data_len) {
+    if ((!data && data_len) || data_len > NET_MAX_FRAME_SIZE - 14 - 20 - sizeof(udp_hdr_t)) return false;
     uint16_t udp_len = sizeof(udp_hdr_t) + data_len;
     uint8_t buf[udp_len];
     memset(buf, 0, udp_len);
@@ -196,12 +199,12 @@ bool udp_send(uint32_t dest_ip, uint16_t src_port, uint16_t dst_port,
     udp->dst_port  = htons(dst_port);
     udp->length    = htons(udp_len);
     memcpy(buf + sizeof(udp_hdr_t), data, data_len);
-    udp->checksum  = transport_checksum(NET_MY_IP, dest_ip, IP_PROTO_UDP, buf, udp_len);
+    udp->checksum  = calculate_transport_checksum(NET_MY_IP, dest_ip, IP_PROTO_UDP, buf, udp_len);
 
-    return ip_send(dest_ip, IP_PROTO_UDP, buf, udp_len);
+    return send_ip_packet(dest_ip, IP_PROTO_UDP, buf, udp_len);
 }
 
-void udp_rx(const uint8_t *frame, uint16_t len) {
+void handle_udp_packet(const uint8_t *frame, uint16_t len) {
     if (len < 14 + 20 + (int)sizeof(udp_hdr_t)) return;
     if (ntohs(*(const uint16_t *)(frame + 12)) != ETHERTYPE_IPV4) return;
     const ipv4_hdr_t *ip = (const ipv4_hdr_t *)(frame + 14);
@@ -230,7 +233,7 @@ static volatile uint32_t dns_resolved_ip = 0;
 static volatile bool     dns_got_reply   = false;
 static uint16_t          dns_query_id    = 0xD175;
 
-static int dns_encode_name(const char *name, uint8_t *out) {
+static int encode_dns_name(const char *name, uint8_t *out) {
     int total = 0;
     while (*name) {
         const char *dot = strchr(name, '.');
@@ -245,7 +248,7 @@ static int dns_encode_name(const char *name, uint8_t *out) {
     return total;
 }
 
-void dns_rx(const uint8_t *payload, uint16_t len) {
+void handle_dns_response(const uint8_t *payload, uint16_t len) {
     if (len < (int)sizeof(dns_hdr_t)) return;
     const dns_hdr_t *hdr = (const dns_hdr_t *)payload;
     if (ntohs(hdr->id) != dns_query_id) return;
@@ -292,14 +295,14 @@ void dns_rx(const uint8_t *payload, uint16_t len) {
     }
 }
 
-static void dns_udp_rx(uint32_t src_ip, uint16_t src_port, uint16_t dst_port,
-                       const uint8_t *data, uint16_t len) {
+static void handle_dns_udp(uint32_t src_ip, uint16_t src_port, uint16_t dst_port,
+                           const uint8_t *data, uint16_t len) {
     (void)src_ip;
     if (dst_port == DNS_SRC_PORT && src_port == DNS_PORT)
-        dns_rx(data, len);
+        handle_dns_response(data, len);
 }
 
-uint32_t dns_resolve(const char *hostname) {
+uint32_t resolve_dns(const char *hostname) {
     uint8_t buf[512];
     memset(buf, 0, sizeof(buf));
     dns_hdr_t *hdr = (dns_hdr_t *)buf;
@@ -307,15 +310,15 @@ uint32_t dns_resolve(const char *hostname) {
     hdr->flags     = htons(0x0100);  // recursion desired
     hdr->qdcount   = htons(1);
     int off = sizeof(dns_hdr_t);
-    off    += dns_encode_name(hostname, buf + off);
+    off    += encode_dns_name(hostname, buf + off);
     buf[off++] = 0x00; buf[off++] = DNS_TYPE_A;
     buf[off++] = 0x00; buf[off++] = DNS_CLASS_IN;
 
     dns_got_reply   = false;
     dns_resolved_ip = 0;
-    udp_callback    = dns_udp_rx;
+    udp_callback    = handle_dns_udp;
 
-    if (!udp_send(NET_DNS_IP, DNS_SRC_PORT, DNS_PORT, buf, (uint16_t)off)) { udp_callback = NULL; return 0; }
+    if (!send_udp_packet(NET_DNS_IP, DNS_SRC_PORT, DNS_PORT, buf, (uint16_t)off)) { udp_callback = NULL; return 0; }
 
     for (int i = 0; i < 3000; i++) {
         if (dns_got_reply) {
@@ -341,7 +344,7 @@ static tcp_socket_t *tcp_sockets[TCP_MAX_SOCKETS] = { NULL };
 
 static uint16_t tcp_next_port = 49152;  // ephemeral port range
 
-static uint16_t tcp_alloc_port(void) {
+static uint16_t allocate_tcp_port(void) {
     uint64_t irq;
     spin_lock_irqsave(&net_lock, &irq);
     uint16_t p = tcp_next_port++;
@@ -351,8 +354,8 @@ static uint16_t tcp_alloc_port(void) {
 }
 
 // Send a raw TCP segment
-static bool tcp_send_segment(tcp_socket_t *sock, uint8_t flags,
-                              const void *data, uint16_t data_len) {
+static bool send_tcp_segment(tcp_socket_t *sock, uint8_t flags,
+                             const void *data, uint16_t data_len) {
     uint16_t tcp_len = TCP_HDR_LEN + data_len;
     uint8_t buf[tcp_len];
     memset(buf, 0, tcp_len);
@@ -369,13 +372,13 @@ static bool tcp_send_segment(tcp_socket_t *sock, uint8_t flags,
     if (data && data_len)
         memcpy(buf + TCP_HDR_LEN, data, data_len);
 
-    tcp->checksum = transport_checksum(NET_MY_IP, sock->remote_ip,
-                                       IP_PROTO_TCP, buf, tcp_len);
-    return ip_send(sock->remote_ip, IP_PROTO_TCP, buf, tcp_len);
+    tcp->checksum = calculate_transport_checksum(NET_MY_IP, sock->remote_ip,
+                                                 IP_PROTO_TCP, buf, tcp_len);
+    return send_ip_packet(sock->remote_ip, IP_PROTO_TCP, buf, tcp_len);
 }
 
 // Write data into socket RX ring buffer
-static void tcp_rx_push(tcp_socket_t *sock, const uint8_t *data, uint16_t len) {
+static void push_tcp_rx(tcp_socket_t *sock, const uint8_t *data, uint16_t len) {
     for (uint16_t i = 0; i < len; i++) {
         uint32_t next = (sock->rx_head + 1) % TCP_RX_BUF_SIZE;
         if (next == sock->rx_tail) break;  // buffer full, drop
@@ -384,7 +387,7 @@ static void tcp_rx_push(tcp_socket_t *sock, const uint8_t *data, uint16_t len) {
     }
 }
 
-void tcp_rx(const uint8_t *frame, uint16_t len) {
+void handle_tcp_packet(const uint8_t *frame, uint16_t len) {
     if (len < 14 + TCP_HDR_LEN) return;
     if (ntohs(*(const uint16_t *)(frame + 12)) != ETHERTYPE_IPV4) return;
 
@@ -430,7 +433,7 @@ void tcp_rx(const uint8_t *frame, uint16_t len) {
             sock->local_seq  = seg_ack;
             sock->state      = TCP_ESTABLISHED;
             // Send ACK
-            tcp_send_segment(sock, TCP_ACK, NULL, 0);
+            send_tcp_segment(sock, TCP_ACK, NULL, 0);
         } else if (flags & TCP_RST) { sock->state = TCP_CLOSED; }
         break;
 
@@ -440,17 +443,17 @@ void tcp_rx(const uint8_t *frame, uint16_t len) {
         sock->remote_window = ntohs(tcp->window);
 
         if (payload_len > 0 && seg_seq == sock->remote_seq) {
-            tcp_rx_push(sock, payload, (uint16_t)payload_len);
+            push_tcp_rx(sock, payload, (uint16_t)payload_len);
             sock->remote_seq += payload_len;
             // Send ACK
-            tcp_send_segment(sock, TCP_ACK, NULL, 0);
+            send_tcp_segment(sock, TCP_ACK, NULL, 0);
         }
 
         if (flags & TCP_FIN) {
             sock->remote_seq++;
             sock->rx_fin = true;
             sock->state  = TCP_CLOSE_WAIT;
-            tcp_send_segment(sock, TCP_ACK, NULL, 0);
+            send_tcp_segment(sock, TCP_ACK, NULL, 0);
         }
         break;
 
@@ -459,7 +462,7 @@ void tcp_rx(const uint8_t *frame, uint16_t len) {
         if (flags & TCP_FIN) {
             sock->remote_seq++;
             sock->rx_fin = true;
-            tcp_send_segment(sock, TCP_ACK, NULL, 0);
+            send_tcp_segment(sock, TCP_ACK, NULL, 0);
             sock->state = TCP_TIME_WAIT;
         }
         break;
@@ -468,7 +471,7 @@ void tcp_rx(const uint8_t *frame, uint16_t len) {
         if (flags & TCP_FIN) {
             sock->remote_seq++;
             sock->rx_fin = true;
-            tcp_send_segment(sock, TCP_ACK, NULL, 0);
+            send_tcp_segment(sock, TCP_ACK, NULL, 0);
             sock->state = TCP_TIME_WAIT;
         }
         break;
@@ -482,14 +485,14 @@ void tcp_rx(const uint8_t *frame, uint16_t len) {
     }
 }
 
-tcp_socket_t *tcp_connect(uint32_t remote_ip, uint16_t remote_port) {
+tcp_socket_t *connect_tcp(uint32_t remote_ip, uint16_t remote_port) {
     tcp_socket_t *sock = malloc(sizeof(tcp_socket_t));
     if (!sock) return NULL;
     memset(sock, 0, sizeof(tcp_socket_t));
 
     sock->remote_ip   = remote_ip;
     sock->remote_port = remote_port;
-    sock->local_port  = tcp_alloc_port();
+    sock->local_port  = allocate_tcp_port();
     sock->local_seq   = (uint32_t)(read_hpet_counter() ^ (read_hpet_counter() >> 17)); // random ISN
     if (sock->local_seq == 0) sock->local_seq = 1;
     sock->state       = TCP_SYN_SENT;
@@ -502,7 +505,7 @@ tcp_socket_t *tcp_connect(uint32_t remote_ip, uint16_t remote_port) {
     spin_unlock_irqrestore(&net_lock, irq);
 
     // Send SYN
-    tcp_send_segment(sock, TCP_SYN, NULL, 0);
+    send_tcp_segment(sock, TCP_SYN, NULL, 0);
     sock->local_seq++;  // SYN consumes one seq number
 
     // Wait for SYN+ACK
@@ -512,11 +515,11 @@ tcp_socket_t *tcp_connect(uint32_t remote_ip, uint16_t remote_port) {
         sleep(1);
     }
 
-    tcp_free(sock);
+    free_tcp(sock);
     return NULL;
 }
 
-bool tcp_send(tcp_socket_t *sock, const void *data, uint16_t len) {
+bool send_tcp(tcp_socket_t *sock, const void *data, uint16_t len) {
     if (!sock || sock->state != TCP_ESTABLISHED) return false;
 
     const uint8_t *ptr = (const uint8_t *)data;
@@ -524,7 +527,7 @@ bool tcp_send(tcp_socket_t *sock, const void *data, uint16_t len) {
 
     while (remaining > 0) {
         uint16_t chunk = remaining < TCP_MSS ? remaining : TCP_MSS;
-        if (!tcp_send_segment(sock, TCP_ACK | TCP_PSH, ptr, chunk)) return false;
+        if (!send_tcp_segment(sock, TCP_ACK | TCP_PSH, ptr, chunk)) return false;
         sock->local_seq += chunk;
         ptr       += chunk;
         remaining -= chunk;
@@ -532,7 +535,7 @@ bool tcp_send(tcp_socket_t *sock, const void *data, uint16_t len) {
         // Wait for ACK before sending next chunk
         uint32_t expected_ack = sock->local_seq;
         for (int i = 0; i < 3000; i++) {
-            // Remote ACK is tracked implicitly via tcp_rx updating local_seq
+            // Remote ACK is tracked implicitly by the receive handler updating local_seq
             // For simplicity, we just wait a bit and continue
             if (sock->state != TCP_ESTABLISHED) return false;
             if (i > 50) break;  // small wait, not full RTT tracking
@@ -543,7 +546,7 @@ bool tcp_send(tcp_socket_t *sock, const void *data, uint16_t len) {
     return true;
 }
 
-int tcp_read(tcp_socket_t *sock, void *buf, int max_len) {
+int read_tcp(tcp_socket_t *sock, void *buf, int max_len) {
     if (!sock) return 0;
     uint8_t *out = (uint8_t *)buf;
     int count = 0;
@@ -555,11 +558,11 @@ int tcp_read(tcp_socket_t *sock, void *buf, int max_len) {
     return count;
 }
 
-int tcp_read_all(tcp_socket_t *sock, void *buf, int max_len, int timeout_ms) {
+int read_all_tcp(tcp_socket_t *sock, void *buf, int max_len, int timeout_ms) {
     if (!sock) return 0;
     int total = 0;
     for (int i = 0; i < timeout_ms; i++) {
-        int n = tcp_read(sock, (uint8_t *)buf + total, max_len - total);
+        int n = read_tcp(sock, (uint8_t *)buf + total, max_len - total);
         total += n;
         if (total >= max_len) break;
         if (sock->rx_fin && sock->rx_tail == sock->rx_head) break;
@@ -569,24 +572,24 @@ int tcp_read_all(tcp_socket_t *sock, void *buf, int max_len, int timeout_ms) {
     return total;
 }
 
-void tcp_close(tcp_socket_t *sock) {
+void close_tcp(tcp_socket_t *sock) {
     if (!sock) return;
     if (sock->state == TCP_ESTABLISHED) {
         sock->state = TCP_FIN_WAIT1;
-        tcp_send_segment(sock, TCP_FIN | TCP_ACK, NULL, 0);
+        send_tcp_segment(sock, TCP_FIN | TCP_ACK, NULL, 0);
         sock->local_seq++;
         // Wait for FIN+ACK
         for (int i = 0; i < 3000; i++) { if (sock->state == TCP_TIME_WAIT || sock->state == TCP_CLOSED) break; sleep(1); }
     } else if (sock->state == TCP_CLOSE_WAIT) {
         sock->state = TCP_LAST_ACK;
-        tcp_send_segment(sock, TCP_FIN | TCP_ACK, NULL, 0);
+        send_tcp_segment(sock, TCP_FIN | TCP_ACK, NULL, 0);
         sock->local_seq++;
         for (int i = 0; i < 3000; i++) { if (sock->state == TCP_CLOSED) break; sleep(1); }
     }
     sock->state = TCP_CLOSED;
 }
 
-void tcp_free(tcp_socket_t *sock) {
+void free_tcp(tcp_socket_t *sock) {
     if (!sock) return;
     uint64_t irq;
     spin_lock_irqsave(&net_lock, &irq);
@@ -595,14 +598,22 @@ void tcp_free(tcp_socket_t *sock) {
     free(sock);
 }
 
-void tcp_poll(tcp_socket_t *sock) { (void)sock; io_wait(); }
+void poll_tcp(tcp_socket_t *sock) { (void)sock; io_wait(); }
 
-bool tcp_is_connected(tcp_socket_t *sock) { return sock && sock->state == TCP_ESTABLISHED; }
+bool check_tcp_connected(tcp_socket_t *sock) { return sock && sock->state == TCP_ESTABLISHED; }
 
 
-void net_rx(const uint8_t *frame, uint16_t len) {
-    handle_arp_rx(frame, len);
-    handle_icmp_rx(frame, len);
-    udp_rx(frame, len);
-    tcp_rx(frame, len);
+void handle_net_packet(net_device_t *dev, const uint8_t *frame, uint16_t len) {
+    if (!dev || !frame || len < 14 || len > NET_MAX_FRAME_SIZE) return;
+
+    uint64_t irq;
+    spin_lock_irqsave(&net_lock, &irq);
+    bool is_current_device = dev == net_current_device;
+    spin_unlock_irqrestore(&net_lock, irq);
+    if (!is_current_device) return;
+
+    handle_arp_packet(frame, len);
+    handle_icmp_packet(frame, len);
+    handle_udp_packet(frame, len);
+    handle_tcp_packet(frame, len);
 }

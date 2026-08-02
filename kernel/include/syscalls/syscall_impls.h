@@ -1,6 +1,6 @@
 #pragma once
 
-#include <freestanding/stddef.h>
+#include <stddef.h>
 #include <main/sched.h>
 #include <syscalls/syscalls.h>
 
@@ -74,6 +74,10 @@ void sys_tgkill(syscall_frame_t *frame);
 void sys_uname(syscall_frame_t *frame);
 void sys_fcntl(syscall_frame_t *frame);
 void sys_flock(syscall_frame_t *frame);
+void sys_fsync(syscall_frame_t *frame);
+void sys_fdatasync(syscall_frame_t *frame);
+void sys_truncate(syscall_frame_t *frame);
+void sys_ftruncate(syscall_frame_t *frame);
 void sys_getdents(syscall_frame_t *frame);
 void sys_getcwd(syscall_frame_t *frame);
 void sys_chdir(syscall_frame_t *frame);
@@ -112,10 +116,11 @@ void sys_setrlimit(syscall_frame_t *frame);
 void sys_prlimit64(syscall_frame_t *frame);
 void sys_settimeofday(syscall_frame_t *frame);
 void sys_mount(syscall_frame_t *frame);
-void sys_umount(syscall_frame_t *frame);
+void sys_umount2(syscall_frame_t *frame);
 void sys_sethostname(syscall_frame_t *frame);
 void sys_setdomainname(syscall_frame_t *frame);
 void sys_gettid(syscall_frame_t *frame);
+void sys_readahead(syscall_frame_t *frame);
 void sys_clock_gettime(syscall_frame_t *frame);
 void sys_futex(syscall_frame_t *frame);
 void sys_getdents64(syscall_frame_t *frame);
@@ -143,4 +148,3 @@ void sys_epoll_ctl(syscall_frame_t *frame);
 void sys_epoll_pwait(syscall_frame_t *frame);
 void sys_epoll_create1(syscall_frame_t *frame);
 void sys_epoll_pwait2(syscall_frame_t *frame);
-void sys_readahead(syscall_frame_t *frame);

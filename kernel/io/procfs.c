@@ -1,6 +1,6 @@
-#include <freestanding/stdint.h>
-#include <freestanding/cpuid.h>
-#include <freestanding/dirent.h>
+#include <stdint.h>
+#include <cpuid.h>
+#include <dirent.h>
 #include <main/string.h>
 #include <main/sched.h>
 #include <main/fd.h>

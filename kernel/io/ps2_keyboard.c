@@ -1,10 +1,9 @@
-#include <freestanding/stdint.h>
+#include <stdint.h>
 #include <io/ps2_keyboard.h>
 #include <io/keyboard.h>
 #include <io/io.h>
 #include <io/ttys.h>
-#include <main/log.h>
-
+#include <io/terminal.h>
 static uint8_t ps2_repeat_key = 0;
 static int ps2_repeat_timer = 0;
 static bool ps2_key_held[128] = { false };
@@ -30,5 +29,5 @@ void handle_ps2_scancode(uint8_t sc) {
 
 void flush_ps2_keyboard_controller(void) {
     while (inb(0x64) & 1) inb(0x60);
-    log("flushed ps2 keyboard controller");
+    printf("ps2 keyboard: flushed ps2 keyboard controller\n");
 }

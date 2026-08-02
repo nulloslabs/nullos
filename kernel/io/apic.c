@@ -7,14 +7,17 @@
 #include <io/ioapic.h>
 #include <main/madt.h>
 #include <main/msr.h>
-#include <main/log.h>
-
+#include <io/terminal.h>
 enum apic_mode current_apic_mode = APIC_NONE;
-volatile uint32_t *lapic_base = NULL;
+volatile uint8_t *lapic_base = NULL;
 
 // xAPIC MMIO helpers
-static uint32_t lapic_read(uint32_t reg) { return lapic_base[reg / 4]; }
-static void lapic_write(uint32_t reg, uint32_t val) { lapic_base[reg / 4] = val; }
+static uint32_t lapic_read(uint32_t reg) {
+    return *(volatile uint32_t *)(lapic_base + reg);
+}
+static void lapic_write(uint32_t reg, uint32_t val) {
+    *(volatile uint32_t *)(lapic_base + reg) = val;
+}
 
 // --- Detection ---
 enum apic_mode detect_apic(void) {
@@ -29,7 +32,7 @@ enum apic_mode detect_apic(void) {
 // --- Initialization ---
 static void init_xapic_for_cpu(uint64_t base_phys) {
     // Map LAPIC MMIO into kernel address space
-    lapic_base = (volatile uint32_t *)phys_to_virt(base_phys);
+    lapic_base = (volatile uint8_t *)vmap_mmio(base_phys, 1);
 
     // Enable LAPIC via IA32_APIC_BASE MSR
     uint64_t msr = read_msr(MSR_APIC_BASE);
@@ -181,21 +184,21 @@ void init_apic_for_cpu(void) {
 void init_apic(void) {
     init_apic_for_cpu();
     if (current_apic_mode == APIC_X2APIC) {
-        log("initialized x2apic");
+        printf("apic: initialized x2apic\n");
     } else if (current_apic_mode == APIC_XAPIC) {
-        log("initialized xapic");
+        printf("apic: initialized xapic\n");
     } else {
-        log("no apic found, falling back to pic");
+        printf("apic: no apic found, falling back to pic\n");
         return;
     }
 
-    disable_pic();
-
     if (ioapic_phys_addr) {
-        init_ioapic(phys_to_virt((uint64_t)ioapic_phys_addr));
+        init_ioapic(vmap_mmio((uint64_t)ioapic_phys_addr, 1));
         ioapic_route_irq(1, 33, 0, 0);
         for (int i = 0; i < 4; i++) {
             ioapic_route_irq(10 + i, 43, 0, IOAPIC_ACTIVE_LOW | IOAPIC_TRIGGER_LEVEL);
         }
     }
+
+    disable_pic();
 }

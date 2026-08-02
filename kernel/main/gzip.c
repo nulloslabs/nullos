@@ -1,5 +1,5 @@
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
+#include <stdint.h>
+#include <stddef.h>
 #include <main/string.h>
 #include <main/gzip.h>
 

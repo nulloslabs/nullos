@@ -1,33 +1,19 @@
-#include <freestanding/stddef.h>
-#include <freestanding/stdint.h>
-#include <freestanding/sys/stat.h>
-#include <freestanding/sys/types.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <main/panic.h>
 #include <io/initrd.h>
 #include <main/string.h>
 #include <main/gzip.h>
 #include <mm/mm.h>
 #include <mm/pmm.h>
-#include <freestanding/errno.h>
-#include <freestanding/dirent.h>
+#include <errno.h>
+#include <dirent.h>
 #include <main/sched.h>
 #include <main/limine_req.h>
-#include <main/log.h>
-#include <limine/limine.h>
-
-struct initrd_archive_entry {
-    char path[256];
-    uint8_t *data;
-    uint64_t size;
-    mode_t mode;
-    uid_t uid;
-    gid_t gid;
-    uint32_t ino;
-    uint32_t devmajor;
-    uint32_t devminor;
-    uint32_t nlink;
-    char link_target[256];
-};
+#include <io/terminal.h>
+#include <limine.h>
 
 static uint8_t *initrd_decompressed = NULL;
 static struct initrd_archive_entry *archive_entries = NULL;
@@ -36,6 +22,9 @@ static int archive_entry_count = 0;
 // without consuming one of the fixed-size overlay slots.
 static uint8_t *archive_tombstone_bits = NULL;
 static modified_file_t modified_files[MAX_MODIFIED_FILES];
+// newc inode numbers are 32-bit. Keep dynamically-created overlay inodes in
+// a disjoint range while preserving archive inode numbers (and hard links).
+static ino_t next_overlay_ino = 0x100000000ULL;
 
 static void collapse_slashes(const char *in, char *out, size_t out_size) {
     size_t j = 0;
@@ -294,9 +283,17 @@ static void add_modified_file(const char *path, void *data, size_t size, size_t 
 
     for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
         if (!modified_files[i].is_active) {
+            int archive_idx = archive_entry_idx(path);
+            ino_t inode = next_overlay_ino++;
+            // Promoting an existing archive entry into the writable overlay
+            // must not change its inode. Re-creating a tombstoned path is a
+            // genuinely new file and therefore receives a new inode.
+            if (archive_idx >= 0 && !archive_tombstone_get(path))
+                inode = archive_entries[archive_idx].ino;
             modified_files[i].is_active = true;
             strncpy(modified_files[i].path, path, sizeof(modified_files[i].path) - 1);
             modified_files[i].path[sizeof(modified_files[i].path) - 1] = '\0';
+            modified_files[i].inode = inode;
             modified_files[i].data = data;
             modified_files[i].size = size;
             modified_files[i].capacity = capacity;
@@ -375,7 +372,7 @@ initrd_file_t read_initrd(const char *path) {
     strncpy(current_path, path, sizeof(current_path) - 1);
     current_path[sizeof(current_path) - 1] = '\0';
 
-    initrd_file_t result = { .data = NULL, .size = 0, .mode = 0, .uid = 0, .gid = 0 };
+    initrd_file_t result = { .inode = 0, .data = NULL, .size = 0, .mode = 0, .uid = 0, .gid = 0 };
 
     for (int depth = 0; depth < 8; depth++) {
         char norm[256];
@@ -394,6 +391,7 @@ initrd_file_t read_initrd(const char *path) {
                     break;
                 }
                 result.data = modified_files[i].data;
+                result.inode = modified_files[i].inode;
                 result.size = modified_files[i].size;
                 result.mode = modified_files[i].mode;
                 result.uid = modified_files[i].uid;
@@ -416,6 +414,7 @@ initrd_file_t read_initrd(const char *path) {
                 continue;
             }
             result.data = entry->data;
+            result.inode = entry->ino;
             result.size = entry->size;
             result.mode = entry->mode;
             result.uid = entry->uid;
@@ -438,6 +437,7 @@ static initrd_file_t stat_initrd_ex(const char *path, bool follow_final) {
     for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
         if (modified_files[i].is_active && strcmp(modified_files[i].path, norm) == 0) {
             initrd_file_t result = {
+                .inode = modified_files[i].inode,
                 .data = modified_files[i].data,
                 .size = modified_files[i].size,
                 .mode = modified_files[i].mode,
@@ -458,6 +458,7 @@ static initrd_file_t stat_initrd_ex(const char *path, bool follow_final) {
     if (idx >= 0) {
         struct initrd_archive_entry *entry = &archive_entries[idx];
         initrd_file_t result = {
+            .inode = entry->ino,
             .data = ((entry->mode & 0xF000) == 0xA000) ? (void *)entry->link_target : (void *)entry->data,
             .size = entry->size,
             .mode = entry->mode,
@@ -593,6 +594,13 @@ int write_initrd_partial(const char *path, const void *data, uint64_t off, uint6
 int mkdir_initrd(const char *path, mode_t mode, uid_t uid, gid_t gid) {
     char norm[256];
     get_norm_path(path, norm, sizeof(norm));
+
+    // POSIX: mkdir must fail with EEXIST if the path already exists. Without
+    // this check, `mkdir -p /dev/pts` after `mount devtmpfs /dev` would add a
+    // shadow overlay entry for /dev, which then shows up TWICE in `ls /`
+    // (once from the archive, once from the overlay).
+    initrd_file_t existing = read_initrd(path);
+    if (existing.data || existing.mode) return -EEXIST;
 
     add_modified_file(norm, NULL, 0, 0, mode | 0040000, uid, gid);
     return 0;
@@ -808,7 +816,8 @@ int get_initrd_entry(int index, directory_entry_t *entry) {
     return -1; // Index out of range
 }
 
-int next_initrd_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size, uint8_t *child_type) {
+int next_initrd_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size,
+                      uint8_t *child_type, ino_t *child_ino) {
     char prefix[258];
     strncpy(prefix, dir_norm, sizeof(prefix) - 2);
     prefix[sizeof(prefix) - 2] = '\0';
@@ -844,6 +853,7 @@ int next_initrd_child(int *index, const char *dir_norm, char *child_name, size_t
                         mode_t type = archive->mode & 0xF000;
                         *child_type = (type == 0x4000) ? DT_DIR :
                                       (type == 0xA000) ? DT_LNK : DT_REG;
+                        if (child_ino) *child_ino = archive->ino;
                         *index = i;
                         return 0;
                     }
@@ -880,6 +890,7 @@ int next_initrd_child(int *index, const char *dir_norm, char *child_name, size_t
                 mode_t mbits = modified_files[i].mode & 0xF000;
                 *child_type = (mbits == 0x4000) ? DT_DIR :
                               (mbits == 0xA000) ? DT_LNK : DT_REG;
+                if (child_ino) *child_ino = modified_files[i].inode;
                 *index = archive_entry_count + i;
                 return 0;
             }
@@ -1014,5 +1025,5 @@ void init_initrd(void) {
     } else {
         panic("no module found");
     }
-    log("initialized initrd");
+    printf("initrd: initialized initrd\n");
 }

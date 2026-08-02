@@ -1,7 +1,7 @@
 #pragma once
 
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
+#include <stdint.h>
+#include <stddef.h>
 
 #define PAGE_SIZE 4096
 #define KERNEL_HEAP_BASE  0xffffb00000000000ULL

@@ -1,4 +1,4 @@
-#include <freestanding/stdint.h>
+#include <stdint.h>
 #include <io/rtl8139.h>
 #include <io/io.h>
 #include <mm/mm.h>
@@ -6,12 +6,12 @@
 #include <main/string.h>
 #include <io/net.h>
 #include <main/spinlocks.h>
-#include <main/log.h>
-
+#include <io/terminal.h>
 rtl8139_t rtl8139 = {0};
 
 static spinlock_t rtl_lock = SPINLOCK_INIT;
 static bool rtl8139_ready = false;
+static net_device_t rtl8139_net_device;
 
 static uint8_t rtl_read8(uint8_t reg) { return inb(rtl8139.io_base + reg); }
 static uint16_t rtl_read16(uint8_t reg) { return inw(rtl8139.io_base + reg); }
@@ -27,13 +27,16 @@ static void receive_rtl8139(uint64_t *irq) {
         uint16_t status = *(uint16_t *)(buf + 0);
         uint16_t pkt_len = *(uint16_t *)(buf + 2);
 
-        if (!(status & 0x01) || pkt_len < 14 || pkt_len > 1518) { rtl_write16(RTL_CAPR, rtl_read16(RTL_CBR) - 16); break; }
+        if (!(status & 0x01) || pkt_len < 18 || pkt_len > 1518) { rtl_write16(RTL_CAPR, rtl_read16(RTL_CBR) - 16); break; }
 
         uint8_t *pkt = buf + 4;
 
         spin_unlock_irqrestore(&rtl_lock, *irq);
         // NOTE: Drop lock before calling into net stack (it has its own locks)
-        net_rx(pkt, pkt_len);
+        // RTL8139 includes the four-byte Ethernet FCS in pkt_len; the e1000
+        // strips it in hardware, so normalize both drivers to the same frame
+        // format before entering the shared stack.
+        handle_net_packet(&rtl8139_net_device, pkt, pkt_len - 4);
         spin_lock_irqsave(&rtl_lock, irq);
 
         rtl8139.rx_offset = (rtl8139.rx_offset + pkt_len + 4 + 3) & ~3;
@@ -138,13 +141,12 @@ void init_rtl8139(pci_device_t *dev) {
 
     pci_request_irq(dev, poll_rtl8139);
 
-    log("initialized rtl8139");
+    printf("rtl8139: initialized rtl8139\n");
 
     rtl8139.tx_slot = 0;
     rtl8139_ready = true;
 
-    static net_device_t net_dev;
-    memcpy(net_dev.mac, rtl8139.mac, 6);
-    net_dev.send = send_rtl8139;
-    net_register_device(&net_dev);
+    memcpy(rtl8139_net_device.mac, rtl8139.mac, 6);
+    rtl8139_net_device.send = send_rtl8139;
+    register_net_device(&rtl8139_net_device);
 }

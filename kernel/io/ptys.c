@@ -1,13 +1,12 @@
-#include <freestanding/errno.h>
+#include <errno.h>
 #include <io/devtmpfs.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
 #include <io/ptys.h>
 #include <io/ttys.h>
-#include <freestanding/signal.h>
+#include <signal.h>
 #include <main/sched.h>
-#include <main/log.h>
-
+#include <io/terminal.h>
 pty_t ptys[NUM_PTYS];
 spinlock_t pty_lock = SPINLOCK_INIT;
 
@@ -296,5 +295,5 @@ void init_ptys(void) {
         ptys[i].master_refs = 0;
         ptys[i].slave_refs = 0;
     }
-    log("initialized ptys");
+    printf("ptys: initialized ptys\n");
 }

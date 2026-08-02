@@ -1,19 +1,20 @@
-#include <freestanding/stdint.h>
+#include <stdint.h>
+#include <errno.h>
 #include <io/initrd.h>
+#include <io/tmpfs.h>
 #include <io/fonts.h>
 #include <io/terminal.h>
 #include <main/string.h>
 #include <io/devtmpfs.h>
-#include <limine/limine.h>
+#include <io/procfs.h>
+#include <main/sched.h>
+#include <limine.h>
 #include <main/limine_req.h>
 #include <main/halt.h>
-#include <main/log.h>
 
 unsigned char current_font[16384];
 uint8_t current_font_w = 0;
 uint8_t current_font_h = 0;
-
-/* Note from developer: Was going to name the built-in fonts 8x15_font[] and 8x16_font[] but C is dumb with variable/function names so had to add builtin_ to the start. Also I didn't like _8x15_font[] or _8x16_font[], LMAO. */
 
 static uint8_t builtin_8x15_font[] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -683,21 +684,74 @@ static uint8_t builtin_8x16_font[] = {
     0x00, 0x00, 0x00, 0x00
 };
 
-void change_font(const char *path, uint8_t w, uint8_t h) {
-    if (!w || !h) return; // Sanity check if width or height is 0
-    if (devtmpfs_device_exists(path)) return;
+// Resolve a font through the same filesystem split used by the syscall layer.
+// proc_buf owns generated procfs contents for the lifetime of change_font().
+static int read_font_file(const char *path, const void **data, uint64_t *size,
+                          char proc_buf[PROCFS_MAX_CONTENT], int link_depth) {
+    if (link_depth >= 40) return -ELOOP;
+    if (device_exists_on_devtmpfs(path)) return -EEXIST;
+
+    if (is_procfs_path(path)) {
+        proc_node_t node;
+        int self = current_task_ptr ? current_task : -1;
+        if (self < 0 || !resolve_procfs(path, self, &node)) return -ENOENT;
+        if (is_procfs_dir(&node)) return -EISDIR;
+
+        if (node.type == PROC_NODE_SYMLINK) {
+            char target[256];
+            int len = read_procfs_link(&node, self, target, sizeof(target));
+            if (len < 0) return -ENOENT;
+
+            char resolved[256];
+            resolve_link_target(path, target, resolved, sizeof(resolved));
+            return read_font_file(resolved, data, size, proc_buf, link_depth + 1);
+        }
+
+        *size = get_procfs_content(&node, proc_buf);
+        *data = proc_buf;
+        return 0;
+    }
+
+    if (is_tmpfs_dir(path)) {
+        tmpfs_file_t file = read_tmpfs(path);
+        if (!file.mode) return -ENOENT;
+        if (S_ISDIR(file.mode)) return -EISDIR;
+        *data = file.data;
+        *size = file.size;
+        return 0;
+    }
 
     initrd_file_t file = read_initrd(path);
+    if (!file.mode) return -ENOENT;
+    if (S_ISDIR(file.mode)) return -EISDIR;
+    *data = file.data;
+    *size = file.size;
+    return 0;
+}
 
-    if (!file.data || file.size == 0 || file.size > 16384) return; // Sanity check if the file dosent exist, empty or too big
-    if (256 * h * w / 8 != file.size) return; // Sanity check if the filesize is valid or not
-    if (memcmp(current_font, file.data, file.size) == 0) return; // Sanity check if it's the same file or not
+int change_font(const char *path, uint8_t w, uint8_t h) {
+    if (!path) return -EINVAL;
+    if (!w || !h) return -EINVAL; // Sanity check if width or height is 0
+
+    char abs_path[256];
+    get_absolute_path(path, abs_path, sizeof(abs_path));
+
+    const void *font_data = NULL;
+    uint64_t font_size = 0;
+    char proc_buf[PROCFS_MAX_CONTENT];
+    int r = read_font_file(abs_path, &font_data, &font_size, proc_buf, 0);
+    if (r < 0) return r;
+
+    if (!font_data || font_size == 0 || font_size > sizeof(current_font)) return -ENOENT;
+    if ((uint64_t)256 * h * w / 8 != font_size) return -EFBIG;
+    if (memcmp(current_font, font_data, font_size) == 0) return 0;
 
     clrscr(); // Clear the screen so there isn't any weird shenanigans
 
-    memcpy(current_font, file.data, file.size);
+    memcpy(current_font, font_data, font_size);
     current_font_w = w;
     current_font_h = h;
+    return 0;
 }
 
 void init_default_font(void) {
@@ -715,5 +769,5 @@ void init_default_font(void) {
         // We can't print the output without the font, so just silently halt
         halt();
     }
-    log("initialized %dx%d font", current_font_w, current_font_h); // Now we can use functions like log() again!
+    printf("fonts: initialized %dx%d font\n", current_font_w, current_font_h); // Now we can use functions like log() again!
 }

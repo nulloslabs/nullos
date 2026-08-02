@@ -1,6 +1,6 @@
 #pragma once
 
-#include <freestanding/stdint.h>
+#include <stdint.h>
 #include <io/pci.h>
 #include <io/usb.h>
 

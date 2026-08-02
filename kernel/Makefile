@@ -18,15 +18,12 @@ all: kernel
 -include $(DEP)
 
 limine_header: Makefile config.mk
-	@if [ -f include/limine/limine.h ]; then \
-		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/include/limine/limine.h is already up to date"; \
-	else \
+	@if [ ! -f include/limine/limine.h ] || [ "config.mk" -nt "include/limine/limine.h" ] || [ "Makefile" -nt "include/limine/limine.h" ]; then \
 		printf "  %-7s %s\n" "FETCH" "$(SUBDIR)/include/limine/limine.h" && \
 		mkdir -p include/limine && \
-		curl -sLo include/limine/limine.h https://raw.githubusercontent.com/limine-bootloader/limine-protocol/refs/heads/trunk/include/limine.h && \
-		perl -pi -e 's/<stdint\.h>/<freestanding\/stdint.h> \/\/ Changed to match NullOS headers/g' include/limine/limine.h && \
-		perl -pi -e 's/<stdbool\.h>/<freestanding\/stdbool.h> \/\/ Changed to match NullOS headers/g' include/limine/limine.h && \
-		perl -pi -e 's/<stddef\.h>/<freestanding\/stddef.h> \/\/ Changed to match NullOS headers/g' include/limine/limine.h; \
+		curl -sLo include/limine/limine.h https://raw.githubusercontent.com/limine-bootloader/limine-protocol/refs/heads/trunk/include/limine.h; \
+	else \
+		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/include/limine/limine.h is already up to date"; \
 	fi
 
 $(SUBDIRS): config.mk Makefile limine_header

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <freestanding/stdint.h>
+#include <stdint.h>
 
 // LAPIC register offsets (for xAPIC MMIO)
 #define LAPIC_ID 0x020
@@ -44,7 +44,7 @@ enum apic_mode {
 };
 
 extern enum apic_mode current_apic_mode;
-extern volatile uint32_t *lapic_base;
+extern volatile uint8_t *lapic_base;
 
 // Common API (dispatches based on current_apic_mode)
 void eoi_apic(void);

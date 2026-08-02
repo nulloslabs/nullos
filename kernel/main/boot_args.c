@@ -1,9 +1,9 @@
-#include <freestanding/stdint.h>
+#include <stdint.h>
 #include <main/boot_args.h>
 #include <main/limine_req.h>
 #include <main/string.h>
 #include <main/strings.h>
-#include <main/log.h>
+#include <io/terminal.h>
 #include <io/serial.h>
 
 static const char *args = NULL;
@@ -34,5 +34,5 @@ const char *get_arg_value(const char *key) {
 void parse_boot_args(void) {
     args = get_boot_args();
     // NOTE: If we need anything, we can just put if checks here, right now it dosen't really parse anything...xD
-    log("parsed boot args");
+    printf("boot args: parsed boot args\n");
 }

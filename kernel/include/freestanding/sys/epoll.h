@@ -1,6 +1,6 @@
 #pragma once
 
-#include <freestanding/stdint.h>
+#include <stdint.h>
 
 #define EPOLLIN      0x0001
 #define EPOLLPRI     0x0002

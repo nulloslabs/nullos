@@ -2,12 +2,13 @@
 #include <main/string.h>
 #include <main/limine_req.h>
 #include <main/spinlocks.h>
-#include <main/log.h>
-
+#include <io/terminal.h>
 static uint8_t* bitmap = NULL;
 static uint8_t* ref_counts = NULL;
 static uint64_t max_pages = 0;
 static uint64_t last_index = 0; // For optimization
+static uint64_t total_pages = 0;
+static uint64_t free_pages = 0;
 static spinlock_t pmm_lock = SPINLOCK_INIT;
 
 void* pmalloc(void) {
@@ -20,6 +21,7 @@ void* pmalloc(void) {
         if (!(bitmap[idx / 8] & (1 << (idx % 8)))) {
             bitmap[idx / 8] |= (1 << (idx % 8)); // Mark used
             ref_counts[idx] = 1;
+            free_pages--;
             last_index = idx;
             uint64_t phys = idx * PAGE_SIZE;
             spin_unlock_irqrestore(&pmm_lock, flags);
@@ -59,6 +61,7 @@ void* prealloc(uint64_t count) {
                 bitmap[(idx + j) / 8] |= (1 << ((idx + j) % 8));
                 ref_counts[idx + j] = 1;
             }
+            free_pages -= count;
             last_index = idx + count;
             spin_unlock_irqrestore(&pmm_lock, flags);
             return (void*)(idx * PAGE_SIZE);
@@ -76,6 +79,7 @@ void pfree(void *phys_addr) {
         ref_counts[page_idx]--;
         if (ref_counts[page_idx] == 0) {
             bitmap[page_idx / 8] &= ~(1 << (page_idx % 8));
+            free_pages++;
         }
     }
     spin_unlock_irqrestore(&pmm_lock, flags);
@@ -96,6 +100,7 @@ void pfree_range(void *phys_addr, uint64_t size) {
         if (page_idx < max_pages && ref_counts[page_idx] > 0) {
             ref_counts[page_idx] = 0;
             bitmap[page_idx / 8] &= ~(1 << (page_idx % 8));
+            free_pages++;
         }
     }
     spin_unlock_irqrestore(&pmm_lock, flags);
@@ -111,6 +116,30 @@ void pref(void *phys_addr) {
     spin_unlock_irqrestore(&pmm_lock, flags);
 }
 
+uint64_t get_total_pmm_memory(void) {
+    uint64_t flags;
+    spin_lock_irqsave(&pmm_lock, &flags);
+    uint64_t memory = total_pages * PAGE_SIZE;
+    spin_unlock_irqrestore(&pmm_lock, flags);
+    return memory;
+}
+
+uint64_t get_free_pmm_memory(void) {
+    uint64_t flags;
+    spin_lock_irqsave(&pmm_lock, &flags);
+    uint64_t memory = free_pages * PAGE_SIZE;
+    spin_unlock_irqrestore(&pmm_lock, flags);
+    return memory;
+}
+
+uint64_t get_used_pmm_memory(void) {
+    uint64_t flags;
+    spin_lock_irqsave(&pmm_lock, &flags);
+    uint64_t memory = (total_pages - free_pages) * PAGE_SIZE;
+    spin_unlock_irqrestore(&pmm_lock, flags);
+    return memory;
+}
+
 void init_pmm(void) {
     struct limine_memmap_response* memmap = mm_req.response;
     uint64_t hhdm_offset = hhdm_req.response->offset;
@@ -124,6 +153,8 @@ void init_pmm(void) {
     }
 
     max_pages = highest_addr / PAGE_SIZE;
+    total_pages = 0;
+    free_pages = 0;
     uint64_t bitmap_size = (max_pages + 7) / 8;
     uint64_t refcount_size = max_pages;
 
@@ -152,11 +183,14 @@ void init_pmm(void) {
         if (entry->type == LIMINE_MEMMAP_USABLE) {
             for (uint64_t j = 0; j < entry->length; j += PAGE_SIZE) {
                 uint64_t page_idx = (entry->base + j) / PAGE_SIZE;
-                // Clear the bit
-                bitmap[page_idx / 8] &= ~(1 << (page_idx % 8));
-                ref_counts[page_idx] = 0;
+                if (page_idx < max_pages && (bitmap[page_idx / 8] & (1 << (page_idx % 8)))) {
+                    bitmap[page_idx / 8] &= ~(1 << (page_idx % 8));
+                    ref_counts[page_idx] = 0;
+                    total_pages++;
+                    free_pages++;
+                }
             }
         }
     }
-    log("initialized pmm");
+    printf("pmm: initialized pmm\n");
 }

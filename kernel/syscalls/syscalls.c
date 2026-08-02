@@ -1,8 +1,8 @@
-#include <freestanding/errno.h>
-#include <freestanding/asm/unistd.h>
+#include <errno.h>
+#include <asm/unistd.h>
 #include <main/sched.h>
 #include <main/msr.h>
-#include <main/log.h>
+#include <io/terminal.h>
 #include <io/ttys.h>
 #include <syscalls/syscalls.h>
 #include <syscalls/syscall_impls.h>
@@ -56,6 +56,10 @@ const syscall_fn_t syscall_table[] = {
     [__NR_uname]           = sys_uname,
     [__NR_fcntl]           = sys_fcntl,
     [__NR_flock]           = sys_flock,
+    [__NR_fsync]           = sys_fsync,
+    [__NR_fdatasync]       = sys_fdatasync,
+    [__NR_truncate]        = sys_truncate,
+    [__NR_ftruncate]       = sys_ftruncate,
     [__NR_getdents]        = sys_getdents,
     [__NR_getcwd]          = sys_getcwd,
     [__NR_chdir]           = sys_chdir,
@@ -97,11 +101,12 @@ const syscall_fn_t syscall_table[] = {
     [__NR_setrlimit]       = sys_setrlimit,
     [__NR_settimeofday]    = sys_settimeofday,
     [__NR_mount]           = sys_mount,
-    [__NR_umount]          = sys_umount,
+    [__NR_umount2]         = sys_umount2,
     [__NR_reboot]          = sys_reboot,
     [__NR_sethostname]     = sys_sethostname,
     [__NR_setdomainname]   = sys_setdomainname,
     [__NR_gettid]          = sys_gettid,
+    [__NR_readahead]       = sys_readahead,
     [__NR_tkill]           = sys_tkill,
     [__NR_futex]           = sys_futex,
     [__NR_sched_getaffinity] = sys_sched_getaffinity,
@@ -109,7 +114,6 @@ const syscall_fn_t syscall_table[] = {
     [__NR_getdents64]      = sys_getdents64,
     [__NR_set_tid_address] = sys_set_tid_address,
     [__NR_clock_gettime]   = sys_clock_gettime,
-    [__NR_readahead]       = sys_readahead,
     [__NR_exit_group]      = sys_exit_group,
     [__NR_epoll_wait]      = sys_epoll_wait,
     [__NR_epoll_ctl]       = sys_epoll_ctl,
@@ -166,5 +170,5 @@ void init_syscalls_for_cpu(void) {
 
 void init_syscalls(void) {
     init_syscalls_for_cpu();
-    log("initialized syscalls");
+    printf("syscalls: initialized syscalls\n");
 }

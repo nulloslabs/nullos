@@ -1,6 +1,6 @@
 #pragma once
 
-#include <freestanding/stddef.h>
+#include <stddef.h>
 
 #define CHAR_BIT    8
 #define CHAR_MIN    (-128)

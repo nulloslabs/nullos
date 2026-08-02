@@ -1,10 +1,10 @@
 #pragma once
 
-#include <freestanding/stdint.h>
-#include <freestanding/signal.h>
-#include <freestanding/ucontext.h>
-#include <freestanding/linux/rseq.h>
-#include <freestanding/sys/types.h>
+#include <stdint.h>
+#include <signal.h>
+#include <ucontext.h>
+#include <linux/rseq.h>
+#include <sys/types.h>
 #include <main/fd.h>
 #include <main/spinlocks.h>
 #include <mm/vmm.h>

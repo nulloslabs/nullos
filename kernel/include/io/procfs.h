@@ -1,8 +1,8 @@
 #pragma once
 
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
-#include <freestanding/sys/stat.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <sys/stat.h>
 
 #define PROCFS_MAX_CONTENT 4096
 #define PROC_NODE_COUNT (int)(sizeof(proc_nodes) / sizeof(proc_nodes[0]))

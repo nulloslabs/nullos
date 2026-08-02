@@ -24,7 +24,7 @@ A secure, fast and privacy-focused hobby OS.
 
 ## 🛠️ Build Requirements
 
-| Linux (x86_64) | MacOS (any) | Other (any) |
+| Linux (x86_64) | MacOS (any) | Other (x86_64) |
 | :--- | :--- | :--- |
 | | `docker` | |
 | `gcc` | `x86_64-elf-gcc` | `x86_64-linux-gnu-gcc` |
@@ -34,7 +34,6 @@ A secure, fast and privacy-focused hobby OS.
 | `xorriso` | `xorriso` | `xorriso` |
 | `qemu-system-x86_64` | `qemu-system-x86_64` | `qemu-system-x86_64` |
 | `curl` | `curl` | `curl` |
-| `perl` | `perl` | `perl` |
 | `tar` | `tar` | `tar` |
 | `cpio` | `cpio` | `cpio` |
 | `zstd` | | `zstd` |

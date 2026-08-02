@@ -1,44 +1,152 @@
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
-#include <freestanding/stdarg.h>
-#include <freestanding/signal.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <stdarg.h>
+#include <stdbool.h>
+#include <signal.h>
+#include <main/elf.h>
+#include <main/limine_req.h>
 #include <main/panic.h>
 #include <main/halt.h>
 #include <main/sched.h>
+#include <io/terminal.h>
 #include <mm/vmm.h>
 #include <syscalls/syscalls.h>
 #include <syscalls/syscall_impls.h>
-#include <io/terminal.h>
 
-static const char* panic_basename(const char* path) {
-    const char* base = path;
-    for (const char* p = path; *p; p++) {
-        if (*p == '/') base = p + 1;
-    }
-    return base;
+static bool is_elf_range_valid(uint64_t offset, uint64_t length, uint64_t file_size) {
+    return offset <= file_size && length <= file_size - offset;
 }
 
-__attribute__((noreturn)) void panicat(const char* file, const char *msg, ...) {
+static bool find_kernel_symbol_table(kernel_symbol_table_t *table_out) {
+    if (!cmdline_req.response ||
+        !cmdline_req.response->executable_file) return false;
+
+    const struct limine_file *file = cmdline_req.response->executable_file;
+    const uint8_t *image = (const uint8_t *)file->address;
+    uint64_t file_size = file->size;
+    if (!image || file_size < sizeof(elf64_ehdr_t)) return false;
+
+    const elf64_ehdr_t *ehdr = (const elf64_ehdr_t *)image;
+    if (ehdr->magic != ELF_MAGIC || ehdr->class != ELF_CLASS64 ||
+        ehdr->shentsize < sizeof(elf64_shdr_t) || ehdr->shnum == 0 ||
+        !is_elf_range_valid(ehdr->shoff, (uint64_t)ehdr->shentsize * ehdr->shnum, file_size)) {
+        return false;
+    }
+
+    uint64_t load_bias = 0;
+    if (ehdr->phentsize >= sizeof(elf64_phdr_t) && ehdr->phnum > 0 &&
+        is_elf_range_valid(ehdr->phoff, (uint64_t)ehdr->phentsize * ehdr->phnum, file_size) &&
+        eaddr_req.response) {
+        uint64_t linked_base = (uint64_t)-1;
+        for (uint16_t i = 0; i < ehdr->phnum; i++) {
+            const elf64_phdr_t *phdr = (const elf64_phdr_t *)(image + ehdr->phoff +
+                                                              (uint64_t)i * ehdr->phentsize);
+            if (phdr->type == PT_LOAD && phdr->vaddr < linked_base) linked_base = phdr->vaddr;
+        }
+        if (linked_base != (uint64_t)-1) load_bias = eaddr_req.response->virtual_base - linked_base;
+    }
+
+    // Prefer the full static symbol table, then fall back to the dynamic one.
+    for (uint32_t wanted_type = SHT_SYMTAB; ; wanted_type = SHT_DYNSYM) {
+        for (uint16_t section_idx = 0; section_idx < ehdr->shnum; section_idx++) {
+            const elf64_shdr_t *symtab = (const elf64_shdr_t *)(image + ehdr->shoff +
+                                                                (uint64_t)section_idx * ehdr->shentsize);
+            if (symtab->type != wanted_type || symtab->entsize < sizeof(elf64_sym_t) ||
+                symtab->link >= ehdr->shnum || symtab->size < symtab->entsize ||
+                !is_elf_range_valid(symtab->offset, symtab->size, file_size)) continue;
+
+            const elf64_shdr_t *strtab = (const elf64_shdr_t *)(image + ehdr->shoff +
+                                                                (uint64_t)symtab->link * ehdr->shentsize);
+            if (strtab->type != SHT_STRTAB ||
+                !is_elf_range_valid(strtab->offset, strtab->size, file_size)) continue;
+
+            if (table_out) {
+                table_out->image = image;
+                table_out->symtab = symtab;
+                table_out->strtab = strtab;
+                table_out->load_bias = load_bias;
+            }
+            return true;
+        }
+        if (wanted_type == SHT_DYNSYM) break;
+    }
+
+    return false;
+}
+
+bool are_kernel_symbols_available(void) {
+    return find_kernel_symbol_table(NULL);
+}
+
+static bool kernel_symbol_for_rip(uint64_t rip, const char **name_out, uint64_t *offset_out) {
+    if (!name_out || !offset_out) return false;
+
+    kernel_symbol_table_t table;
+    if (!find_kernel_symbol_table(&table)) return false;
+
+    const char *best_name = NULL;
+    uint64_t best_start = 0;
+    uint64_t symbol_count = table.symtab->size / table.symtab->entsize;
+
+    for (uint64_t i = 0; i < symbol_count; i++) {
+        const elf64_sym_t *symbol = (const elf64_sym_t *)(table.image + table.symtab->offset +
+                                                          i * table.symtab->entsize);
+        if (ELF64_ST_TYPE(symbol->info) != STT_FUNC || symbol->shndx == SHN_UNDEF ||
+            symbol->name == 0 || symbol->name >= table.strtab->size) continue;
+
+        uint64_t start = symbol->value + table.load_bias;
+        if (start > rip || (symbol->size != 0 && rip - start >= symbol->size) ||
+            (best_name && start <= best_start)) continue;
+
+        const char *name = (const char *)(table.image + table.strtab->offset + symbol->name);
+        uint64_t remaining = table.strtab->size - symbol->name;
+        bool terminated = false;
+        for (uint64_t j = 0; j < remaining; j++) {
+            if (name[j] == '\0') {
+                terminated = true;
+                break;
+            }
+        }
+        if (!terminated || name[0] == '\0') continue;
+
+        best_name = name;
+        best_start = start;
+    }
+
+    if (!best_name) return false;
+    *name_out = best_name;
+    *offset_out = rip - best_start;
+    return true;
+}
+
+__attribute__((noreturn)) void dopanic(const char *func, const char *msg, ...) {
     cli();
 
     va_list args;
     va_start(args, msg);
 
-    uint64_t rip = (uint64_t)__builtin_return_address(0);
+    uint64_t rip = (uint64_t)__builtin_return_address(0) - 1;
     uint64_t rsp;
     __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
 
-    printf("kernel panic at %s: ", panic_basename(file));
-
+    printf("kernel panic: ");
     vprintf(msg, args);
     printf("\n");
-
     printf("\nregisters:\n");
-    printf(" rip: %p\n", rip);
-    printf(" rsp: %p\n", rsp);
+    const char *symbol_name;
+    uint64_t symbol_offset;
+    if (are_kernel_symbols_available() &&
+        kernel_symbol_for_rip(rip, &symbol_name, &symbol_offset)) {
+        printf("  rip: %p (%s+0x%lx)\n", rip, symbol_name, symbol_offset);
+    } else {
+        // Fallback, no exact start address
+        printf("  rip: %p (%s+0x?)\n", rip, func);
+    }
+    printf("  rsp: %p\n", rsp);
 
     va_end(args);
     halt();
+    __builtin_unreachable();
 }
 
 // Map CPU exception vectors to signal numbers
@@ -128,9 +236,18 @@ void exception_panic(exception_frame_t *frame) {
 
     // Kernel fault, panic as before
     cli();
-    printf("kernel panic at <unknown>: %s\n", reason);
+    printf("kernel panic: %s\n", reason);
     printf("\nregisters:\n");
-    printf(" rip: %p\n", frame->rip);
-    printf(" rsp: %p\n", frame->rsp);
+    const char *symbol_name;
+    uint64_t symbol_offset;
+    if (are_kernel_symbols_available() &&
+        kernel_symbol_for_rip(frame->rip, &symbol_name, &symbol_offset)) {
+        printf("  rip: %p (%s+0x%lx)\n", frame->rip, symbol_name, symbol_offset);
+    } else {
+        // Fallback, no debug info
+        printf("  rip: %p (?+0x?)\n", frame->rip);
+    }
+    printf("  rsp: %p\n", frame->rsp);
     halt();
+    __builtin_unreachable();
 }

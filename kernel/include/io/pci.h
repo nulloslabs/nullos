@@ -1,6 +1,6 @@
 #pragma once
 
-#include <freestanding/stdint.h>
+#include <stdint.h>
 
 #define MAX_PCI_DEVICES   256
 #define LEGACY_IRQ_BASE   32         // PIC/IOAPIC remap base

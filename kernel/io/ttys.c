@@ -1,10 +1,9 @@
-#include <freestanding/stddef.h>
-#include <freestanding/stdint.h>
-#include <freestanding/signal.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <signal.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
 #include <main/sched.h>
-#include <main/log.h>
 #include <io/ttys.h>
 #include <io/keyboard.h>
 #include <io/ptys.h>
@@ -311,5 +310,5 @@ void init_ttys(void) {
         ttys[i].termios.c_cc[VEOF]   = 0x04;
         ttys[i].termios.c_cc[VSUSP]  = 0x1A;
     }
-    log("initialized ttys");
+    printf("ttys: initialized ttys\n");
 }

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <freestanding/stdint.h>
+#include <stdint.h>
 
 #define GDT_KERNEL_CS 0x08
 #define GDT_KERNEL_DS 0x10

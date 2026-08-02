@@ -1,8 +1,8 @@
 .intel_syntax noprefix
-.global gdt_flush
-.global tss_flush
+.global flush_gdt
+.global flush_tss
 
-gdt_flush:
+flush_gdt:
     lgdt [rdi]            // Load GDT pointer
 
     // Update data segment registers
@@ -19,7 +19,7 @@ gdt_flush:
     push rdi              // Push return address back
     retfq                 // Far return
 
-tss_flush:
+flush_tss:
     mov ax, 0x28          // 0x28 is the TSS descriptor in the GDT
     ltr ax                // Load Task Register
     ret

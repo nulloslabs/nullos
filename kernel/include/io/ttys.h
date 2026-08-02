@@ -1,9 +1,9 @@
 #pragma once
 
-#include <freestanding/stdint.h>
-#include <freestanding/sys/types.h>
+#include <stdint.h>
+#include <sys/types.h>
 #include <main/spinlocks.h>
-#include <freestanding/termios.h>
+#include <termios.h>
 
 #define NUM_TTYS     8
 #define TTY_BUF_SIZE 4096

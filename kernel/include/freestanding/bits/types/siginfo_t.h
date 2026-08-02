@@ -1,6 +1,6 @@
 #pragma once
 
-#include <freestanding/stdint.h>
+#include <stdint.h>
 
 #define __SI_MAX_SIZE  128
 #define __SI_PAD_SIZE  ((__SI_MAX_SIZE / sizeof(int)) - 4)

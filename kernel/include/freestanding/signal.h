@@ -1,11 +1,11 @@
 #pragma once
 
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
-#include <freestanding/asm/signal.h>
-#include <freestanding/bits/types/siginfo_t.h>
-#include <freestanding/bits/sigaction.h>
-#include <freestanding/bits/siginfo-consts.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <asm/signal.h>
+#include <bits/types/siginfo_t.h>
+#include <bits/sigaction.h>
+#include <bits/siginfo-consts.h>
 
 #define SS_ONSTACK    1
 #define SS_DISABLE    2

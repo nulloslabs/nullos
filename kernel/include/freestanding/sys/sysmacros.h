@@ -1,6 +1,6 @@
 #pragma once
 
-#include <freestanding/sys/types.h>
+#include <sys/types.h>
 
 static inline unsigned int major(dev_t dev) {
     unsigned int maj;

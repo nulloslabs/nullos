@@ -1,6 +1,7 @@
 #pragma once
 
-#include <freestanding/stdint.h>
+#include <stdint.h>
+#include <stddef.h>
 
 #define CPUID_VENDOR_INTEL "GenuineIntel"
 #define CPUID_VENDOR_INTEL_BUGGY "GenuineIotel" // This is a rare bitflip/typo variant in Intel CPUs.

@@ -1,3 +1,3 @@
 #pragma once
 
-#include <freestanding/asm-generic/signal.h>
+#include <asm-generic/signal.h>

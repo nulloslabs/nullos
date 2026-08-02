@@ -1,10 +1,9 @@
-#include <freestanding/errno.h>
+#include <errno.h>
 #include <main/string.h>
 #include <main/limine_req.h>
 #include <main/panic.h>
 #include <main/strings.h>
 #include <main/rng.h>
-#include <main/log.h>
 #include <io/terminal.h>
 #include <io/devices.h>
 #include <io/devtmpfs.h>
@@ -151,9 +150,18 @@ static uint64_t read_tty(void* buf, uint64_t count, uint64_t offset, int dev_idx
 }
 
 static uint64_t write_tty(const void* buf, uint64_t count, uint64_t offset, int dev_idx) {
-    (void)offset; (void)dev_idx; // For now, all TTYs share the same display
+    (void)offset;
+    tty_t *t = get_tty(dev_idx);
+    bool do_onlcr = false;
+    if (t && (t->termios.c_oflag & OPOST) && (t->termios.c_oflag & ONLCR)) {
+        do_onlcr = true;
+    }
     for (uint64_t i = 0; i < count; i++) {
-        putchar(((const char*)buf)[i]);
+        char c = ((const char*)buf)[i];
+        if (do_onlcr && c == '\n') {
+            putchar('\r');
+        }
+        putchar(c);
     }
     return count;
 }
@@ -275,5 +283,5 @@ void init_devices(void) {
 
     register_device("urandom", read_urandom, write_urandom);
 
-    log("initialized devices");
+    printf("devices: initialized devices\n");
 }

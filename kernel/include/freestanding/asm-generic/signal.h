@@ -1,7 +1,7 @@
 #pragma once
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
-#include <freestanding/asm-generic/signal-defs.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <asm-generic/signal-defs.h>
 
 #define _NSIG 64
 #define _NSIG_BPW 64

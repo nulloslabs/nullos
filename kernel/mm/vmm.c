@@ -7,8 +7,7 @@
 #include <main/machine_info.h>
 #include <main/msr.h>
 #include <main/panic.h>
-#include <main/log.h>
-
+#include <io/terminal.h>
 vmm_context_t kernel_context;
 static uint64_t vmalloc_cursor = 0xffffc00000000000;
 static uint64_t vuser_cursor   = USER_MMAP_BASE;
@@ -526,5 +525,5 @@ void init_vmm(void) {
         get_vmm_next_level(kernel_context.pml4, i, true, VMM_WRITABLE);
     }
 
-    log("initialized vmm");
+    printf("vmm: initialized vmm\n");
 }

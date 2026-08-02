@@ -1,9 +1,9 @@
 #pragma once
 
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
-#include <freestanding/sys/types.h>
-#include <freestanding/sys/stat.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <main/spinlocks.h>
 
 #define TMPFS_MAX_NAME      128
@@ -41,29 +41,41 @@ typedef struct {
     uint64_t     ino;
 } tmpfs_inode_t;
 
+// Mirror of initrd_file_t: path-based read/stat return this.
+typedef struct {
+    ino_t    inode;
+    void    *data;     // file content (TMPFS_REG only)
+    uint64_t size;     // actual size in bytes
+    mode_t   mode;
+    uid_t    uid;
+    gid_t    gid;
+} tmpfs_file_t;
+
+typedef struct { char name[128]; int type; } tmpfs_dirent_t;
+
 extern tmpfs_inode_t tmpfs_inodes[TMPFS_MAX_INODES];
 extern spinlock_t    tmpfs_lock;
 
+// Mount management (used by sys_mount/sys_umount2 only)
 int  create_tmpfs_root(const char *mount_path);
 int  destroy_tmpfs_root(const char *mount_path);
-bool match_tmpfs_mount(const char *abs_path);
-int  resolve_tmpfs(const char *abs_path);                  // follow symlinks on last comp
-int  resolve_tmpfs_nofollow(const char *abs_path);         // do NOT follow final symlink
-int  resolve_tmpfs_parent(const char *abs_path, const char **last_out);
-int  read_tmpfs_dirent(int dir_inode, int index, char *name, size_t name_size, uint8_t *type_out, uint64_t *ino_out);
-int  make_tmpfs_dir(const char *abs_path, mode_t mode, uid_t uid, gid_t gid);
-int  create_tmpfs_file(const char *abs_path, mode_t mode, uid_t uid, gid_t gid);
-int  create_tmpfs_socket(const char *abs_path, mode_t mode, uid_t uid, gid_t gid);
-int  make_tmpfs_symlink(const char *target, const char *abs_path, uid_t uid, gid_t gid);
-int  remove_tmpfs(const char *abs_path);                   // unlink (file or symlink)
-int  remove_tmpfs_dir(const char *abs_path);               // rmdir
-int  rename_tmpfs(const char *old_abs, const char *new_abs);
-int  link_tmpfs(const char *old_abs, const char *new_abs);
-int  chmod_tmpfs(const char *abs_path, mode_t mode);
-int  truncate_tmpfs(int inode, uint64_t size);
-int64_t read_tmpfs(int inode, void *buf, uint64_t count, uint64_t offset);
-int64_t write_tmpfs(int inode, const void *buf, uint64_t count, uint64_t offset);
-bool stat_tmpfs(const char *abs_path, struct stat *st);
-bool stat_tmpfs_nofollow(const char *abs_path, struct stat *st);
-int  read_tmpfs_link(const char *abs_path, char *out, size_t out_size);
+bool is_tmpfs_dir(const char *abs_path);
+
+// Path-based API mirroring initrd exactly
+tmpfs_file_t read_tmpfs(const char *path);
+tmpfs_file_t stat_tmpfs(const char *path);
+tmpfs_file_t stat_tmpfs_nofollow(const char *path);
+int  write_tmpfs(const char *path, const void *data, uint64_t size, uint32_t mode, uid_t uid, gid_t gid);
+int  write_tmpfs_partial(const char *path, const void *data, uint64_t off, uint64_t count, uint32_t mode, uid_t uid, gid_t gid);
+int  mkdir_tmpfs(const char *path, mode_t mode, uid_t uid, gid_t gid);
+int  delete_tmpfs(const char *path);
+int  rmdir_tmpfs(const char *path);
+int  symlink_tmpfs(const char *target, const char *path, uid_t uid, gid_t gid);
+int  rename_tmpfs(const char *old_path, const char *new_path);
+int  link_tmpfs(const char *old_path, const char *new_path);
+int  chmod_tmpfs(const char *path, mode_t mode);
+int  truncate_tmpfs(const char *path, uint64_t size);
+int  read_tmpfs_link(const char *path, char *out, size_t out_size);
+int  next_tmpfs_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size, uint8_t *child_type, ino_t *child_ino);
+int  get_tmpfs_entry(int index, tmpfs_dirent_t *entry);
 void init_tmpfs(void);

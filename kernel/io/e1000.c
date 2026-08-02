@@ -6,8 +6,7 @@
 #include <main/string.h>
 #include <io/net.h>
 #include <main/spinlocks.h>
-#include <main/log.h>
-
+#include <io/terminal.h>
 static uint8_t mac_addr[6];
 static volatile uint8_t *e1000_mmio;
 
@@ -21,6 +20,7 @@ static uint16_t rx_cur = 0;
 static uint16_t tx_cur = 0;
 static bool e1000_ready = false;
 static spinlock_t e1000_lock = SPINLOCK_INIT;
+static net_device_t e1000_net_device;
 
 static void write_mmio32(uint32_t reg, uint32_t val) { *(volatile uint32_t *)(e1000_mmio + reg) = val; }
 
@@ -110,8 +110,8 @@ static void poll_e1000(void) {
 
             spin_unlock_irqrestore(&e1000_lock, irq);
 
-            // Pass packet to net_rx lock-free (net_lock handles its internal state)
-            net_rx(buf, size);
+            // Pass packet to the shared stack after dropping the driver lock.
+            handle_net_packet(&e1000_net_device, buf, size);
         }
     }
 }
@@ -148,7 +148,9 @@ void init_e1000(pci_device_t *dev) {
     for (int i = 0; i < 128; i++) write_mmio32(E1000_MTA + (i * 4), 0);
 
     // Setup RX ring (must be 16-byte aligned and contiguous physically)
-    rx_descs = pmalloc(); // 4KB page, plenty of room for 32 descriptors
+    void *rx_descs_phys = pmalloc(); // 4KB page, plenty of room for 32 descriptors
+    if (!rx_descs_phys) return;
+    rx_descs = phys_to_virt((uint64_t)rx_descs_phys);
     for (int i = 0; i < E1000_NUM_RX_DESC; i++) {
         rx_buf[i] = vmalloc(8192); // Packets max 1522 bytes, allocator returns whole pages
         rx_descs[i].addr = (uint64_t)virt_to_phys(rx_buf[i]);
@@ -156,7 +158,7 @@ void init_e1000(pci_device_t *dev) {
     }
 
     // Write RX rings
-    uint64_t rx_phys = (uint64_t)virt_to_phys(rx_descs);
+    uint64_t rx_phys = (uint64_t)rx_descs_phys;
     write_mmio32(E1000_RDBAL, rx_phys & 0xFFFFFFFF);
     write_mmio32(E1000_RDBAH, rx_phys >> 32);
     write_mmio32(E1000_RDLEN, E1000_NUM_RX_DESC * sizeof(e1000_rx_desc_t));
@@ -167,7 +169,9 @@ void init_e1000(pci_device_t *dev) {
     write_mmio32(E1000_RCTL, RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE | RCTL_LPE | RCTL_BAM | RCTL_BSIZE_2048 | RCTL_SECRC);
 
     // Setup TX ring
-    tx_descs = pmalloc(); 
+    void *tx_descs_phys = pmalloc();
+    if (!tx_descs_phys) return;
+    tx_descs = phys_to_virt((uint64_t)tx_descs_phys);
     for (int i = 0; i < E1000_NUM_TX_DESC; i++) {
         tx_buf[i] = vmalloc(8192);
         tx_descs[i].addr = (uint64_t)virt_to_phys(tx_buf[i]);
@@ -176,7 +180,7 @@ void init_e1000(pci_device_t *dev) {
     }
 
     // Write TX rings
-    uint64_t tx_phys = (uint64_t)virt_to_phys(tx_descs);
+    uint64_t tx_phys = (uint64_t)tx_descs_phys;
     write_mmio32(E1000_TDBAL, tx_phys & 0xFFFFFFFF);
     write_mmio32(E1000_TDBAH, tx_phys >> 32);
     write_mmio32(E1000_TDLEN, E1000_NUM_TX_DESC * sizeof(e1000_tx_desc_t));
@@ -193,12 +197,11 @@ void init_e1000(pci_device_t *dev) {
 
     pci_request_irq(dev, poll_e1000);
 
-    log("initialized e1000");
+    printf("e1000: initialized e1000\n");
 
     e1000_ready = true;
 
-    static net_device_t net_dev;
-    memcpy(net_dev.mac, mac_addr, 6);
-    net_dev.send = send_e1000;
-    net_register_device(&net_dev);
+    memcpy(e1000_net_device.mac, mac_addr, 6);
+    e1000_net_device.send = send_e1000;
+    register_net_device(&e1000_net_device);
 }

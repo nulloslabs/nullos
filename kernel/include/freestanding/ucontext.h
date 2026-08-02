@@ -1,8 +1,8 @@
 #pragma once
 
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
-#include <freestanding/signal.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <signal.h>
 
 #define UC_SIGCONTEXT_SS     0x2
 #define UC_STRICT_RESTORE_SS 0x4

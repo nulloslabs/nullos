@@ -1,8 +1,8 @@
 #pragma once
 
-#include <freestanding/stdint.h>
-#include <freestanding/stdarg.h>
-#include <limine/limine.h>
+#include <stdint.h>
+#include <stdarg.h>
+#include <limine.h>
 #include <io/framebuffer.h>
 
 typedef enum {
@@ -18,6 +18,7 @@ extern uint32_t bg_color;
 extern uint32_t default_color;
 extern uint64_t line_start_y;
 
+void sync_terminal(void);
 void invalidate_terminal_backbuffer(void);
 void show_cursor(bool visible);
 void scroll(void);

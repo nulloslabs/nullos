@@ -1,7 +1,7 @@
 #pragma once
 
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
+#include <stdint.h>
+#include <stddef.h>
 #include <main/spinlocks.h>
 
 #define MAX_DEVTMPFS_DEVICES 64
@@ -17,5 +17,5 @@ typedef struct {
 extern devtmpfs_device_t devtmpfs_devices[MAX_DEVTMPFS_DEVICES];
 extern spinlock_t devtmpfs_lock;
 
-bool devtmpfs_device_exists(const char* name);
-const char *devtmpfs_get_device_name(int index);
+bool device_exists_on_devtmpfs(const char* name);
+const char *get_devtmpfs_device_name(int index);

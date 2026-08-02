@@ -1,5 +1,8 @@
-#include <limine/limine.h>
-#include <freestanding/stdint.h>
+#include <limine.h>
+#include <stdint.h>
+
+__attribute__((used, section(".limine_requests")))
+volatile uint64_t limine_base_revision[3] = LIMINE_BASE_REVISION(6);
 
 __attribute__((used, section(".limine_requests")))
 volatile struct limine_framebuffer_request fb_req = {

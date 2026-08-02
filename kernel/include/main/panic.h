@@ -1,6 +1,8 @@
 #pragma once
 
-#include <freestanding/stdint.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <main/elf.h>
 
 typedef struct {
     uint64_t es;
@@ -32,7 +34,15 @@ typedef struct {
     uint64_t ss;
 } __attribute__((packed)) exception_frame_t;
 
-__attribute__((noreturn)) void panicat(const char* file, const char *msg, ...);
-#define panic(fmt, ...) panicat(__FILE__, fmt, ##__VA_ARGS__)
+typedef struct {
+    const uint8_t *image;
+    const elf64_shdr_t *symtab;
+    const elf64_shdr_t *strtab;
+    uint64_t load_bias;
+} kernel_symbol_table_t;
 
+#define panic(msg, ...) dopanic(__func__, (msg) __VA_OPT__(,) __VA_ARGS__)
+
+__attribute__((noreturn)) void dopanic(const char *func, const char *msg, ...);
+bool are_kernel_symbols_available(void);
 void exception_panic(exception_frame_t *frame);

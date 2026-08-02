@@ -1,7 +1,7 @@
-#include <freestanding/errno.h>
+#include <errno.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
-#include <main/log.h>
+#include <io/terminal.h>
 #include <io/tmpfs.h>
 #include <mm/mm.h>
 
@@ -59,7 +59,7 @@ static int find_mount_for(const char *abs_path, const char **rel_out) {
     return best;
 }
 
-bool match_tmpfs_mount(const char *abs_path) {
+bool is_tmpfs_dir(const char *abs_path) {
     if (!abs_path) return false;
     uint64_t irq;
     spin_lock_irqsave(&tmpfs_lock, &irq);
@@ -228,21 +228,6 @@ static int walk_rel(int start_dir, const char *rel, bool follow_final) {
     return cur;
 }
 
-int resolve_tmpfs(const char *abs_path) {
-    uint64_t irq;
-    spin_lock_irqsave(&tmpfs_lock, &irq);
-    int r = resolve_locked(abs_path, true);
-    spin_unlock_irqrestore(&tmpfs_lock, irq);
-    return r;
-}
-
-int resolve_tmpfs_nofollow(const char *abs_path) {
-    uint64_t irq;
-    spin_lock_irqsave(&tmpfs_lock, &irq);
-    int r = resolve_locked(abs_path, false);
-    spin_unlock_irqrestore(&tmpfs_lock, irq);
-    return r;
-}
 
 // Internal: assume tmpfs_lock already held.  Returns parent inode index and
 // copies the final component name into `last_buf`.
@@ -288,7 +273,7 @@ int resolve_tmpfs_parent(const char *abs_path, const char **last_out) {
     return p;
 }
 
-int read_tmpfs_dirent(int dir_inode, int index, char *name, size_t name_size,
+static int read_tmpfs_dirent(int dir_inode, int index, char *name, size_t name_size,
                       uint8_t *type_out, uint64_t *ino_out) {
     if (dir_inode < 0 || dir_inode >= TMPFS_MAX_INODES) return -EBADF;
     uint64_t irq;
@@ -357,25 +342,23 @@ static int find_in_dir(int dir, const char *name) {
 }
 
 // Create a leaf entry (dir/file/symlink) named `last` under its parent dir.
-static int create_entry(const char *abs_path, tmpfs_type_t type,
-                        mode_t mode, uid_t uid, gid_t gid,
-                        const char *symlink_target) {
-    uint64_t irq;
-    spin_lock_irqsave(&tmpfs_lock, &irq);
-
+// Internal entry creator. The caller must hold tmpfs_lock.
+static int create_entry_locked(const char *abs_path, tmpfs_type_t type,
+                               mode_t mode, uid_t uid, gid_t gid,
+                               const char *symlink_target) {
     char last[TMPFS_MAX_NAME];
     int parent = resolve_parent_locked(abs_path, last, sizeof(last));
-    if (parent < 0) { spin_unlock_irqrestore(&tmpfs_lock, irq); return parent; }
+    if (parent < 0) return parent;
 
     if (tmpfs_inodes[parent].type != TMPFS_DIR) {
-        spin_unlock_irqrestore(&tmpfs_lock, irq); return -ENOTDIR;
+        return -ENOTDIR;
     }
     if (find_in_dir(parent, last) >= 0) {
-        spin_unlock_irqrestore(&tmpfs_lock, irq); return -EEXIST;
+        return -EEXIST;
     }
 
     int inode = alloc_inode();
-    if (inode < 0) { spin_unlock_irqrestore(&tmpfs_lock, irq); return inode; }
+    if (inode < 0) return inode;
 
     int mslot = tmpfs_inodes[parent].mount_idx;
     tmpfs_inodes[inode].type      = type;
@@ -393,31 +376,32 @@ static int create_entry(const char *abs_path, tmpfs_type_t type,
     }
 
     int r = add_child(parent, inode);
-    if (r < 0) { free_inode(inode); spin_unlock_irqrestore(&tmpfs_lock, irq); return r; }
+    if (r < 0) { free_inode(inode); return r; }
+
+    return inode;
+}
+
+static int create_entry(const char *abs_path, tmpfs_type_t type,
+                        mode_t mode, uid_t uid, gid_t gid,
+                        const char *symlink_target) {
+    uint64_t irq;
+    spin_lock_irqsave(&tmpfs_lock, &irq);
+    int inode = create_entry_locked(abs_path, type, mode, uid, gid, symlink_target);
 
     spin_unlock_irqrestore(&tmpfs_lock, irq);
     return inode;
 }
 
-int make_tmpfs_dir(const char *abs_path, mode_t mode, uid_t uid, gid_t gid) {
+int mkdir_tmpfs(const char *abs_path, mode_t mode, uid_t uid, gid_t gid) {
     int r = create_entry(abs_path, TMPFS_DIR, (mode & 07777) | 0040000, uid, gid, NULL);
     return r < 0 ? r : 0;
 }
-int create_tmpfs_file(const char *abs_path, mode_t mode, uid_t uid, gid_t gid) {
-    // Returns the inode index (>=0) on success so open_tmpfs_common can store
-    // it in the fd handle.  Negative on error.
-    return create_entry(abs_path, TMPFS_REG, (mode & 07777) | 0100000, uid, gid, NULL);
-}
-int create_tmpfs_socket(const char *abs_path, mode_t mode, uid_t uid, gid_t gid) {
-    // Create a socket-type tmpfs inode. Returns inode index on success.
-    return create_entry(abs_path, TMPFS_SOCK, (mode & 07777) | 0140000, uid, gid, NULL);
-}
-int make_tmpfs_symlink(const char *target, const char *abs_path, uid_t uid, gid_t gid) {
+int symlink_tmpfs(const char *target, const char *abs_path, uid_t uid, gid_t gid) {
     int r = create_entry(abs_path, TMPFS_LNK, 0120777, uid, gid, target);
     return r < 0 ? r : 0;
 }
 
-int remove_tmpfs(const char *abs_path) {
+static int remove_tmpfs(const char *abs_path) {
     uint64_t irq;
     spin_lock_irqsave(&tmpfs_lock, &irq);
     int inode = resolve_locked(abs_path, false);
@@ -434,7 +418,7 @@ int remove_tmpfs(const char *abs_path) {
     return 0;
 }
 
-int remove_tmpfs_dir(const char *abs_path) {
+int rmdir_tmpfs(const char *abs_path) {
     uint64_t irq;
     spin_lock_irqsave(&tmpfs_lock, &irq);
     int inode = resolve_locked(abs_path, false);
@@ -521,20 +505,19 @@ int chmod_tmpfs(const char *abs_path, mode_t mode) {
     return 0;
 }
 
-int truncate_tmpfs(int inode, uint64_t size) {
+// The caller must hold tmpfs_lock.
+static int truncate_tmpfs_inode_locked(int inode, uint64_t size) {
     if (inode < 0 || inode >= TMPFS_MAX_INODES) return -EBADF;
-    uint64_t irq;
-    spin_lock_irqsave(&tmpfs_lock, &irq);
     tmpfs_inode_t *n = &tmpfs_inodes[inode];
-    if (!n->active) { spin_unlock_irqrestore(&tmpfs_lock, irq); return -ENOENT; }
-    if (n->type != TMPFS_REG) { spin_unlock_irqrestore(&tmpfs_lock, irq); return -EISDIR; }
+    if (!n->active) return -ENOENT;
+    if (n->type != TMPFS_REG) return -EISDIR;
 
     if (size == 0) {
         if (n->data) { free(n->data); n->data = NULL; }
         n->size = 0; n->capacity = 0;
     } else if (size > n->capacity) {
         uint8_t *nd = malloc(size);
-        if (!nd) { spin_unlock_irqrestore(&tmpfs_lock, irq); return -ENOMEM; }
+        if (!nd) return -ENOMEM;
         if (n->data && n->size) memcpy(nd, n->data, n->size);
         if (n->size < size) memset(nd + n->size, 0, size - n->size);
         if (n->data) free(n->data);
@@ -543,52 +526,32 @@ int truncate_tmpfs(int inode, uint64_t size) {
         if (n->size < size) memset(n->data + n->size, 0, size - n->size);
         n->size = size;
     }
-    spin_unlock_irqrestore(&tmpfs_lock, irq);
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// file I/O
-// ---------------------------------------------------------------------------
-
-int64_t read_tmpfs(int inode, void *buf, uint64_t count, uint64_t offset) {
+// The caller must hold tmpfs_lock.
+static int64_t write_tmpfs_inode_locked(int inode, const void *buf, uint64_t count, uint64_t offset) {
     if (inode < 0 || inode >= TMPFS_MAX_INODES) return -EBADF;
-    uint64_t irq;
-    spin_lock_irqsave(&tmpfs_lock, &irq);
     tmpfs_inode_t *n = &tmpfs_inodes[inode];
     if (!n->active || n->type != TMPFS_REG) {
-        spin_unlock_irqrestore(&tmpfs_lock, irq); return -EISDIR;
+        return -EISDIR;
     }
-    if (offset >= n->size) { spin_unlock_irqrestore(&tmpfs_lock, irq); return 0; }
-    uint64_t avail = n->size - offset;
-    uint64_t to_read = count < avail ? count : avail;
-    memcpy(buf, n->data + offset, to_read);
-    spin_unlock_irqrestore(&tmpfs_lock, irq);
-    return (int64_t)to_read;
-}
-
-int64_t write_tmpfs(int inode, const void *buf, uint64_t count, uint64_t offset) {
-    if (inode < 0 || inode >= TMPFS_MAX_INODES) return -EBADF;
-    uint64_t irq;
-    spin_lock_irqsave(&tmpfs_lock, &irq);
-    tmpfs_inode_t *n = &tmpfs_inodes[inode];
-    if (!n->active || n->type != TMPFS_REG) {
-        spin_unlock_irqrestore(&tmpfs_lock, irq); return -EISDIR;
-    }
+    if (count == 0) return 0;
+    if (offset + count < offset) return -EINVAL;
     uint64_t need = offset + count;
     if (need > n->capacity) {
         // geometric growth
         uint64_t newcap = n->capacity ? n->capacity : 4096;
         while (newcap < need) newcap *= 2;
         uint8_t *nd = malloc(newcap);
-        if (!nd) { spin_unlock_irqrestore(&tmpfs_lock, irq); return -ENOMEM; }
+        if (!nd) return -ENOMEM;
         if (n->data && n->size) memcpy(nd, n->data, n->size);
+        if (n->size < offset) memset(nd + n->size, 0, offset - n->size);
         if (n->data) free(n->data);
         n->data = nd; n->capacity = newcap;
     }
     memcpy(n->data + offset, buf, count);
     if (need > n->size) n->size = need;
-    spin_unlock_irqrestore(&tmpfs_lock, irq);
     return (int64_t)count;
 }
 
@@ -596,54 +559,10 @@ int64_t write_tmpfs(int inode, const void *buf, uint64_t count, uint64_t offset)
 // stat / readlink (whole-path)
 // ---------------------------------------------------------------------------
 
-static void fill_stat(tmpfs_inode_t *n, struct stat *st) {
-    memset(st, 0, sizeof(*st));
-    st->st_mode   = n->mode;
-    st->st_uid    = n->uid;
-    st->st_gid    = n->gid;
-    st->st_nlink  = 1;
-    st->st_dev    = 0;
-    st->st_ino    = n->ino;
-    st->st_blksize = 4096;
-    if (n->type == TMPFS_REG) {
-        st->st_size   = n->size;
-        st->st_blocks = (n->size + 511) / 512;
-    } else if (n->type == TMPFS_LNK) {
-        st->st_size   = strlen(n->target);
-        st->st_blocks = 0;
-    } else if (n->type == TMPFS_SOCK) {
-        st->st_size   = 0;
-        st->st_blocks = 0;
-    } else {
-        st->st_size   = 0;
-        st->st_blocks = 0;
-    }
-}
-
-bool stat_tmpfs(const char *abs_path, struct stat *st) {
+int read_tmpfs_link(const char *path, char *out, size_t out_size) {
     uint64_t irq;
     spin_lock_irqsave(&tmpfs_lock, &irq);
-    int inode = resolve_locked(abs_path, true);
-    if (inode < 0) { spin_unlock_irqrestore(&tmpfs_lock, irq); return false; }
-    fill_stat(&tmpfs_inodes[inode], st);
-    spin_unlock_irqrestore(&tmpfs_lock, irq);
-    return true;
-}
-
-bool stat_tmpfs_nofollow(const char *abs_path, struct stat *st) {
-    uint64_t irq;
-    spin_lock_irqsave(&tmpfs_lock, &irq);
-    int inode = resolve_locked(abs_path, false);
-    if (inode < 0) { spin_unlock_irqrestore(&tmpfs_lock, irq); return false; }
-    fill_stat(&tmpfs_inodes[inode], st);
-    spin_unlock_irqrestore(&tmpfs_lock, irq);
-    return true;
-}
-
-int read_tmpfs_link(const char *abs_path, char *out, size_t out_size) {
-    uint64_t irq;
-    spin_lock_irqsave(&tmpfs_lock, &irq);
-    int inode = resolve_locked(abs_path, false);
+    int inode = resolve_locked(path, false);
     if (inode < 0) { spin_unlock_irqrestore(&tmpfs_lock, irq); return inode; }
     if (tmpfs_inodes[inode].type != TMPFS_LNK) {
         spin_unlock_irqrestore(&tmpfs_lock, irq); return -EINVAL;
@@ -655,9 +574,158 @@ int read_tmpfs_link(const char *abs_path, char *out, size_t out_size) {
     return (int)len;
 }
 
+// ---------------------------------------------------------------------------
+// initrd-equivalent path-based API
+// ---------------------------------------------------------------------------
+
+static tmpfs_file_t make_tmpfs_file(int inode_idx, tmpfs_inode_t *n) {
+    tmpfs_file_t r;
+    r.inode = n->ino;
+    r.mode = n->mode;
+    r.uid  = n->uid;
+    r.gid  = n->gid;
+    if (n->type == TMPFS_REG) {
+        r.data = n->data;
+        r.size = n->size;
+    } else if (n->type == TMPFS_LNK) {
+        r.data = n->target;
+        r.size = strlen(n->target);
+    } else {
+        r.data = NULL;
+        r.size = 0;
+    }
+    return r;
+}
+
+tmpfs_file_t read_tmpfs(const char *path) {
+    tmpfs_file_t result = {0};
+    uint64_t irq;
+    spin_lock_irqsave(&tmpfs_lock, &irq);
+    int inode = resolve_locked(path, true);
+    if (inode < 0) { spin_unlock_irqrestore(&tmpfs_lock, irq); return result; }
+    result = make_tmpfs_file(inode, &tmpfs_inodes[inode]);
+    spin_unlock_irqrestore(&tmpfs_lock, irq);
+    return result;
+}
+
+tmpfs_file_t stat_tmpfs(const char *path) {
+    return read_tmpfs(path);
+}
+
+tmpfs_file_t stat_tmpfs_nofollow(const char *path) {
+    tmpfs_file_t result = {0};
+    uint64_t irq;
+    spin_lock_irqsave(&tmpfs_lock, &irq);
+    int inode = resolve_locked(path, false);
+    if (inode < 0) { spin_unlock_irqrestore(&tmpfs_lock, irq); return result; }
+    result = make_tmpfs_file(inode, &tmpfs_inodes[inode]);
+    spin_unlock_irqrestore(&tmpfs_lock, irq);
+    return result;
+}
+
+int write_tmpfs(const char *path, const void *data, uint64_t size, uint32_t mode, uid_t uid, gid_t gid) {
+    if (size > 0 && !data) return -EINVAL;
+    uint64_t irq;
+    spin_lock_irqsave(&tmpfs_lock, &irq);
+    int inode = resolve_locked(path, true);
+    if (inode < 0) {
+        mode_t type_bits = mode & S_IFMT;
+        tmpfs_type_t type = (type_bits == S_IFSOCK) ? TMPFS_SOCK : TMPFS_REG;
+        mode_t final_mode = (mode & S_IFMT) ? mode : (mode & 07777) | S_IFREG;
+        if (!mode) final_mode = S_IFREG | 0644;
+        inode = create_entry_locked(path, type, final_mode, uid, gid, NULL);
+        if (inode < 0) { spin_unlock_irqrestore(&tmpfs_lock, irq); return inode; }
+    }
+
+    tmpfs_inode_t *n = &tmpfs_inodes[inode];
+    if (n->type == TMPFS_SOCK && size == 0) {
+        spin_unlock_irqrestore(&tmpfs_lock, irq);
+        return 0;
+    }
+    if (n->type != TMPFS_REG) {
+        spin_unlock_irqrestore(&tmpfs_lock, irq);
+        return -EISDIR;
+    }
+
+    int r = truncate_tmpfs_inode_locked(inode, size);
+    if (r == 0 && size > 0)
+        r = (int)write_tmpfs_inode_locked(inode, data, size, 0);
+    spin_unlock_irqrestore(&tmpfs_lock, irq);
+    return r < 0 ? r : 0;
+}
+
+int write_tmpfs_partial(const char *path, const void *data, uint64_t off, uint64_t count, uint32_t mode, uid_t uid, gid_t gid) {
+    if (count > 0 && !data) return -EINVAL;
+    uint64_t irq;
+    spin_lock_irqsave(&tmpfs_lock, &irq);
+    int inode = resolve_locked(path, true);
+    if (inode < 0) {
+        mode_t final_mode = mode ? ((mode & S_IFMT) ? mode : (mode & 07777) | S_IFREG) : S_IFREG | 0644;
+        inode = create_entry_locked(path, TMPFS_REG, final_mode, uid, gid, NULL);
+        if (inode < 0) { spin_unlock_irqrestore(&tmpfs_lock, irq); return inode; }
+    }
+    int64_t r = write_tmpfs_inode_locked(inode, data, count, off);
+    spin_unlock_irqrestore(&tmpfs_lock, irq);
+    return r < 0 ? (int)r : 0;
+}
+
+int delete_tmpfs(const char *path) {
+    return remove_tmpfs(path);
+}
+
+int next_tmpfs_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size,
+                     uint8_t *child_type, ino_t *child_ino) {
+    uint64_t irq;
+    spin_lock_irqsave(&tmpfs_lock, &irq);
+    int dir_inode = resolve_locked(dir_norm, true);
+    spin_unlock_irqrestore(&tmpfs_lock, irq);
+    if (dir_inode < 0) return 1;
+    uint64_t ino = 0;
+    int found = read_tmpfs_dirent(dir_inode, *index, child_name, child_name_size, child_type, &ino);
+    if (found && child_ino) *child_ino = (ino_t)ino;
+    return found ? 0 : 1;
+}
+
 void init_tmpfs(void) {
     memset(tmpfs_inodes, 0, sizeof(tmpfs_inodes));
     memset(tmpfs_mounts, 0, sizeof(tmpfs_mounts));
     next_ino = 1;
-    log("initialized tmpfs");
+    printf("tmpfs: initialized tmpfs\n");
+}
+
+// ---------------------------------------------------------------------------
+// Path-based wrappers matching initrd exactly
+// ---------------------------------------------------------------------------
+
+int truncate_tmpfs(const char *path, uint64_t size) {
+    uint64_t irq;
+    spin_lock_irqsave(&tmpfs_lock, &irq);
+    int inode = resolve_locked(path, true);
+    if (inode < 0) { spin_unlock_irqrestore(&tmpfs_lock, irq); return inode; }
+    int r = truncate_tmpfs_inode_locked(inode, size);
+    spin_unlock_irqrestore(&tmpfs_lock, irq);
+    return r;
+}
+
+int readlink_tmpfs(const char *path, char *out, size_t out_size) {
+    return read_tmpfs_link(path, out, out_size);
+}
+
+int get_tmpfs_entry(int index, tmpfs_dirent_t *entry) {
+    uint64_t irq;
+    spin_lock_irqsave(&tmpfs_lock, &irq);
+    if (index < 0 || index >= TMPFS_MAX_INODES) {
+        spin_unlock_irqrestore(&tmpfs_lock, irq);
+        return -ENOENT;
+    }
+    tmpfs_inode_t *n = &tmpfs_inodes[index];
+    if (!n->active) {
+        spin_unlock_irqrestore(&tmpfs_lock, irq);
+        return -ENOENT;
+    }
+    strncpy(entry->name, n->name, sizeof(entry->name) - 1);
+    entry->name[sizeof(entry->name) - 1] = '\0';
+    entry->type = n->type;
+    spin_unlock_irqrestore(&tmpfs_lock, irq);
+    return 0;
 }

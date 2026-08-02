@@ -1,7 +1,7 @@
 #pragma once
 
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
+#include <stdint.h>
+#include <stddef.h>
 
 // --- IP address helper ---
 #define MAKE_IP(a, b, c, d) \
@@ -20,6 +20,8 @@
 #define IP_PROTO_ICMP   1
 #define IP_PROTO_UDP    17
 #define IP_PROTO_TCP    6
+
+#define NET_MAX_FRAME_SIZE 1514
 
 // TCP flags
 #define TCP_FIN  0x01
@@ -132,62 +134,62 @@ typedef struct {
     bool        rx_fin;      // remote sent FIN
 } tcp_socket_t;
 
-// --- ARP ---
-bool resolve_arp(uint32_t ip, uint8_t mac_out[6]);
-void handle_arp_rx(const uint8_t *frame, uint16_t len);
-
-// --- ICMP ---
-bool ping_icmp(uint32_t dest_ip);
-void handle_icmp_rx(const uint8_t *frame, uint16_t len);
-
-// --- UDP ---
-bool udp_send(uint32_t dest_ip, uint16_t src_port, uint16_t dst_port,
-              const void *data, uint16_t data_len);
-void udp_rx(const uint8_t *frame, uint16_t len);
-
-// --- DNS ---
-uint32_t dns_resolve(const char *hostname);
-void dns_rx(const uint8_t *payload, uint16_t len);
-
-// --- TCP ---
-// Connect to remote_ip:remote_port, returns socket or NULL on failure
-tcp_socket_t *tcp_connect(uint32_t remote_ip, uint16_t remote_port);
-
-// Send data on an established socket
-bool tcp_send(tcp_socket_t *sock, const void *data, uint16_t len);
-
-// Read available data from socket into buf, returns bytes read
-int tcp_read(tcp_socket_t *sock, void *buf, int max_len);
-
-// Read until connection closed or buf full, returns total bytes read
-int tcp_read_all(tcp_socket_t *sock, void *buf, int max_len, int timeout_ms);
-
-// Close connection (sends FIN)
-void tcp_close(tcp_socket_t *sock);
-
-// Free socket resources
-void tcp_free(tcp_socket_t *sock);
-
-// Poll for incoming TCP packets (call in wait loops)
-void tcp_poll(tcp_socket_t *sock);
-
-// Check if socket is still connected
-bool tcp_is_connected(tcp_socket_t *sock);
-
-// Internal RX handler
-void tcp_rx(const uint8_t *frame, uint16_t len);
-
-// --- RX dispatch ---
-void net_rx(const uint8_t *frame, uint16_t len);
-
 // --- Network Device Interface ---
 typedef struct net_device {
     uint8_t mac[6];
     bool (*send)(const void *data, uint16_t len);
 } net_device_t;
 
-void net_register_device(net_device_t *dev);
+void register_net_device(net_device_t *dev);
 extern net_device_t *net_current_device;
 
+// --- ARP ---
+bool resolve_arp(uint32_t ip, uint8_t mac_out[6]);
+void handle_arp_packet(const uint8_t *frame, uint16_t len);
+
+// --- ICMP ---
+bool ping_icmp(uint32_t dest_ip);
+void handle_icmp_packet(const uint8_t *frame, uint16_t len);
+
+// --- UDP ---
+bool send_udp_packet(uint32_t dest_ip, uint16_t src_port, uint16_t dst_port,
+                     const void *data, uint16_t data_len);
+void handle_udp_packet(const uint8_t *frame, uint16_t len);
+
+// --- DNS ---
+uint32_t resolve_dns(const char *hostname);
+void handle_dns_response(const uint8_t *payload, uint16_t len);
+
+// --- TCP ---
+// Connect to remote_ip:remote_port, returns socket or NULL on failure
+tcp_socket_t *connect_tcp(uint32_t remote_ip, uint16_t remote_port);
+
+// Send data on an established socket
+bool send_tcp(tcp_socket_t *sock, const void *data, uint16_t len);
+
+// Read available data from socket into buf, returns bytes read
+int read_tcp(tcp_socket_t *sock, void *buf, int max_len);
+
+// Read until connection closed or buf full, returns total bytes read
+int read_all_tcp(tcp_socket_t *sock, void *buf, int max_len, int timeout_ms);
+
+// Close connection (sends FIN)
+void close_tcp(tcp_socket_t *sock);
+
+// Free socket resources
+void free_tcp(tcp_socket_t *sock);
+
+// Poll for incoming TCP packets (call in wait loops)
+void poll_tcp(tcp_socket_t *sock);
+
+// Check if socket is still connected
+bool check_tcp_connected(tcp_socket_t *sock);
+
+// Internal RX handler
+void handle_tcp_packet(const uint8_t *frame, uint16_t len);
+
+// --- RX dispatch ---
+void handle_net_packet(net_device_t *dev, const uint8_t *frame, uint16_t len);
+
 // --- Checksum ---
-uint16_t net_checksum(const void *data, size_t len);
+uint16_t calculate_net_checksum(const void *data, size_t len);

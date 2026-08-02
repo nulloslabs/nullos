@@ -1,11 +1,11 @@
 #include <main/gdt.h>
 #include <main/string.h>
-#include <main/log.h>
+#include <io/terminal.h>
 
 cpu_gdt_t cpu_gdts[MAX_CPUS];
 
-extern void gdt_flush(uint64_t gdtr_ptr);
-extern void tss_flush(void);
+extern void flush_gdt(uint64_t gdtr_ptr);
+extern void flush_tss(void);
 
 static void set_gdt_entry(uint64_t *gdt, int num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran) {
     gdt[num] = (limit & 0xFFFF)
@@ -47,10 +47,10 @@ void init_gdt_for_cpu(int cpu_index) {
         .base  = (uint64_t)g->entries
     };
 
-    gdt_flush((uint64_t)&ptr);
-    tss_flush();
+    flush_gdt((uint64_t)&ptr);
+    flush_tss();
 }
 
 void set_tss_kernel_stack_for_cpu(int cpu_index, void *stack) { cpu_gdts[cpu_index].tss.rsp0 = (uint64_t)stack; }
 void set_tss_kernel_stack(void *stack) { set_tss_kernel_stack_for_cpu(0, stack); }
-void init_gdt(void) { init_gdt_for_cpu(0); log("initialized gdt"); }
+void init_gdt(void) { init_gdt_for_cpu(0); printf("gdt: initialized gdt\n"); }

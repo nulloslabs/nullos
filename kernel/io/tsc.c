@@ -1,4 +1,4 @@
-#include <freestanding/stdint.h>
+#include <stdint.h>
 #include <io/tsc.h>
 
 uint64_t read_tsc(void) {

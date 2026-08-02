@@ -1,6 +1,6 @@
 #pragma once
 
-#include <freestanding/stdint.h>
+#include <stdint.h>
 
 void sleep(uint64_t ms);
 void sleep_us(uint64_t us);

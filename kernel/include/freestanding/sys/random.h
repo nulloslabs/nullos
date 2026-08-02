@@ -1,6 +1,6 @@
 #pragma once
 
-#include <freestanding/stdint.h>
+#include <stdint.h>
 
 #define GRND_RANDOM   0x0001
 #define GRND_NONBLOCK 0x0002

@@ -1,8 +1,8 @@
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
+#include <stdint.h>
+#include <stddef.h>
 #include <main/string.h>
 #include <main/acpi.h>
-#include <main/log.h>
+#include <io/terminal.h>
 #include <io/uhci.h>
 #include <io/usb.h>
 #include <io/pci.h>
@@ -144,7 +144,7 @@ void poll_uhci_ports(void) {
 
                 if (status & UHCI_PORT_CCS) {
                     int ls = (status & UHCI_PORT_LSDA) ? 1 : 0;
-                    log("port %d: device connected", i);
+                    printf("uhci: port %d: device connected\n", i);
 
                     // Clear pending state on new connection
                     ctrl->pending_dev = NULL;
@@ -164,7 +164,7 @@ void poll_uhci_ports(void) {
                     init_usb_keyboard(&ctrl->hcd, ls ? USB_SPEED_LOW : USB_SPEED_FULL, i);
                 } else {
                     // Device disconnected
-                    log("port %d: device disconnected", i);
+                    printf("uhci: port %d: device disconnected\n", i);
                     // Clear pending on disconnect and remove keyboard from list
                     for (int k = 0; k < kbd_total; k++) {
                         if (kbd_list[k].hcd == &ctrl->hcd &&
@@ -262,7 +262,7 @@ void rescan_uhci_ports(int ctrl_idx, int port_hint) {
 
             // Skip completely invalid ports (0x0000 = no port register / invalid I/O)
             if (status == 0x0000) {
-                log("port %d: invalid/absent port register, skipping", i);
+                printf("uhci: port %d: invalid/absent port register, skipping\n", i);
                 continue;
             }
 
@@ -270,12 +270,12 @@ void rescan_uhci_ports(int ctrl_idx, int port_hint) {
             if (status & UHCI_PORT_CSC) {
                 outw(io_base + port_regs[i], status | UHCI_PORT_CSC);
                 status = inw(io_base + port_regs[i]);
-                log("port %d: cleared csc", i);
+                printf("uhci: port %d: cleared csc\n", i);
             }
 
             // Skip ports that are already enabled (already enumerated)
             if (status & UHCI_PORT_PED) {
-                log("port %d: skipping (already enabled)", i);
+                printf("uhci: port %d: skipping (already enabled)\n", i);
                 continue;
             }
 
@@ -289,7 +289,7 @@ void rescan_uhci_ports(int ctrl_idx, int port_hint) {
                     status = inw(io_base + port_regs[i]);
                 }
                 if (!(status & UHCI_PORT_CCS)) {
-                    log("port %d: no device, skipping", i);
+                    printf("uhci: port %d: no device, skipping\n", i);
                     continue;
                 }
             }
@@ -298,7 +298,7 @@ void rescan_uhci_ports(int ctrl_idx, int port_hint) {
             sleep(100);
 
             int ls = (status & UHCI_PORT_LSDA) ? 1 : 0;
-            log("port %d: companion handoff device", i);
+            printf("uhci: port %d: companion handoff device\n", i);
 
             ctrl->pending_dev = NULL;
             ctrl->pending_buf = NULL;
@@ -315,13 +315,13 @@ void rescan_uhci_ports(int ctrl_idx, int port_hint) {
             outw(io_base + port_regs[i], status | UHCI_PORT_CSC | UHCI_PORT_PEDC);
 
             if (!(status & UHCI_PORT_PED)) {
-                log("port %d: port not enabled after handoff reset", i);
+                printf("uhci: port %d: port not enabled after handoff reset\n", i);
                 continue;
             }
 
             register_usb_hcd(&ctrl->hcd);
             init_usb_keyboard(&ctrl->hcd, ls ? USB_SPEED_LOW : USB_SPEED_FULL, i);
-            log("port %d: handoff device enumerated", i);
+            printf("uhci: port %d: handoff device enumerated\n", i);
         }
     }
 }
@@ -333,7 +333,7 @@ void init_uhci(pci_device_t *dev) {
     uint64_t io_base = (uint64_t)(bar4 & ~0x03);
 
     if (io_base == 0) {
-        log("no io base found");
+        printf("uhci: no io base found\n");
         return;
     }
 
@@ -404,7 +404,7 @@ void init_uhci(pci_device_t *dev) {
     ctrl->pending_buf = NULL;
     ctrl->pending_td = uhci_alloc_td();
 
-    log("initialized uhci");
+    printf("uhci: initialized uhci\n");
     uhci_count++;
 
     // Initial port scan - detect already-connected devices

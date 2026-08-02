@@ -1,13 +1,12 @@
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
+#include <stdint.h>
+#include <stddef.h>
 #include <io/ac97.h>
 #include <io/io.h>
 #include <io/hpet.h>
 #include <mm/vmm.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
-#include <main/log.h>
-
+#include <io/terminal.h>
 uint16_t nam_base = 0;
 uint16_t nabm_base = 0;
 static bool ac97_ready = false;
@@ -181,7 +180,7 @@ void init_ac97(pci_device_t *dev) {
 
     pci_request_irq(dev, poll_ac97);
 
-    log("initialized ac97");
+    printf("ac97: initialized ac97\n");
 
     ac97_ready = true;
 }

@@ -1,7 +1,7 @@
 #pragma once
 
-#include <freestanding/asm-generic/signal.h>
-#include <freestanding/stddef.h>
+#include <asm-generic/signal.h>
+#include <stddef.h>
 
 struct sigaction {
     union {

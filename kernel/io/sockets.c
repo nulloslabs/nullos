@@ -1,4 +1,4 @@
-#include <freestanding/errno.h>
+#include <errno.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
 #include <main/sched.h>
@@ -331,7 +331,8 @@ int bind_unix_socket(unix_handle_t *h, const void *addr, uint32_t addrlen) {
     spin_unlock_irqrestore(&registry_lock, flags);
     /* Create a tmpfs socket node for filesystem-backed (non-abstract) sockets */
     if (path[0] != '@') {
-        int in = create_tmpfs_socket(path, 0777, current_task_ptr->euid, current_task_ptr->egid);
+        int in = write_tmpfs(path, NULL, 0, S_IFSOCK | 0777,
+                             current_task_ptr->euid, current_task_ptr->egid);
         if (in < 0) {
             /* rollback registry entry */
             unbind_unix_registry(h);

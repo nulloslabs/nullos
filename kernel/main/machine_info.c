@@ -1,20 +1,11 @@
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
-#include <freestanding/cpuid.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <cpuid.h>
 #include <main/string.h>
 #include <main/machine_info.h>
 #include <io/hpet.h>
-#include <main/limine_req.h>
-#include <main/log.h>
-
-static uint64_t round_up_ram(uint64_t x) {
-    if (x >= (1024ULL * 1024 * 1024)) {
-        return (x + (1024ULL * 1024 * 1024) - 1) & ~((1024ULL * 1024 * 1024) - 1);
-    } else {
-        return (x + (1024ULL * 1024) - 1) & ~((1024ULL * 1024) - 1);
-    }
-}
-
+#include <io/terminal.h>
+#include <mm/pmm.h>
 const char* get_cpu_name(void) {
     static char buf[49] = {0};
     if (buf[0]) return buf;
@@ -178,32 +169,15 @@ bool cpu_has_feature(cpu_feature_t feature) {
 }
 
 uint64_t get_total_ram(void) {
-    static uint64_t cached = 0;
-    if (cached) return cached;
-    struct limine_memmap_response *mm_map = mm_req.response;
-    for (uint64_t i = 0; i < mm_map->entry_count; i++) {
-        struct limine_memmap_entry *entry = mm_map->entries[i];
-        if (entry->type != LIMINE_MEMMAP_FRAMEBUFFER && entry->type != LIMINE_MEMMAP_BAD_MEMORY) cached += entry->length;
-    }
-    return round_up_ram(cached); // Round up to the power of 2
+    return get_total_pmm_memory();
 }
 
 uint64_t get_free_ram(void) {
-    static uint64_t cached = 0;
-    if (cached) return cached;
-    struct limine_memmap_response *mm_map = mm_req.response;
-    for (uint64_t i = 0; i < mm_map->entry_count; i++) {
-        struct limine_memmap_entry *entry = mm_map->entries[i];
-        if (entry->type == LIMINE_MEMMAP_USABLE) cached += entry->length;
-    }
-    return cached;
+    return get_free_pmm_memory();
 }
 
 uint64_t get_used_ram(void) {
-    static uint64_t cached = 0;
-    if (cached) return cached;
-    cached = get_total_ram() - get_free_ram();
-    return cached;
+    return get_used_pmm_memory();
 }
 
 void cache_machine_info(void) {
@@ -217,8 +191,5 @@ void cache_machine_info(void) {
     get_cpu_threads();
     get_cpu_freq();
     cpu_has_feature(CPU_FEATURE_FPU); // One function already caches everything.
-    get_total_ram();
-    get_free_ram();
-    get_used_ram();
-    log("cached machine info");
+    printf("machine info: cached machine info\n");
 }

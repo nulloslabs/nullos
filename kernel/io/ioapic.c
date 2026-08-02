@@ -1,7 +1,6 @@
 #include <io/ioapic.h>
 #include <mm/vmm.h>
-#include <main/log.h>
-
+#include <io/terminal.h>
 volatile uint32_t *ioapic_base = NULL;
 
 static uint32_t ioapic_read(uint32_t reg) { ioapic_base[IOAPIC_REGSEL / 4] = reg; return ioapic_base[IOAPIC_WIN / 4]; }
@@ -31,5 +30,5 @@ void init_ioapic(void *base_addr) {
     // Mask all IRQs first
     for (uint32_t i = 0; i < max_irqs; i++) { uint32_t reg_lo = IOAPIC_REDTBL + (i * 2); ioapic_write(reg_lo, IOAPIC_INT_MASKED); }
 
-    log("initialized ioapic");
+    printf("ioapic: initialized ioapic\n");
 }

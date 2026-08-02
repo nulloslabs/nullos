@@ -1,8 +1,8 @@
 #pragma once
 
-#include <freestanding/stdint.h>
-#include <freestanding/termios.h>
-#include <freestanding/sys/types.h>
+#include <stdint.h>
+#include <termios.h>
+#include <sys/types.h>
 #include <io/ttys.h>
 
 #define NUM_PTYS 16

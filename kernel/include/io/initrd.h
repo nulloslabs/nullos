@@ -1,8 +1,8 @@
 #pragma once
 
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
-#include <freestanding/sys/types.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <sys/types.h>
 
 #define MAX_MODIFIED_FILES 1024
 
@@ -11,7 +11,22 @@
 #define FT_EXECUTABLE 3
 #define FT_SYMLINK 4
 
+struct initrd_archive_entry {
+    char path[256];
+    uint8_t *data;
+    uint64_t size;
+    mode_t mode;
+    uid_t uid;
+    gid_t gid;
+    uint32_t ino;
+    uint32_t devmajor;
+    uint32_t devminor;
+    uint32_t nlink;
+    char link_target[256];
+};
+
 typedef struct {
+    ino_t inode;
     void* data;      // Pointer to the actual file content
     uint64_t size;   // Actual size of the file in bytes
     mode_t mode;
@@ -21,6 +36,7 @@ typedef struct {
 
 typedef struct {
     char path[256];
+    ino_t inode;
     void *data;
     uint64_t size;
     uint64_t capacity;
@@ -52,5 +68,6 @@ int rmdir_initrd(const char *path);
 int symlink_initrd(const char *target, const char *path, uid_t uid, gid_t gid);
 int chmod_initrd(const char *path, mode_t mode);
 int get_initrd_entry(int index, directory_entry_t* entry);
-int next_initrd_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size, uint8_t *child_type);
+int next_initrd_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size,
+                      uint8_t *child_type, ino_t *child_ino);
 void init_initrd(void);

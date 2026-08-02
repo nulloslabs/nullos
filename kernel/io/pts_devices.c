@@ -1,4 +1,4 @@
-#include <freestanding/errno.h>
+#include <errno.h>
 #include <io/pts_devices.h>
 #include <io/ptys.h>
 #include <io/devpts.h>
