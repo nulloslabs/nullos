@@ -1,9 +1,9 @@
 #include <stdint.h>
-#include <uacpi/acpi.h>
-#include <uacpi/tables.h>
 #include <io/hpet.h>
 #include <io/terminal.h>
 #include <mm/vmm.h>
+#include <uacpi/acpi.h>
+#include <uacpi/tables.h>
 
 static uintptr_t hpet_base;
 static uint32_t hpet_period;

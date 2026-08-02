@@ -1,15 +1,15 @@
 #include <stdint.h>
+#include <main/spinlocks.h>
+#include <io/ec.h>
+#include <io/hpet.h>
+#include <io/io.h>
+#include <io/terminal.h>
 #include <uacpi/acpi.h>
 #include <uacpi/namespace.h>
 #include <uacpi/opregion.h>
 #include <uacpi/resources.h>
 #include <uacpi/tables.h>
 #include <uacpi/utilities.h>
-#include <main/spinlocks.h>
-#include <io/ec.h>
-#include <io/hpet.h>
-#include <io/io.h>
-#include <io/terminal.h>
 
 static ec_controller_t ec_controller;
 
