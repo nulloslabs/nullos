@@ -63,6 +63,9 @@
 #define __NR_readlink 89
 #define __NR_chmod 90
 #define __NR_fchmod 91
+#define __NR_chown 92
+#define __NR_fchown 93
+#define __NR_lchown 94
 #define __NR_umask 95
 #define __NR_gettimeofday 96
 #define __NR_getrlimit 97
@@ -111,6 +114,7 @@
 #define __NR_epoll_ctl 233
 #define __NR_tgkill 234
 #define __NR_openat 257
+#define __NR_fchownat 260
 #define __NR_fstatat 262
 #define __NR_unlinkat 263
 #define __NR_symlinkat 266

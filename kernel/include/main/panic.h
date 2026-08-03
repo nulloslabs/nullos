@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <main/elf.h>
 
+#define panic(msg, ...) dopanic(__func__, (msg) __VA_OPT__(,) __VA_ARGS__)
+
 typedef struct {
     uint64_t es;
     uint64_t ds;
@@ -41,8 +43,6 @@ typedef struct {
     uint64_t load_bias;
 } kernel_symbol_table_t;
 
-#define panic(msg, ...) dopanic(__func__, (msg) __VA_OPT__(,) __VA_ARGS__)
-
-__attribute__((noreturn)) void dopanic(const char *func, const char *msg, ...);
 bool are_kernel_symbols_available(void);
+__attribute__((noreturn)) void dopanic(const char *func, const char *msg, ...);
 void exception_panic(exception_frame_t *frame);

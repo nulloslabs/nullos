@@ -16,6 +16,7 @@
 #define VMM_PWT      (1ULL << 3)
 #define VMM_PCD      (1ULL << 4)
 #define VMM_SHARED   (1ULL << 9)
+#define VMM_EXTERNAL (1ULL << 10)
 #define VMM_NX       (1ULL << 63)
 
 typedef struct {
@@ -35,6 +36,7 @@ void set_vmm_user(vmm_context_t* ctx, uint64_t virt);
 bool map_vmm(vmm_context_t* ctx, uint64_t virt, uint64_t phys, uint64_t flags);
 void unmap_vmm(vmm_context_t* ctx, uint64_t virt);
 uint64_t get_vmm_phys(vmm_context_t* ctx, uint64_t virt);
+bool vmm_user_range_valid(vmm_context_t *ctx, uint64_t addr, size_t size, bool write);
 
 // Context-aware memory access
 void read_vmm(vmm_context_t* ctx, void* dest, uint64_t virt_src, size_t size);

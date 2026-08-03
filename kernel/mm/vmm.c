@@ -1,6 +1,3 @@
-#include <mm/vmm.h>
-#include <mm/pmm.h>
-#include <mm/mm.h>
 #include <main/string.h>
 #include <main/limine_req.h>
 #include <main/spinlocks.h>
@@ -8,6 +5,9 @@
 #include <main/msr.h>
 #include <main/panic.h>
 #include <io/terminal.h>
+#include <mm/vmm.h>
+#include <mm/pmm.h>
+#include <mm/mm.h>
 vmm_context_t kernel_context;
 static uint64_t vmalloc_cursor = 0xffffc00000000000;
 static uint64_t vuser_cursor   = USER_MMAP_BASE;
@@ -127,8 +127,9 @@ void unmap_vmm(vmm_context_t* ctx, uint64_t virt) {
 
     // Get the physical address so we can free it in the PMM
     // Mask out flag bits: low 12 (page flags) and bit 63 (NX)
-    uint64_t phys = pt[pt_idx] & 0x000ffffffffff000ULL;
-    if (phys) { pfree((void*)phys); }
+    uint64_t entry = pt[pt_idx];
+    uint64_t phys = entry & 0x000ffffffffff000ULL;
+    if (phys && !(entry & VMM_EXTERNAL)) { pfree((void*)phys); }
 
     // Clear the entry and flush TLB
     pt[pt_idx] = 0;
@@ -162,6 +163,43 @@ uint64_t get_vmm_phys(vmm_context_t* ctx, uint64_t virt) {
     // Mask out the flags to get the pure physical address, then add the page offset
     uint64_t phys = (entry & 0x000ffffffffff000ULL) + offset;
     return phys;
+}
+
+static bool vmm_user_page_valid(vmm_context_t *ctx, uint64_t virt, bool write) {
+    uint64_t pml4_idx = (virt >> 39) & 0x1FF;
+    uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
+    uint64_t pd_idx = (virt >> 21) & 0x1FF;
+    uint64_t pt_idx = (virt >> 12) & 0x1FF;
+    uint64_t required = VMM_PRESENT | VMM_USER;
+    if (write) required |= VMM_WRITABLE;
+
+    uint64_t pml4e = ctx->pml4[pml4_idx];
+    if ((pml4e & required) != required) return false;
+    uint64_t *pdpt = (uint64_t *)phys_to_virt(pml4e & 0x000ffffffffff000ULL);
+    uint64_t pdpte = pdpt[pdpt_idx];
+    if ((pdpte & required) != required) return false;
+    if (pdpte & (1ULL << 7)) return true;
+    uint64_t *pd = (uint64_t *)phys_to_virt(pdpte & 0x000ffffffffff000ULL);
+    uint64_t pde = pd[pd_idx];
+    if ((pde & required) != required) return false;
+    if (pde & (1ULL << 7)) return true;
+    uint64_t *pt = (uint64_t *)phys_to_virt(pde & 0x000ffffffffff000ULL);
+    return (pt[pt_idx] & required) == required;
+}
+
+bool vmm_user_range_valid(vmm_context_t *ctx, uint64_t addr, size_t size, bool write) {
+    if (!ctx || !ctx->pml4) return false;
+    if (size == 0) return true;
+    if (addr >= 0x0000800000000000ULL || size > 0x0000800000000000ULL - addr) return false;
+
+    uint64_t page = addr & ~(uint64_t)(PAGE_SIZE - 1);
+    uint64_t last = (addr + size - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+    for (;;) {
+        if (!vmm_user_page_valid(ctx, page, write)) return false;
+        if (page == last) break;
+        page += PAGE_SIZE;
+    }
+    return true;
 }
 
 void read_vmm(vmm_context_t* ctx, void* dest, uint64_t virt_src, size_t size) {
@@ -257,21 +295,21 @@ void destroy_vmm_context(vmm_context_t* ctx) {
     if (!ctx || !ctx->pml4) return;
     for (int i = 0; i < 256; i++) {
         if (ctx->pml4[i] & VMM_PRESENT) {
-            uint64_t pdpt_phys = ctx->pml4[i] & ~0xFFFULL;
+            uint64_t pdpt_phys = ctx->pml4[i] & 0x000ffffffffff000ULL;
             uint64_t* pdpt = (uint64_t*)phys_to_virt(pdpt_phys);
             for (int j = 0; j < 512; j++) {
                 if (pdpt[j] & VMM_PRESENT) {
                     if (pdpt[j] & (1ULL << 7)) continue;
-                    uint64_t pd_phys = pdpt[j] & ~0xFFFULL;
+                    uint64_t pd_phys = pdpt[j] & 0x000ffffffffff000ULL;
                     uint64_t* pd = (uint64_t*)phys_to_virt(pd_phys);
                     for (int k = 0; k < 512; k++) {
                         if (pd[k] & VMM_PRESENT) {
                             if (pd[k] & (1ULL << 7)) continue;
-                            uint64_t pt_phys = pd[k] & ~0xFFFULL;
+                            uint64_t pt_phys = pd[k] & 0x000ffffffffff000ULL;
                             uint64_t* pt = (uint64_t*)phys_to_virt(pt_phys);
                             for (int l = 0; l < 512; l++) {
-                                if (pt[l] & VMM_PRESENT) {
-                                    pfree((void*)(pt[l] & ~0xFFFULL));
+                                if ((pt[l] & VMM_PRESENT) && !(pt[l] & VMM_EXTERNAL)) {
+                                    pfree((void*)(pt[l] & 0x000ffffffffff000ULL));
                                 }
                             }
                             pfree((void*)pt_phys);
@@ -296,7 +334,6 @@ vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
 
     // Track allocated pages for rollback on failure
     #define CLONE_MAX_PAGES 65536
-    static uint64_t rollback_phys[CLONE_MAX_PAGES];
     static uint64_t rollback_virt[CLONE_MAX_PAGES];
     int rollback_count = 0;
 
@@ -320,6 +357,12 @@ vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
 
                     uint64_t virt = (pml4_i << 39) | (pdpt_i << 30) | (pd_i << 21) | (pt_i << 12);
 
+                    if (entry & VMM_EXTERNAL) {
+                        uint64_t phys = entry & 0x000ffffffffff000ULL;
+                        map_vmm(child, virt, phys, entry & (0xFFFULL | VMM_NX) & ~VMM_PRESENT);
+                        continue;
+                    }
+
                     if (entry & VMM_SHARED) {
                         uint64_t phys = entry & 0x000ffffffffff000ULL;
                         pref((void*)phys);
@@ -330,13 +373,12 @@ vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
                     void* new_phys = pmalloc();
                     if (!new_phys) {
                         // Rollback: free all allocated pages and destroy child context
-                        for (int r = 0; r < rollback_count; r++) { unmap_vmm(child, rollback_virt[r]); pfree((void*)rollback_phys[r]); }
-                        free(child);
+                        for (int r = 0; r < rollback_count; r++) unmap_vmm(child, rollback_virt[r]);
+                        destroy_vmm_context(child);
                         return NULL;
                     }
 
                     if (rollback_count < CLONE_MAX_PAGES) {
-                        rollback_phys[rollback_count] = (uint64_t)new_phys;
                         rollback_virt[rollback_count] = virt;
                         rollback_count++;
                     }
@@ -380,8 +422,6 @@ void* vmalloc_ex(vmm_context_t* ctx, size_t size, uint64_t flags) {
             // Rollback: unmap and free all previously allocated pages
             uint64_t rollback_addr = (uint64_t)start_addr;
             for (uint64_t j = 0; j < mapped_count; j++) {
-                uint64_t rphys = get_vmm_phys(ctx, rollback_addr);
-                if (rphys) pfree((void*)rphys);
                 unmap_vmm(ctx, rollback_addr);
                 rollback_addr += PAGE_SIZE;
             }
@@ -389,7 +429,15 @@ void* vmalloc_ex(vmm_context_t* ctx, size_t size, uint64_t flags) {
         }
         if (i == 0) first_phys = phys;
 
-        map_vmm(ctx, curr_addr, (uint64_t)phys, flags | VMM_PRESENT);
+        if (!map_vmm(ctx, curr_addr, (uint64_t)phys, flags | VMM_PRESENT)) {
+            pfree(phys);
+            uint64_t rollback_addr = (uint64_t)start_addr;
+            for (uint64_t j = 0; j < mapped_count; j++) {
+                unmap_vmm(ctx, rollback_addr);
+                rollback_addr += PAGE_SIZE;
+            }
+            return NULL;
+        }
         curr_addr += PAGE_SIZE;
         mapped_count++;
     }

@@ -1,13 +1,13 @@
+#include <main/string.h>
+#include <main/machine_info.h>
+#include <main/madt.h>
+#include <main/msr.h>
 #include <io/apic.h>
 #include <io/pic.h>
 #include <io/io.h>
-#include <mm/vmm.h>
-#include <main/string.h>
-#include <main/machine_info.h>
 #include <io/ioapic.h>
-#include <main/madt.h>
-#include <main/msr.h>
 #include <io/terminal.h>
+#include <mm/vmm.h>
 enum apic_mode current_apic_mode = APIC_NONE;
 volatile uint8_t *lapic_base = NULL;
 

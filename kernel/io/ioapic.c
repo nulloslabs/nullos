@@ -1,6 +1,6 @@
 #include <io/ioapic.h>
-#include <mm/vmm.h>
 #include <io/terminal.h>
+#include <mm/vmm.h>
 volatile uint32_t *ioapic_base = NULL;
 
 static uint32_t ioapic_read(uint32_t reg) { ioapic_base[IOAPIC_REGSEL / 4] = reg; return ioapic_base[IOAPIC_WIN / 4]; }

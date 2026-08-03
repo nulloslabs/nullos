@@ -1,7 +1,7 @@
 #include <stdint.h>
-#include <io/hpet.h>
 #include <main/spinlocks.h>
 #include <main/timekeeping.h>
+#include <io/hpet.h>
 
 static spinlock_t time_lock = SPINLOCK_INIT;
 static int64_t wall_time_offset_us = 0;

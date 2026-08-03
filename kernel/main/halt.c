@@ -1,6 +1,6 @@
 #include <main/halt.h>
-#include <io/apic.h>
 #include <main/mp.h>
+#include <io/apic.h>
 
 volatile int system_halted = 0;
 

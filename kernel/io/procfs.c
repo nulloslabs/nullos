@@ -394,6 +394,8 @@ static bool procfs_resolve_impl(const char *abs_path, const char *orig_path, int
             if (pid_idx >= MAX_TASKS) return false;
             if (tasks[pid_idx].state == TASK_DEAD ||
                 tasks[pid_idx].state == TASK_ZOMBIE) return false;
+            if (!current_task_ptr) return false;
+            if (current_task_ptr->euid != 0 && current_task_ptr->euid != tasks[pid_idx].euid) return false;
         }
 
         // Validate fd if one was parsed.

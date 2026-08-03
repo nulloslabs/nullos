@@ -1,11 +1,11 @@
 #include <errno.h>
-#include <io/devtmpfs.h>
+#include <signal.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
+#include <main/sched.h>
+#include <io/devtmpfs.h>
 #include <io/ptys.h>
 #include <io/ttys.h>
-#include <signal.h>
-#include <main/sched.h>
 #include <io/terminal.h>
 pty_t ptys[NUM_PTYS];
 spinlock_t pty_lock = SPINLOCK_INIT;

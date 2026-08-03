@@ -1,16 +1,16 @@
 #include <stdint.h>
 #include <errno.h>
+#include <main/string.h>
+#include <main/sched.h>
+#include <main/limine_req.h>
+#include <main/halt.h>
 #include <io/initrd.h>
 #include <io/tmpfs.h>
 #include <io/fonts.h>
 #include <io/terminal.h>
-#include <main/string.h>
 #include <io/devtmpfs.h>
 #include <io/procfs.h>
-#include <main/sched.h>
 #include <limine.h>
-#include <main/limine_req.h>
-#include <main/halt.h>
 
 unsigned char current_font[16384];
 uint8_t current_font_w = 0;

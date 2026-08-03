@@ -1,12 +1,12 @@
 #include <stdint.h>
+#include <main/string.h>
+#include <main/spinlocks.h>
 #include <io/rtl8139.h>
 #include <io/io.h>
+#include <io/net.h>
+#include <io/terminal.h>
 #include <mm/mm.h>
 #include <mm/vmm.h>
-#include <main/string.h>
-#include <io/net.h>
-#include <main/spinlocks.h>
-#include <io/terminal.h>
 rtl8139_t rtl8139 = {0};
 
 static spinlock_t rtl_lock = SPINLOCK_INIT;

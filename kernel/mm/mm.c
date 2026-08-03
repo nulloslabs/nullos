@@ -1,13 +1,13 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <main/string.h>
-#include <mm/mm.h>
-#include <mm/pmm.h>
-#include <mm/vmm.h>
 #include <main/panic.h>
 #include <main/limine_req.h>
 #include <main/spinlocks.h>
 #include <io/terminal.h>
+#include <mm/mm.h>
+#include <mm/pmm.h>
+#include <mm/vmm.h>
 
 #define HEAP_ALIGNMENT       16ULL
 #define HEAP_INITIAL_GROW    (64 * 1024ULL)

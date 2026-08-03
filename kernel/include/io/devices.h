@@ -7,4 +7,6 @@ uint64_t write_device(const char* name, const void* buf, uint64_t count, uint64_
 void init_devices(void);
 int register_device(const char* name, uint64_t (*read_fn)(void*, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void*, uint64_t, uint64_t, int));
 int register_device_idx(const char* name, uint64_t (*read_fn)(void*, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void*, uint64_t, uint64_t, int), int index);
+int register_block_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index, uint64_t size);
+int get_block_device_size(const char *name, uint64_t *size);
 int unregister_device(const char* name);

@@ -505,6 +505,17 @@ int chmod_tmpfs(const char *abs_path, mode_t mode) {
     return 0;
 }
 
+int chown_tmpfs(const char *abs_path, uid_t uid, gid_t gid, bool follow) {
+    uint64_t irq;
+    spin_lock_irqsave(&tmpfs_lock, &irq);
+    int inode = resolve_locked(abs_path, follow);
+    if (inode < 0) { spin_unlock_irqrestore(&tmpfs_lock, irq); return inode; }
+    if (uid != (uid_t)-1) tmpfs_inodes[inode].uid = uid;
+    if (gid != (gid_t)-1) tmpfs_inodes[inode].gid = gid;
+    spin_unlock_irqrestore(&tmpfs_lock, irq);
+    return 0;
+}
+
 // The caller must hold tmpfs_lock.
 static int truncate_tmpfs_inode_locked(int inode, uint64_t size) {
     if (inode < 0 || inode >= TMPFS_MAX_INODES) return -EBADF;

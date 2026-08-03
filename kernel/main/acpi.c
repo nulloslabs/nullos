@@ -1,9 +1,5 @@
 #include <stddef.h>
 #include <stdint.h>
-#include <uacpi/kernel_api.h>
-#include <uacpi/status.h>
-#include <uacpi/uacpi.h>
-#include <uacpi/utilities.h>
 #include <main/acpi.h>
 #include <main/limine_req.h>
 #include <main/spinlocks.h>
@@ -20,6 +16,10 @@
 #include <io/terminal.h>
 #include <mm/mm.h>
 #include <mm/vmm.h>
+#include <uacpi/kernel_api.h>
+#include <uacpi/status.h>
+#include <uacpi/uacpi.h>
+#include <uacpi/utilities.h>
 
 typedef struct {
     uacpi_pci_address address;
@@ -409,5 +409,5 @@ void init_acpi_namespace(void) {
         printf("acpi: namespace initialization failed: %s\n", uacpi_status_to_string(status));
         return;
     }
-    printf("acpi: initialized namespace\n");
+    printf("acpi: initialized acpi namespace\n");
 }

@@ -15,6 +15,7 @@ flock_obj_t *alloc_flock_obj(const char *path) {
             global_flocks[i].used = true;
             global_flocks[i].refcount = 1;
             global_flocks[i].lock_type = 0;
+            global_flocks[i].owner_pid = 0;
             strncpy(global_flocks[i].path, path, 255);
             global_flocks[i].path[255] = '\0';
             return &global_flocks[i];
@@ -33,6 +34,7 @@ void release_flock_obj(flock_obj_t *obj) {
         if (obj->refcount <= 0) {
             obj->used = false;
             obj->lock_type = 0;
+            obj->owner_pid = 0;
         }
     }
 }
@@ -72,7 +74,7 @@ int free_fd(fd_table_t *table, int fd) {
             release_pty_slave(idx);
     } else if (table->entries[fd].type == FD_PIPE || table->entries[fd].type == FD_SOCKET) {
         release_unix_handle((unix_handle_t *)table->entries[fd].handle);
-    } else if (table->entries[fd].type == FD_FILE && table->entries[fd].handle != NULL) {
+    } else if ((table->entries[fd].type == FD_FILE || table->entries[fd].type == FD_TMPFS) && table->entries[fd].handle != NULL) {
         release_flock_obj((flock_obj_t *)table->entries[fd].handle);
     } else if (table->entries[fd].type == FD_EPOLL) {
         free(table->entries[fd].handle);
@@ -112,7 +114,7 @@ void retain_fd_entry(fd_entry_t *entry) {
         if (idx >= 0)
             retain_pty_slave(idx);
     } else if (entry->type == FD_PIPE || entry->type == FD_SOCKET) { retain_unix_handle((unix_handle_t *)entry->handle); 
-    } else if (entry->type == FD_FILE && entry->handle != NULL) { retain_flock_obj((flock_obj_t *)entry->handle); } }
+    } else if ((entry->type == FD_FILE || entry->type == FD_TMPFS) && entry->handle != NULL) { retain_flock_obj((flock_obj_t *)entry->handle); } }
 
 void init_fd_table(fd_table_t *table) {
     for (int i = 0; i < FD_MAX; i++) {

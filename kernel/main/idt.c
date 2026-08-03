@@ -62,23 +62,22 @@ void init_idt(void) {
     // 0x8E = Present (0x80) | DPL 0 (0x00) | Interrupt Gate (0x0E)
     for (int i = 0; i < 256; i++) { idt_set_descriptor(i, isrspr, 0x8E); }
 
-    // Now overwrite specific vectors with their real handlers.
-    // 0xEE = Present (0x80) | DPL 3 (0x60) | Interrupt Gate (0x0E)
-    idt_set_descriptor(0, isr0, 0xEE);
-    idt_set_descriptor(4, isr4, 0xEE);
-    idt_set_descriptor(5, isr5, 0xEE);
-    idt_set_descriptor(6, isr6, 0xEE);
-    idt_set_descriptor(7, isr7, 0xEE);
-    idt_set_descriptor(8, isr8, 0xEE);
+    // Hardware exceptions and IRQs are kernel-only interrupt gates.
+    idt_set_descriptor(0, isr0, 0x8E);
+    idt_set_descriptor(4, isr4, 0x8E);
+    idt_set_descriptor(5, isr5, 0x8E);
+    idt_set_descriptor(6, isr6, 0x8E);
+    idt_set_descriptor(7, isr7, 0x8E);
+    idt_set_descriptor(8, isr8, 0x8E);
     idt[8].ist = 1; // Use IST1 (dedicated double-fault stack)
-    idt_set_descriptor(13, isr13, 0xEE);
-    idt_set_descriptor(14, isr14, 0xEE);
-    for (int i = 22; i < 27; i++) { idt_set_descriptor(i, isrrsv, 0xEE); }
-    idt_set_descriptor(30, isr30, 0xEE);
-    idt_set_descriptor(31, isrrsv, 0xEE);
-    idt_set_descriptor(32, isr32, 0xEE);
-    idt_set_descriptor(33, isr33, 0xEE);
-    idt_set_descriptor(43, isr43, 0xEE);
+    idt_set_descriptor(13, isr13, 0x8E);
+    idt_set_descriptor(14, isr14, 0x8E);
+    for (int i = 22; i < 27; i++) { idt_set_descriptor(i, isrrsv, 0x8E); }
+    idt_set_descriptor(30, isr30, 0x8E);
+    idt_set_descriptor(31, isrrsv, 0x8E);
+    idt_set_descriptor(32, isr32, 0x8E);
+    idt_set_descriptor(33, isr33, 0x8E);
+    idt_set_descriptor(43, isr43, 0x8E);
 
     // MSI vectors. Use DPL 0 (0x8E) — userspace shouldn't be able to
     // raise a device interrupt via INT n.

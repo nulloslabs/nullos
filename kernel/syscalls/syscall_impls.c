@@ -29,11 +29,6 @@
 #include <sys/uio.h>
 #include <sys/sysmacros.h>
 #include <main/limine_req.h>
-#include <io/fonts.h>
-#include <io/devices.h>
-#include <io/devtmpfs.h>
-#include <io/devpts.h>
-#include <io/pts_devices.h>
 #include <main/spinlocks.h>
 #include <main/elf.h>
 #include <main/halt.h>
@@ -45,10 +40,16 @@
 #include <main/mp.h>
 #include <main/msr.h>
 #include <main/fd.h>
-#include <io/initrd.h>
 #include <main/sched.h>
 #include <main/string.h>
 #include <main/rng.h>
+#include <io/fb.h>
+#include <io/fonts.h>
+#include <io/devices.h>
+#include <io/devtmpfs.h>
+#include <io/devpts.h>
+#include <io/pts_devices.h>
+#include <io/initrd.h>
 #include <io/terminal.h>
 #include <io/keyboard.h>
 #include <io/ttys.h>
@@ -56,12 +57,13 @@
 #include <io/hpet.h>
 #include <io/sockets.h>
 #include <io/serial.h>
+#include <io/procfs.h>
+#include <io/tmpfs.h>
+#include <io/usb.h>
 #include <mm/mm.h>
 #include <mm/vmm.h>
 #include <mm/pmm.h>
 #include <mm/vma.h>
-#include <io/procfs.h>
-#include <io/tmpfs.h>
 #include <syscalls/syscalls.h>
 #include <syscalls/syscall_impls.h>
 
@@ -110,10 +112,18 @@ static spinlock_t vfs_lock = SPINLOCK_INIT;
 static spinlock_t stdin_lock = SPINLOCK_INIT;
 static spinlock_t futex_lock = SPINLOCK_INIT;
 
-static bool user_range_ok(vmm_context_t *ctx, uint64_t addr, uint64_t size) {
+static bool user_address_range_ok(uint64_t addr, uint64_t size) {
     if (addr >= USER_ADDR_MAX) return false;
     if (size > USER_ADDR_MAX - addr) return false;
     return true;
+}
+
+static bool user_range_ok(vmm_context_t *ctx, uint64_t addr, uint64_t size) {
+    return user_address_range_ok(addr, size) && vmm_user_range_valid(ctx, addr, size, false);
+}
+
+static bool user_write_range_ok(vmm_context_t *ctx, uint64_t addr, uint64_t size) {
+    return user_address_range_ok(addr, size) && vmm_user_range_valid(ctx, addr, size, true);
 }
 
 static inline int fd_isset(const uint8_t *set, int fd) { return (set[fd / 8] >> (fd % 8)) & 1; }
@@ -321,6 +331,16 @@ static int build_abs_path_at(int dirfd, const char *path, char *out, size_t out_
 
 static void build_abs_path(const char *path, char *out, size_t out_size) { build_abs_path_at(AT_FDCWD, path, out, out_size); }
 
+static int copy_string_from_user(char *dest, const char *src, size_t capacity) {
+    if (!dest || !src || capacity == 0) return -EFAULT;
+    for (size_t i = 0; i < capacity; i++) {
+        if (copy_from_user(&dest[i], &src[i], 1) < 0) return -EFAULT;
+        if (dest[i] == '\0') return 0;
+    }
+    dest[capacity - 1] = '\0';
+    return -ENAMETOOLONG;
+}
+
 static int copy_from_user_strarray(char ***out_karray, const char **user_arr, size_t max_elements) {
     char **k_arr = malloc((max_elements + 1) * sizeof(char *));
     if (!k_arr) return -ENOMEM;
@@ -354,8 +374,13 @@ static int copy_from_user_strarray(char ***out_karray, const char **user_arr, si
             return -ENOMEM;
         }
 
-        read_vmm(current_task_ptr->ctx, k_str, (uint64_t)u_ptr, 255);
-        k_str[255] = '\0';
+        int string_status = copy_string_from_user(k_str, u_ptr, 256);
+        if (string_status < 0) {
+            free(k_str);
+            for (size_t i = 0; i < count; i++) free(k_arr[i]);
+            free(k_arr);
+            return string_status;
+        }
 
         k_arr[count++] = k_str;
     }
@@ -464,6 +489,46 @@ static bool stat_tmpfs_to_kst(const char *abs_path, struct stat *kst, bool follo
     return true;
 }
 
+static int check_directory_access(const char *path, bool write) {
+    struct stat st;
+    if (is_tmpfs_dir(path)) {
+        if (!stat_tmpfs_to_kst(path, &st, true)) return -ENOENT;
+    } else {
+        initrd_file_t dir = read_initrd(path);
+        if (!dir.mode) return -ENOENT;
+        memset(&st, 0, sizeof(st));
+        st.st_mode = dir.mode;
+        st.st_uid = dir.uid;
+        st.st_gid = dir.gid;
+    }
+    if (!S_ISDIR(st.st_mode)) return -ENOTDIR;
+    return can_access_stat_mode(&st, 0, write, 1) ? 0 : -EACCES;
+}
+
+static int check_parent_access(const char *path, bool modify) {
+    char parent[256];
+    strncpy(parent, path, sizeof(parent) - 1);
+    parent[sizeof(parent) - 1] = '\0';
+    size_t len = strlen(parent);
+    while (len > 1 && parent[len - 1] == '/') parent[--len] = '\0';
+    char *slash = strrchr(parent, '/');
+    if (!slash) return -EINVAL;
+    if (slash == parent) parent[1] = '\0';
+    else *slash = '\0';
+
+    bool immediate = modify;
+    for (;;) {
+        int status = check_directory_access(parent, immediate);
+        if (status < 0) return status;
+        if (strcmp(parent, "/") == 0) break;
+        slash = strrchr(parent, '/');
+        if (!slash || slash == parent) strcpy(parent, "/");
+        else *slash = '\0';
+        immediate = false;
+    }
+    return 0;
+}
+
 static bool stat_proc(const char *abs_path, const char *orig_path, struct stat *kst, bool follow_self) {
     if (!is_procfs_path(abs_path)) return false;
     int self = proc_self_idx();
@@ -560,12 +625,16 @@ static int proc_open_common(char *abs_path, size_t abs_size, uint32_t flags) {
 // caching, no reaching into tmpfs_inodes[] directly.
 static int open_tmpfs_common(const char *abs_path, uint32_t flags, mode_t mode) {
     if (!is_tmpfs_dir(abs_path)) return 1;
+    int parent_access = check_parent_access(abs_path, false);
+    if (parent_access < 0) return parent_access;
 
     tmpfs_file_t f = stat_tmpfs(abs_path); // follows symlinks, like read_initrd/stat_initrd
 
     if (!f.mode) {
         // Does not exist yet
         if (!(flags & O_CREAT)) return -ENOENT;
+        int access = check_parent_access(abs_path, true);
+        if (access < 0) return access;
         int r = write_tmpfs(abs_path, NULL, 0,
                             (mode ? mode : 0644) | S_IFREG,
                             current_task_ptr->euid, current_task_ptr->egid);
@@ -575,13 +644,10 @@ static int open_tmpfs_common(const char *abs_path, uint32_t flags, mode_t mode) 
         if ((flags & O_CREAT) && (flags & O_EXCL)) return -EEXIST;
         // O_DIRECTORY: must be a directory
         if ((flags & O_DIRECTORY) && !S_ISDIR(f.mode)) return -ENOTDIR;
-        // O_TRUNC: truncate existing regular file
-        if ((flags & O_TRUNC) && S_ISREG(f.mode)) {
-            int t = truncate_tmpfs(abs_path, 0);
-            if (t < 0) return t;
-        }
         // Directories open as directory fds (for getdents)
         if (S_ISDIR(f.mode)) {
+            struct stat dst;
+            if (!stat_tmpfs_to_kst(abs_path, &dst, true) || !can_access_stat_mode(&dst, 1, 0, 1)) return -EACCES;
             return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_TMPFS, flags);
         }
         // Permission check
@@ -590,6 +656,11 @@ static int open_tmpfs_common(const char *abs_path, uint32_t flags, mode_t mode) 
             int want_write = (flags & O_WRONLY) || (flags & O_RDWR);
             int want_read  = !want_write || (flags & O_RDWR);
             if (!can_access_stat_mode(&tst, want_read, want_write, 0)) return -EACCES;
+        }
+        // Permission is checked before a destructive truncate.
+        if ((flags & O_TRUNC) && S_ISREG(f.mode)) {
+            int t = truncate_tmpfs(abs_path, 0);
+            if (t < 0) return t;
         }
     }
     return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_TMPFS, flags);
@@ -1412,7 +1483,7 @@ static int do_epoll_wait(syscall_frame_t *frame, int64_t timeout_us, uint64_t si
     epoll_instance_t *epi = (epoll_instance_t *)ep_entry->handle;
     if (!epi) { frame->rax = (uint64_t)-EBADF; return -1; }
 
-    if (!user_events || !user_range_ok(current_task_ptr->ctx, (uint64_t)user_events, maxevents * sizeof(struct epoll_event))) {
+    if (!user_events || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_events, maxevents * sizeof(struct epoll_event))) {
         frame->rax = (uint64_t)-EFAULT; return -1;
     }
 
@@ -1501,7 +1572,7 @@ int copy_from_user(void *kdest, const void *usrc, size_t size) {
     if (!usrc) return -EFAULT;
     if ((uint64_t)usrc >= USER_ADDR_MAX || size > USER_ADDR_MAX - (uint64_t)usrc) return -EFAULT;
     if (!kdest || size == 0) return 0;
-    if (!get_vmm_phys(current_task_ptr->ctx, (uint64_t)usrc & ~0xFFFULL)) return -EFAULT;
+    if (!vmm_user_range_valid(current_task_ptr->ctx, (uint64_t)usrc, size, false)) return -EFAULT;
 
     read_vmm(current_task_ptr->ctx, kdest, (uint64_t)usrc, size);
     return 0;
@@ -1511,7 +1582,7 @@ int copy_to_user(const void *udest, const void *ksrc, size_t size) {
     if (!udest) return -EFAULT;
     if ((uint64_t)udest >= USER_ADDR_MAX || size > USER_ADDR_MAX - (uint64_t)udest) return -EFAULT;
     if (!ksrc || size == 0) return 0;
-    if (!get_vmm_phys(current_task_ptr->ctx, (uint64_t)udest & ~0xFFFULL)) return -EFAULT;
+    if (!vmm_user_range_valid(current_task_ptr->ctx, (uint64_t)udest, size, true)) return -EFAULT;
 
     write_vmm(current_task_ptr->ctx, (uint64_t)udest, ksrc, size);
     return 0;
@@ -1858,7 +1929,7 @@ void sys_read(syscall_frame_t *frame) {
     uint64_t count = frame->rdx;
 
     // Validate user buffer
-    if (count > 0 && !user_range_ok(current_task_ptr->ctx, (uint64_t)buf, count)) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (count > 0 && !user_write_range_ok(current_task_ptr->ctx, (uint64_t)buf, count)) { frame->rax = (uint64_t)-EFAULT; return; }
 
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
@@ -2006,18 +2077,20 @@ void sys_write(syscall_frame_t *frame) {
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
 
     if (entry->type == FD_STREAM) {
-        char kbuf[256];
+        char kbuf[64];
         uint64_t processed = 0;
         while (processed < count) {
+            poll_usb_hcds();
+            if (signal_pending()) break;
             uint64_t chunk = count - processed;
             if (chunk > sizeof(kbuf)) chunk = sizeof(kbuf);
             read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf + processed, chunk);
             for (uint64_t i = 0; i < chunk; i++) {
-                putchar(kbuf[i]);
+                if (kbuf[i] != '\0') putchar(kbuf[i]);
             }
             processed += chunk;
         }
-        frame->rax = count;
+        frame->rax = !processed && signal_pending() ? (uint64_t)-EINTR : processed;
         return;
     }
 
@@ -2131,7 +2204,7 @@ void sys_open(syscall_frame_t *frame) {
     if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
 
     char path[256];
-    int cr = copy_from_user(path, user_path, sizeof(path));
+    int cr = copy_string_from_user(path, user_path, sizeof(path));
     if (cr < 0) { frame->rax = (uint64_t)cr; return; }
 
     char abs_path[256];
@@ -2266,21 +2339,27 @@ void sys_open(syscall_frame_t *frame) {
 
     if (!file.mode && !(flags & O_CREAT)) { frame->rax = (uint64_t)-ENOENT; return; }
 
+    int parent_access = check_parent_access(abs_path, false);
+    if (parent_access < 0) { frame->rax = (uint64_t)parent_access; return; }
+
+    int want_write = (flags & O_WRONLY) || (flags & O_RDWR);
+    int want_read = !want_write || (flags & O_RDWR);
+
     if ((flags & O_CREAT) && !file.data && !file.mode) {
+        int access = check_parent_access(abs_path, true);
+        if (access < 0) { frame->rax = (uint64_t)access; return; }
         int r = write_initrd(abs_path, "", 0, mode | 0o100000, current_task_ptr->euid, current_task_ptr->egid);
         if (r < 0) { frame->rax = (uint64_t)r; return; }
         file = read_initrd(abs_path);
     }
+
+    if (!can_access_initrd(&file, want_read, want_write, 0)) { frame->rax = (uint64_t)-EACCES; return; }
 
     // O_TRUNC: truncate existing regular file to zero length
     if ((flags & O_TRUNC) && file.data && S_ISREG(file.mode)) {
         int r = write_initrd(abs_path, NULL, 0, file.mode, file.uid, file.gid);
         if (r < 0) { frame->rax = (uint64_t)r; return; }
     }
-
-    int want_write = (flags & O_WRONLY) || (flags & O_RDWR);
-    int want_read = !want_write || (flags & O_RDWR);
-    if (!can_access_initrd(&file, want_read, want_write, 0)) { frame->rax = (uint64_t)-EACCES; return; }
 
     int fd = alloc_fd(&current_task_ptr->fd_table, abs_path, FD_FILE, flags);
     frame->rax = (uint64_t)fd;
@@ -2297,10 +2376,10 @@ void sys_stat(syscall_frame_t *frame) {
     struct stat *st = (struct stat *)frame->rsi;
 
     if (!user_path || !st) { frame->rax = (uint64_t)-EINVAL; return; }
-    if (!user_range_ok(current_task_ptr->ctx, (uint64_t)st, sizeof(struct stat))) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)st, sizeof(struct stat))) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char path[256];
-    int cr = copy_from_user(path, user_path, sizeof(path));
+    int cr = copy_string_from_user(path, user_path, sizeof(path));
     if (cr < 0) { frame->rax = (uint64_t)cr; return; }
 
     char abs_path[256];
@@ -2345,7 +2424,7 @@ void sys_fstat(syscall_frame_t *frame) {
     struct stat *st = (struct stat *)frame->rsi;
 
     if (!st) { frame->rax = (uint64_t)-EINVAL; return; }
-    if (!user_range_ok(current_task_ptr->ctx, (uint64_t)st, sizeof(struct stat))) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)st, sizeof(struct stat))) { frame->rax = (uint64_t)-EFAULT; return; }
 
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
@@ -2410,10 +2489,10 @@ void sys_lstat(syscall_frame_t *frame) {
     struct stat *st = (struct stat *)frame->rsi;
 
     if (!user_path || !st) { frame->rax = (uint64_t)-EINVAL; return; }
-    if (!user_range_ok(current_task_ptr->ctx, (uint64_t)st, sizeof(struct stat))) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)st, sizeof(struct stat))) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char path[256];
-    int cr = copy_from_user(path, user_path, sizeof(path));
+    int cr = copy_string_from_user(path, user_path, sizeof(path));
     if (cr < 0) { frame->rax = (uint64_t)cr; return; }
 
     char abs_path[256];
@@ -2466,7 +2545,7 @@ void sys_poll(syscall_frame_t *frame) {
     uint64_t nfds = (uint64_t)frame->rsi;
     int timeout = (int)frame->rdx;
     if (nfds > 1024) { frame->rax = (uint64_t)-EINVAL; return; }
-    if (nfds > 0 && !user_range_ok(current_task_ptr->ctx, (uint64_t)user_fds, nfds * sizeof(struct pollfd))) {
+    if (nfds > 0 && !user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_fds, nfds * sizeof(struct pollfd))) {
         frame->rax = (uint64_t)-EFAULT; return;
     }
     struct pollfd *k_fds = NULL;
@@ -2550,14 +2629,27 @@ void sys_lseek(syscall_frame_t *frame) {
 
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry || !entry->open) { frame->rax = -EBADF; return; }
-    if (entry->type == FD_STREAM || entry->type == FD_PIPE || entry->type == FD_SOCKET || entry->type == FD_DEV) { 
+    if (entry->type == FD_STREAM || entry->type == FD_PIPE || entry->type == FD_SOCKET || entry->type == FD_PTY_MASTER) {
         frame->rax = -ESPIPE; 
         return; 
     }
 
     // Compute the file size for SEEK_END.  Proc files have no initrd backing.
     int64_t file_size = -1;
-    if (entry->type == FD_PROC) {
+    bool block_device = false;
+    if (entry->type == FD_DEV) {
+        char rel[256];
+        uint64_t size;
+        if (is_mounted_under(entry->path, "devpts", rel) || !is_mounted_under(entry->path, "devtmpfs", rel)) {
+            frame->rax = -ESPIPE;
+            return;
+        }
+        int status = get_block_device_size(rel, &size);
+        if (status < 0) { frame->rax = status == -ENOENT ? -ESPIPE : status; return; }
+        if (size > INT64_MAX) { frame->rax = -EOVERFLOW; return; }
+        file_size = (int64_t)size;
+        block_device = true;
+    } else if (entry->type == FD_PROC) {
         int self = proc_self_idx();
         proc_node_t n;
         if (resolve_procfs(entry->path, self, &n) && !is_procfs_dir(&n) &&
@@ -2577,25 +2669,28 @@ void sys_lseek(syscall_frame_t *frame) {
         file_size = (int64_t)file.size;
     }
 
+    uint64_t new_offset;
     switch (whence) {
         case SEEK_SET:
             // Reject negative absolute positions
             if (offset < 0) { frame->rax = -EINVAL; return; }
-            entry->offset = (uint64_t)offset;
+            new_offset = (uint64_t)offset;
             break;
         case SEEK_CUR: {
             // Guard against signed overflow and underflow
+            if (entry->offset > INT64_MAX) { frame->rax = -EOVERFLOW; return; }
             int64_t cur = (int64_t)entry->offset;
-            if (offset > 0 && cur > (int64_t)0x7FFFFFFFFFFFFFFFLL - offset) { frame->rax = -EOVERFLOW; return; }
+            if (offset > 0 && cur > INT64_MAX - offset) { frame->rax = -EOVERFLOW; return; }
             int64_t new_off = cur + offset;
             if (new_off < 0) { frame->rax = -EINVAL; return; }
-            entry->offset = (uint64_t)new_off;
+            new_offset = (uint64_t)new_off;
             break;
         }
         case SEEK_END: {
+            if (offset > 0 && file_size > INT64_MAX - offset) { frame->rax = -EOVERFLOW; return; }
             int64_t new_off = file_size + offset;
             if (new_off < 0) { frame->rax = -EINVAL; return; }
-            entry->offset = (uint64_t)new_off;
+            new_offset = (uint64_t)new_off;
             break;
         }
         default:
@@ -2603,7 +2698,9 @@ void sys_lseek(syscall_frame_t *frame) {
             return;
     }
 
-    frame->rax = (uint64_t)entry->offset;
+    if (block_device && new_offset > (uint64_t)file_size) { frame->rax = -EINVAL; return; }
+    entry->offset = new_offset;
+    frame->rax = new_offset;
 }
 
 void sys_mmap(syscall_frame_t *frame) {
@@ -2621,7 +2718,7 @@ void sys_mmap(syscall_frame_t *frame) {
     if (length > USER_ADDR_MAX) { frame->rax = (uint64_t)-EINVAL; return; }
 
     // Validate addr if MAP_FIXED or hint provided
-    if (addr != 0 && !user_range_ok(current_task_ptr->ctx, (uint64_t)addr, length)) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (addr != 0 && !user_address_range_ok(addr, length)) { frame->rax = (uint64_t)-EINVAL; return; }
     if ((flags & MAP_FIXED) && (addr & (PAGE_SIZE - 1))) { frame->rax = (uint64_t)-EINVAL; return; }
 
     // Reject W+X mappings (W^X policy)
@@ -2632,6 +2729,24 @@ void sys_mmap(syscall_frame_t *frame) {
     uint64_t num_pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
     // Overflow check: ensure num_pages * PAGE_SIZE doesn't wrap
     if (num_pages > (USER_ADDR_MAX / PAGE_SIZE)) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    bool requested_fb = false;
+    struct limine_framebuffer *mapped_fb = NULL;
+    if (!(flags & MAP_ANONYMOUS) && fd >= 0) {
+        fd_entry_t *entry = get_current_fd(fd);
+        char rel[256];
+        if (entry && entry->type == FD_DEV && is_mounted_under(entry->path, "devtmpfs", rel) && rel[0] == 'f' && rel[1] == 'b' && rel[2] >= '0' && rel[2] <= '9' && rel[3] == '\0') {
+            requested_fb = true;
+            if (current_task_ptr->euid != 0) { frame->rax = (uint64_t)-EACCES; return; }
+            int idx = rel[2] - '0';
+            if (!fb_req.response || idx >= (int)fb_req.response->framebuffer_count) { frame->rax = (uint64_t)-ENODEV; return; }
+            mapped_fb = fb_req.response->framebuffers[idx];
+            if (!mapped_fb || (mapped_fb->height && mapped_fb->pitch > UINT64_MAX / mapped_fb->height)) { frame->rax = (uint64_t)-EINVAL; return; }
+            uint64_t fb_size = mapped_fb->height * mapped_fb->pitch;
+            uint64_t available_pages = offset < fb_size ? (fb_size - offset + PAGE_SIZE - 1) / PAGE_SIZE : 0;
+            if (num_pages > available_pages) { frame->rax = (uint64_t)-EINVAL; return; }
+        }
+    }
 
     uint64_t vmm_flags = VMM_USER;
     if (prot & PROT_WRITE) vmm_flags |= VMM_WRITABLE;
@@ -2671,30 +2786,26 @@ void sys_mmap(syscall_frame_t *frame) {
     }
 
     bool fb_mapped = false;
-    fd_entry_t *fb_entry = NULL;
-    if (!(flags & MAP_ANONYMOUS) && fd >= 0) {
-        fb_entry = get_current_fd(fd);
-        if (fb_entry && fb_entry->type == FD_DEV) {
-            char rel[256];
-            if (is_mounted_under(fb_entry->path, "devtmpfs", rel)) {
-                if (strncmp(rel, "fb", 2) == 0) {
-                    int idx = rel[2] - '0';
-                    if (fb_req.response && idx >= 0 && idx < (int)fb_req.response->framebuffer_count) {
-                        struct limine_framebuffer *fb = fb_req.response->framebuffers[idx];
-                        uint64_t phys_base = virt_to_phys((void *)fb->address);
-                        uint64_t map_flags = VMM_USER | VMM_PWT | VMM_PCD | VMM_NX;
-                        if (prot & PROT_WRITE) map_flags |= VMM_WRITABLE;
+    if (requested_fb && mapped_fb) {
+        uint64_t phys_base = virt_to_phys((void *)mapped_fb->address);
+        if (phys_base & (PAGE_SIZE - 1)) {
+            for (uint64_t i = 0; i < num_pages; i++) unmap_vmm(current_task_ptr->ctx, (uint64_t)ptr + i * PAGE_SIZE);
+            frame->rax = (uint64_t)-EINVAL;
+            return;
+        }
+        uint64_t map_flags = VMM_USER | VMM_PWT | VMM_PCD | VMM_NX | VMM_EXTERNAL;
+        if (prot & PROT_WRITE) map_flags |= VMM_WRITABLE;
 
-                        for (uint64_t i = 0; i < num_pages; i++) {
-                            uint64_t vaddr = (uint64_t)ptr + i * PAGE_SIZE;
-                            if (get_vmm_phys(current_task_ptr->ctx, vaddr) != 0) unmap_vmm(current_task_ptr->ctx, vaddr);
-                            map_vmm(current_task_ptr->ctx, vaddr, phys_base + i * PAGE_SIZE, map_flags | VMM_PRESENT);
-                        }
-                        fb_mapped = true;
-                    }
-                }
+        for (uint64_t i = 0; i < num_pages; i++) {
+            uint64_t vaddr = (uint64_t)ptr + i * PAGE_SIZE;
+            if (get_vmm_phys(current_task_ptr->ctx, vaddr) != 0) unmap_vmm(current_task_ptr->ctx, vaddr);
+            if (!map_vmm(current_task_ptr->ctx, vaddr, phys_base + offset + i * PAGE_SIZE, map_flags)) {
+                for (uint64_t j = 0; j < i; j++) unmap_vmm(current_task_ptr->ctx, (uint64_t)ptr + j * PAGE_SIZE);
+                frame->rax = (uint64_t)-ENOMEM;
+                return;
             }
         }
+        fb_mapped = true;
     }
 
     // Record the VMA so /proc/<pid>/maps can describe this mapping.
@@ -2816,7 +2927,7 @@ void sys_brk(syscall_frame_t *frame) {
     }
 
     // Validate: new brk must be in user-space and above brk_start
-    if (!user_range_ok(current_task_ptr->ctx, (uint64_t)addr, 1)) { frame->rax = current_task_ptr->brk; return; }
+    if (!user_address_range_ok(addr, 1)) { frame->rax = current_task_ptr->brk; return; }
     if (addr < current_task_ptr->brk_start) {
         // Cannot shrink below initial heap start
         frame->rax = current_task_ptr->brk;
@@ -2867,11 +2978,11 @@ void sys_rt_sigaction(syscall_frame_t *frame) {
     }
 
     if (oldact_ptr) {
-        write_vmm(current_task_ptr->ctx, oldact_ptr, &current_task_ptr->sigactions[signum * 4], 32);
+        if (copy_to_user((void *)oldact_ptr, &current_task_ptr->sigactions[signum * 4], 32) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
     }
     if (act_ptr) {
         uint64_t new_sa[4];
-        read_vmm(current_task_ptr->ctx, new_sa, act_ptr, 32);
+        if (copy_from_user(new_sa, (const void *)act_ptr, 32) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
         for (int k = 0; k < 4; k++) current_task_ptr->sigactions[signum * 4 + k] = new_sa[k];
     }
     frame->rax = 0;
@@ -2889,8 +3000,7 @@ void sys_rt_sigprocmask(syscall_frame_t *frame) {
     }
 
     if (oldset) {
-        if (!user_range_ok(current_task_ptr->ctx, (uint64_t)oldset, 8)) { frame->rax = (uint64_t)-EFAULT; return; }
-        write_vmm(current_task_ptr->ctx, (uint64_t)oldset, &current_task_ptr->blocked_signals, 8);
+        if (copy_to_user(oldset, &current_task_ptr->blocked_signals, 8) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
     }
 
     if (set) {
@@ -2917,7 +3027,16 @@ void sys_rt_sigprocmask(syscall_frame_t *frame) {
 void sys_rt_sigreturn(syscall_frame_t *frame) {
     uint64_t user_rsp = frame->rsp;
     syscall_frame_t saved_frame;
-    read_vmm(current_task_ptr->ctx, &saved_frame, user_rsp + 16, sizeof(syscall_frame_t));
+    if (user_rsp > USER_ADDR_MAX - 16 || copy_from_user(&saved_frame, (const void *)(user_rsp + 16), sizeof(saved_frame)) < 0) {
+        frame->rax = (uint64_t)-EFAULT;
+        return;
+    }
+    if (saved_frame.rcx >= USER_ADDR_MAX || saved_frame.rsp >= USER_ADDR_MAX) {
+        frame->rax = (uint64_t)-EFAULT;
+        return;
+    }
+    saved_frame.r11 &= ~((3ULL << 12) | (1ULL << 14) | (1ULL << 16) | (1ULL << 17));
+    saved_frame.r11 |= 1ULL << 1;
     *frame = saved_frame;
 }
 
@@ -2941,8 +3060,10 @@ void sys_ioctl(syscall_frame_t *frame) {
                         memset(&vinfo, 0, sizeof(vinfo));
                         vinfo.xres = fb->width;
                         vinfo.yres = fb->height;
-                        vinfo.xres_virtual = fb->width;
-                        vinfo.yres_virtual = fb->height;
+                        vinfo.xres_virtual = idx == 0 && fb_xres_virtual ? fb_xres_virtual : fb->width;
+                        vinfo.yres_virtual = idx == 0 && fb_yres_virtual ? fb_yres_virtual : fb->height;
+                        vinfo.xoffset = idx == 0 ? fb_xoffset : 0;
+                        vinfo.yoffset = idx == 0 ? fb_yoffset : 0;
                         vinfo.bits_per_pixel = fb->bpp;
                         // Set RGB bitfield layout.  Prefer limine's mask sizes
                         // but fall back to safe defaults when they are zero
@@ -2971,7 +3092,7 @@ void sys_ioctl(syscall_frame_t *frame) {
                             vinfo.blue.offset  = 0;  vinfo.blue.length  = 5;
                         }
                         vinfo.activate = 0; // FB_ACTIVATE_NOW
-                        write_vmm(current_task_ptr->ctx, argp, &vinfo, sizeof(vinfo));
+                        if (copy_to_user((void *)argp, &vinfo, sizeof(vinfo)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
                         frame->rax = 0;
                         return;
                     } else if (req == FBIOGET_FSCREENINFO) {
@@ -2979,17 +3100,35 @@ void sys_ioctl(syscall_frame_t *frame) {
                         memset(&finfo, 0, sizeof(finfo));
                         strncpy(finfo.id, "limine-fb", 15);
                         finfo.smem_start = virt_to_phys((void *)fb->address);
-                        finfo.smem_len = fb->height * fb->pitch;
+                        finfo.smem_len = (idx == 0 && fb_yres_virtual ? fb_yres_virtual : fb->height) * fb->pitch;
                         finfo.type = FB_TYPE_PACKED_PIXELS;
                         finfo.visual = FB_VISUAL_TRUECOLOR;
                         finfo.line_length = fb->pitch;
-                        write_vmm(current_task_ptr->ctx, argp, &finfo, sizeof(finfo));
+                        if (copy_to_user((void *)argp, &finfo, sizeof(finfo)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
                         frame->rax = 0;
                         return;
                     } else if (req == FBIOPUT_VSCREENINFO) {
-                        // The fbdev driver calls this to "set" the mode.  Since
-                        // the limine framebuffer is fixed, accept any mode
-                        // change as a no-op success.
+                        if (idx != 0) { frame->rax = (uint64_t)-ENOTSUP; return; }
+                        struct fb_var_screeninfo vinfo;
+                        if (copy_from_user(&vinfo, (const void *)argp, sizeof(vinfo)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                        uint64_t xres_virtual = vinfo.xres_virtual ? vinfo.xres_virtual : vinfo.xres;
+                        uint64_t yres_virtual = vinfo.yres_virtual ? vinfo.yres_virtual : vinfo.yres;
+                        int status = set_fb_resolution(vinfo.xres, vinfo.yres, xres_virtual, yres_virtual, vinfo.xoffset, vinfo.yoffset, (uint16_t)vinfo.bits_per_pixel);
+                        if (status < 0) { frame->rax = (uint64_t)status; return; }
+                        vinfo.xres = fb->width;
+                        vinfo.yres = fb->height;
+                        vinfo.xres_virtual = fb_xres_virtual;
+                        vinfo.yres_virtual = fb_yres_virtual;
+                        vinfo.xoffset = fb_xoffset;
+                        vinfo.yoffset = fb_yoffset;
+                        vinfo.bits_per_pixel = fb->bpp;
+                        vinfo.red.offset = fb->red_mask_shift;
+                        vinfo.red.length = fb->red_mask_size;
+                        vinfo.green.offset = fb->green_mask_shift;
+                        vinfo.green.length = fb->green_mask_size;
+                        vinfo.blue.offset = fb->blue_mask_shift;
+                        vinfo.blue.length = fb->blue_mask_size;
+                        if (copy_to_user((void *)argp, &vinfo, sizeof(vinfo)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
                         frame->rax = 0;
                         return;
                     } else if (req == FBIOPAN_DISPLAY) {
@@ -3037,7 +3176,7 @@ void sys_ioctl(syscall_frame_t *frame) {
                 t = tty_tcgets->termios;
             }
         
-            write_vmm(current_task_ptr->ctx, argp, &t, sizeof(t));
+            if (copy_to_user((void *)argp, &t, sizeof(t)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
             frame->rax = 0;
             return;
         }
@@ -3051,7 +3190,7 @@ void sys_ioctl(syscall_frame_t *frame) {
                 pty_t *pty_tcsets = get_pty(idx - 100);
                 if (!pty_tcsets || !pty_tcsets->allocated) { frame->rax = (uint64_t)-ENOTTY; return; }
                 bool pty_was_icanon = !!(pty_tcsets->termios.c_lflag & ICANON);
-                read_vmm(current_task_ptr->ctx, &pty_tcsets->termios, argp, sizeof(struct termios));
+                if (copy_from_user(&pty_tcsets->termios, (const void *)argp, sizeof(struct termios)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
                 bool pty_now_icanon = !!(pty_tcsets->termios.c_lflag & ICANON);
                 if ((req == TCSETSF) || (pty_was_icanon && !pty_now_icanon)) {
                     pty_tcsets->m2s.head = pty_tcsets->m2s.tail = 0;
@@ -3061,7 +3200,7 @@ void sys_ioctl(syscall_frame_t *frame) {
                 if (!tty_tcsets) { frame->rax = (uint64_t)-ENOTTY; return; }
                 // Same reasoning as the PTY branch above.
                 bool tty_was_icanon = !!(tty_tcsets->termios.c_lflag & ICANON);
-                read_vmm(current_task_ptr->ctx, &tty_tcsets->termios, argp, sizeof(struct termios));
+                if (copy_from_user(&tty_tcsets->termios, (const void *)argp, sizeof(struct termios)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
                 bool tty_now_icanon = !!(tty_tcsets->termios.c_lflag & ICANON);
                 if ((req == TCSETSF) || (tty_was_icanon && !tty_now_icanon)) {
                     uint64_t irq;
@@ -3091,7 +3230,7 @@ void sys_ioctl(syscall_frame_t *frame) {
                     ws.ws_row = (uint16_t)(fb->height / current_font_h);
                 }
             }
-            write_vmm(current_task_ptr->ctx, argp, &ws, sizeof(ws));
+            if (copy_to_user((void *)argp, &ws, sizeof(ws)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
             frame->rax = 0;
             return;
         }
@@ -3147,7 +3286,7 @@ void sys_ioctl(syscall_frame_t *frame) {
             }
             if(argp){
                 pid_t pgrp_val = pgrp;
-                write_vmm(current_task_ptr->ctx, argp, &pgrp_val, sizeof(pid_t));
+                if (copy_to_user((void *)argp, &pgrp_val, sizeof(pid_t)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
             }
             frame->rax = 0;
             return;
@@ -3156,7 +3295,7 @@ void sys_ioctl(syscall_frame_t *frame) {
         case TIOCSPGRP: {
             // Set the foreground process group of the controlling tty.
             pid_t new_pgrp = 0;
-            read_vmm(current_task_ptr->ctx, &new_pgrp, argp, sizeof(pid_t));
+            if (copy_from_user(&new_pgrp, (const void *)argp, sizeof(pid_t)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
 
             int idx = ioctl_tty_idx(entry);
             if (idx < 0) { frame->rax = (uint64_t)-ENOTTY; return; }
@@ -3180,7 +3319,7 @@ void sys_ioctl(syscall_frame_t *frame) {
             spin_lock_irqsave(&stdin_lock, &irq);
             int avail = (fd == 0) ? (current_task_ptr->stdin_buf_len - current_task_ptr->stdin_buf_pos) : 0;
             spin_unlock_irqrestore(&stdin_lock, irq);
-            write_vmm(current_task_ptr->ctx, argp, &avail, sizeof(int));
+            if (copy_to_user((void *)argp, &avail, sizeof(int)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
             frame->rax = 0;
             return;
         }
@@ -3271,7 +3410,7 @@ void sys_ioctl(syscall_frame_t *frame) {
             t2.c_ispeed = t.c_ispeed;
             t2.c_ospeed = t.c_ospeed;
 
-            write_vmm(current_task_ptr->ctx, argp, &t2, sizeof(t2));
+            if (copy_to_user((void *)argp, &t2, sizeof(t2)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
             frame->rax = 0;
             return;
         }
@@ -3282,7 +3421,7 @@ void sys_ioctl(syscall_frame_t *frame) {
             struct termios2 t2;
             int idx = ioctl_tty_idx(entry);
             if (idx < 0) { frame->rax = (uint64_t)-ENOTTY; return; }
-            read_vmm(current_task_ptr->ctx, &t2, argp, sizeof(t2));
+            if (copy_from_user(&t2, (const void *)argp, sizeof(t2)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
             if (idx >= 100) {
                 pty_t *pty_tcsets = get_pty(idx - 100);
                 if (!pty_tcsets || !pty_tcsets->allocated) { frame->rax = (uint64_t)-ENOTTY; return; }
@@ -3316,7 +3455,7 @@ void sys_ioctl(syscall_frame_t *frame) {
             pty_t *p = get_pty(idx);
             if (!p) { frame->rax = (uint64_t)-EBADF; return; }
             int val = 0;
-            read_vmm(current_task_ptr->ctx, &val, argp, sizeof(int));
+            if (copy_from_user(&val, (const void *)argp, sizeof(int)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
             p->locked = (val != 0);
             frame->rax = 0;
             return;
@@ -3326,7 +3465,7 @@ void sys_ioctl(syscall_frame_t *frame) {
             if (!entry || entry->type != FD_PTY_MASTER) { frame->rax = (uint64_t)-ENOTTY; return; }
             int idx = ptm_path_idx(entry->path);
             unsigned int uidx = (unsigned int)idx;
-            write_vmm(current_task_ptr->ctx, argp, &uidx, sizeof(unsigned int));
+            if (copy_to_user((void *)argp, &uidx, sizeof(unsigned int)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
             frame->rax = 0;
             return;
         }
@@ -3344,7 +3483,7 @@ void sys_pread64(syscall_frame_t *frame) {
     uint64_t count = frame->rdx;
     uint64_t offset = frame->r10;
 
-    if (count > 0 && !user_range_ok(current_task_ptr->ctx, (uint64_t)buf, count)) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (count > 0 && !user_write_range_ok(current_task_ptr->ctx, (uint64_t)buf, count)) { frame->rax = (uint64_t)-EFAULT; return; }
 
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
@@ -3449,7 +3588,7 @@ void sys_access(syscall_frame_t *frame) {
     if (mode & ~(R_OK | W_OK | X_OK)) { frame->rax = (uint64_t)-EINVAL; return; }
 
     char path[256];
-    int cr = copy_from_user(path, user_path, sizeof(path));
+    int cr = copy_string_from_user(path, user_path, sizeof(path));
     if (cr < 0) { frame->rax = (uint64_t)cr; return; }
 
     char abs_path[256];
@@ -3486,7 +3625,7 @@ void sys_pipe(syscall_frame_t *frame) {
     int r;
 
     if (!pipefd) { frame->rax = (uint64_t)-EINVAL; return; }
-    if (!user_range_ok(current_task_ptr->ctx, (uint64_t)pipefd, sizeof(int) * 2)) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)pipefd, sizeof(int) * 2)) { frame->rax = (uint64_t)-EFAULT; return; }
     r = create_unix_pipe(&read_end, &write_end);
     if (r < 0) { frame->rax = (uint64_t)r; return; }
 
@@ -3824,7 +3963,7 @@ void sys_recvfrom(syscall_frame_t *frame) {
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
     if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
     if (len > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
-    if (len > 0 && !user_range_ok(current_task_ptr->ctx, (uint64_t)buf, len)) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (len > 0 && !user_write_range_ok(current_task_ptr->ctx, (uint64_t)buf, len)) { frame->rax = (uint64_t)-EFAULT; return; }
     // Read into kernel buffer first, then copy to user
     uint8_t *kbuf = malloc(len);
     if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
@@ -3881,7 +4020,7 @@ void sys_socketpair(syscall_frame_t *frame) {
     int r;
 
     if (!sv) { frame->rax = (uint64_t)-EINVAL; return; }
-    if (!user_range_ok(current_task_ptr->ctx, (uint64_t)sv, sizeof(int) * 2)) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)sv, sizeof(int) * 2)) { frame->rax = (uint64_t)-EFAULT; return; }
     r = create_unix_socketpair(domain, type, protocol, &a, &b);
     if (r < 0) { frame->rax = (uint64_t)r; return; }
 
@@ -3914,10 +4053,10 @@ void sys_clone(syscall_frame_t *frame) {
     if (!current_task_ptr || !current_task_ptr->ctx) { frame->rax = (uint64_t)-EFAULT; return; }
 
     // Validate optional tid pointers if provided.
-    if (parent_tidptr && !user_range_ok(current_task_ptr->ctx, (uint64_t)parent_tidptr, sizeof(int))) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (parent_tidptr && !user_write_range_ok(current_task_ptr->ctx, (uint64_t)parent_tidptr, sizeof(int))) { frame->rax = (uint64_t)-EFAULT; return; }
     if (child_tidptr  && !user_range_ok(current_task_ptr->ctx, (uint64_t)child_tidptr,  sizeof(int))) { frame->rax = (uint64_t)-EFAULT; return; }
     // CLONE_SETTLS: tls must be a valid user address.
-    if ((clone_flags & CLONE_SETTLS) && tls != 0 && !user_range_ok(current_task_ptr->ctx, (uint64_t)tls, 1)) { frame->rax = (uint64_t)-EPERM; return; }
+    if ((clone_flags & CLONE_SETTLS) && tls != 0 && !user_address_range_ok(tls, 1)) { frame->rax = (uint64_t)-EPERM; return; }
 
     // CLONE_SIGHAND without CLONE_VM is not allowed (Linux returns EINVAL).
     if ((clone_flags & CLONE_SIGHAND) && !(clone_flags & CLONE_VM)) { frame->rax = (uint64_t)-EINVAL; return; }
@@ -4002,7 +4141,7 @@ void sys_execve(syscall_frame_t *frame) {
     if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
     char path_buf[256];
 
-    if (copy_from_user(path_buf, user_path, sizeof(path_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (copy_string_from_user(path_buf, user_path, sizeof(path_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
 
     // Check for shebang
     initrd_file_t probe = read_initrd(path_buf);
@@ -4285,6 +4424,44 @@ void sys_uname(syscall_frame_t *frame) {
     frame->rax = 0;
 }
 
+static flock_obj_t *find_advisory_lock_conflict(const fd_entry_t *entry, int requested_type, bool process_lock) {
+    for (int i = 0; i < 128; i++) {
+        flock_obj_t *obj = &global_flocks[i];
+        if (!obj->used || obj->lock_type == 0 || strcmp(obj->path, entry->path) != 0) continue;
+        if (process_lock && obj->owner_pid == current_task_ptr->pid) continue;
+        if (!process_lock && obj == (flock_obj_t *)entry->handle) continue;
+        if (requested_type == LOCK_EX || obj->lock_type == LOCK_EX) return obj;
+    }
+    return NULL;
+}
+
+static int set_advisory_lock(fd_entry_t *entry, int lock_type, bool nonblocking, bool process_lock) {
+    if (lock_type == 0) {
+        if (entry->handle) {
+            flock_obj_t *obj = (flock_obj_t *)entry->handle;
+            if (!process_lock || obj->owner_pid == current_task_ptr->pid) {
+                obj->lock_type = 0;
+                obj->owner_pid = 0;
+            }
+        }
+        return 0;
+    }
+
+    while (find_advisory_lock_conflict(entry, lock_type, process_lock)) {
+        if (nonblocking) return -EAGAIN;
+        sleep(10);
+    }
+
+    if (!entry->handle) {
+        entry->handle = alloc_flock_obj(entry->path);
+        if (!entry->handle) return -ENOLCK;
+    }
+    flock_obj_t *obj = (flock_obj_t *)entry->handle;
+    obj->lock_type = lock_type;
+    obj->owner_pid = process_lock ? current_task_ptr->pid : 0;
+    return 0;
+}
+
 void sys_fcntl(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     int cmd = (int)frame->rsi;
@@ -4324,6 +4501,34 @@ void sys_fcntl(syscall_frame_t *frame) {
             entry->flags = (entry->flags & ~F_SETFL_MASK) | ((uint32_t)arg & F_SETFL_MASK);
             frame->rax = 0;
             return;
+        case F_GETLK:
+        case F_SETLK:
+        case F_SETLKW: {
+            if (entry->type != FD_FILE && entry->type != FD_TMPFS) { frame->rax = (uint64_t)-EBADF; return; }
+            struct flock lock;
+            if (copy_from_user(&lock, (const void *)arg, sizeof(lock)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+            if (lock.l_type != F_RDLCK && lock.l_type != F_WRLCK && lock.l_type != F_UNLCK) { frame->rax = (uint64_t)-EINVAL; return; }
+            if (lock.l_whence != SEEK_SET && lock.l_whence != SEEK_CUR && lock.l_whence != SEEK_END) { frame->rax = (uint64_t)-EINVAL; return; }
+
+            int requested_type = lock.l_type == F_RDLCK ? LOCK_SH : (lock.l_type == F_WRLCK ? LOCK_EX : 0);
+            if (cmd == F_GETLK) {
+                flock_obj_t *conflict = requested_type ? find_advisory_lock_conflict(entry, requested_type, true) : NULL;
+                if (conflict) {
+                    lock.l_type = conflict->lock_type == LOCK_EX ? F_WRLCK : F_RDLCK;
+                    lock.l_pid = conflict->owner_pid;
+                } else {
+                    lock.l_type = F_UNLCK;
+                    lock.l_pid = 0;
+                }
+                if (copy_to_user((void *)arg, &lock, sizeof(lock)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0;
+                return;
+            }
+
+            int status = set_advisory_lock(entry, requested_type, cmd == F_SETLK, true);
+            frame->rax = (uint64_t)status;
+            return;
+        }
         default:
             frame->rax = (uint64_t)-EINVAL;
             return;
@@ -4337,48 +4542,12 @@ void sys_flock(syscall_frame_t *frame) {
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
 
-    if (entry->type != FD_FILE) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type != FD_FILE && entry->type != FD_TMPFS) { frame->rax = (uint64_t)-EBADF; return; }
 
     int op = operation & ~LOCK_NB;
     if (op != LOCK_SH && op != LOCK_EX && op != LOCK_UN) { frame->rax = (uint64_t)-EINVAL; return; }
-retry:;
-    if (op == LOCK_UN) {
-        if (entry->handle) {
-            flock_obj_t *obj = (flock_obj_t *)entry->handle;
-            obj->lock_type = 0;
-        }
-        frame->rax = 0;
-        return;
-    }
-
-    bool conflict = false;
-    for (int i = 0; i < 128; i++) {
-        if (global_flocks[i].used && global_flocks[i].lock_type != 0 &&
-            strncmp(global_flocks[i].path, entry->path, 255) == 0) {
-
-            if (&global_flocks[i] == (flock_obj_t *)entry->handle) continue;
-
-            if (op == LOCK_EX || global_flocks[i].lock_type == LOCK_EX) {
-                conflict = true;
-                break;
-            }
-        }
-    }
-
-    if (conflict) {
-        if (operation & LOCK_NB) { frame->rax = (uint64_t)-EAGAIN; return; }
-        sleep(10);
-        goto retry;
-    }
-
-    if (entry->handle == NULL) {
-        entry->handle = alloc_flock_obj(entry->path);
-        if (!entry->handle) { frame->rax = (uint64_t)-ENOLCK; return; }
-    }
-
-    ((flock_obj_t *)entry->handle)->lock_type = op;
-
-    frame->rax = 0;
+    int status = set_advisory_lock(entry, op == LOCK_UN ? 0 : op, (operation & LOCK_NB) != 0, false);
+    frame->rax = (uint64_t)status;
 }
 
 // tmpfs and the initrd overlay are memory-resident and CPU-cache coherent.
@@ -4440,7 +4609,7 @@ void sys_truncate(syscall_frame_t *frame) {
 
     if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
     char path[256];
-    int cr = copy_from_user(path, user_path, sizeof(path));
+    int cr = copy_string_from_user(path, user_path, sizeof(path));
     if (cr < 0) { frame->rax = (uint64_t)cr; return; }
 
     char abs_path[256];
@@ -4485,7 +4654,7 @@ void sys_getdents(syscall_frame_t *frame) {
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
     if (buflen == 0) { frame->rax = (uint64_t)-EINVAL; return; }
-    if (!user_range_ok(current_task_ptr->ctx, (uint64_t)bufp, buflen)) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)bufp, buflen)) { frame->rax = (uint64_t)-EFAULT; return; }
 
     uint64_t written = 0;
     int index = (int)entry->offset;
@@ -4661,7 +4830,7 @@ void sys_getcwd(syscall_frame_t *frame) {
     uint64_t buflen = frame->rsi;
     
     if (!bufp || buflen == 0) { frame->rax = (uint64_t)-EINVAL; return; }
-    if (!user_range_ok(current_task_ptr->ctx, (uint64_t)bufp, buflen)) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)bufp, buflen)) { frame->rax = (uint64_t)-EFAULT; return; }
 
     size_t cwd_len = strlen(current_task_ptr->cwd) + 1;
     if (cwd_len > buflen) { frame->rax = (uint64_t)-ERANGE; return; }
@@ -4679,7 +4848,7 @@ void sys_chdir(syscall_frame_t *frame) {
     if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
 
     char path_buf[256];
-    if (copy_from_user(path_buf, user_path, sizeof(path_buf)) < 0) {
+    if (copy_string_from_user(path_buf, user_path, sizeof(path_buf)) < 0) {
         frame->rax = (uint64_t)-EFAULT; return;
     }
 
@@ -4727,17 +4896,38 @@ void sys_chdir(syscall_frame_t *frame) {
     frame->rax = 0;
 }
 
+static int reject_procfs_mutation(const char *path) {
+    if (is_procfs_path(path)) return -EROFS;
+    return 0;
+}
+
+static int reject_virtual_removal(const char *path) {
+    int status = reject_procfs_mutation(path);
+    if (status < 0) return status;
+    if (is_mounted_under(path, "devtmpfs", NULL) || is_mounted_under(path, "devpts", NULL)) return -EPERM;
+    return 0;
+}
+
 void sys_rename(syscall_frame_t *frame) {
     const char *oldpath = (const char *)frame->rdi;
     const char *newpath = (const char *)frame->rsi;
     
     char old[256], new[256];
-    if (copy_from_user(old, oldpath, sizeof(old)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
-    if (copy_from_user(new, newpath, sizeof(new)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (copy_string_from_user(old, oldpath, sizeof(old)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (copy_string_from_user(new, newpath, sizeof(new)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char abs_old[256], abs_new[256];
     build_abs_path(old, abs_old, sizeof(abs_old));
     build_abs_path(new, abs_new, sizeof(abs_new));
+
+    int access = reject_procfs_mutation(abs_old);
+    if (access < 0) { frame->rax = (uint64_t)access; return; }
+    access = reject_procfs_mutation(abs_new);
+    if (access < 0) { frame->rax = (uint64_t)access; return; }
+    access = check_parent_access(abs_old, true);
+    if (access < 0) { frame->rax = (uint64_t)access; return; }
+    access = check_parent_access(abs_new, true);
+    if (access < 0) { frame->rax = (uint64_t)access; return; }
 
     // tmpfs: rename within (or across) tmpfs mounts.
     if (is_tmpfs_dir(abs_old) || is_tmpfs_dir(abs_new)) {
@@ -4745,7 +4935,7 @@ void sys_rename(syscall_frame_t *frame) {
         return;
     }
 
-    initrd_file_t file = read_initrd(old);
+    initrd_file_t file = read_initrd(abs_old);
     if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
 
     void *data_copy = NULL;
@@ -4755,8 +4945,10 @@ void sys_rename(syscall_frame_t *frame) {
         memcpy(data_copy, file.data, file.size);
     }
 
-    write_initrd(new, data_copy, file.size, file.mode, file.uid, file.gid);
-    delete_initrd(old);
+    int ret = write_initrd(abs_new, data_copy, file.size, file.mode, file.uid, file.gid);
+    if (data_copy) free(data_copy);
+    if (ret < 0) { frame->rax = (uint64_t)ret; return; }
+    delete_initrd(abs_old);
     frame->rax = 0;
 }
 
@@ -4767,10 +4959,15 @@ void sys_mkdir(syscall_frame_t *frame) {
     if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
 
     char path_buf[256];
-    if (copy_from_user(path_buf, user_path, sizeof(path_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (copy_string_from_user(path_buf, user_path, sizeof(path_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char abs_path[256];
     build_abs_path(path_buf, abs_path, sizeof(abs_path));
+
+    int access = reject_procfs_mutation(abs_path);
+    if (access < 0) { frame->rax = (uint64_t)access; return; }
+    access = check_parent_access(abs_path, true);
+    if (access < 0) { frame->rax = (uint64_t)access; return; }
 
     if (is_tmpfs_dir(abs_path)) {
         frame->rax = (uint64_t)mkdir_tmpfs(abs_path, mode, current_task_ptr->euid, current_task_ptr->egid);
@@ -4781,7 +4978,7 @@ void sys_mkdir(syscall_frame_t *frame) {
     initrd_file_t existing = read_initrd(abs_path);
     if (existing.data || existing.mode) { frame->rax = (uint64_t)-EEXIST; return; }
 
-    frame->rax = (uint64_t)mkdir_initrd(path_buf, mode, current_task_ptr->euid, current_task_ptr->egid);
+    frame->rax = (uint64_t)mkdir_initrd(abs_path, mode, current_task_ptr->euid, current_task_ptr->egid);
 }
 
 void sys_rmdir(syscall_frame_t *frame) {
@@ -4789,21 +4986,17 @@ void sys_rmdir(syscall_frame_t *frame) {
     if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
 
     char path_buf[256];
-    if (copy_from_user(path_buf, user_path, sizeof(path_buf)) < 0) {
+    if (copy_string_from_user(path_buf, user_path, sizeof(path_buf)) < 0) {
         frame->rax = (uint64_t)-EFAULT; return;
     }
 
     char abs_path[256];
     build_abs_path(path_buf, abs_path, sizeof(abs_path));
 
-    // /dev, /proc, and their children are kernel-synthesized (devtmpfs/devpts/
-    // procfs). They cannot be removed — reject before the initrd stat lookup.
-    if (is_mounted_under(abs_path, "devtmpfs", NULL) ||
-        is_mounted_under(abs_path, "devpts", NULL) ||
-        is_procfs_path(abs_path)) {
-        frame->rax = (uint64_t)-EPERM;
-        return;
-    }
+    int access = reject_virtual_removal(abs_path);
+    if (access < 0) { frame->rax = (uint64_t)access; return; }
+    access = check_parent_access(abs_path, true);
+    if (access < 0) { frame->rax = (uint64_t)access; return; }
 
     if (is_tmpfs_dir(abs_path)) {
         frame->rax = (uint64_t)rmdir_tmpfs(abs_path);
@@ -4825,19 +5018,26 @@ void sys_link(syscall_frame_t *frame) {
     const char *newpath = (const char *)frame->rsi;
 
     char old[256], new[256];
-    if (copy_from_user(old, oldpath, sizeof(old)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
-    if (copy_from_user(new, newpath, sizeof(new)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (copy_string_from_user(old, oldpath, sizeof(old)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (copy_string_from_user(new, newpath, sizeof(new)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char abs_old[256], abs_new[256];
     build_abs_path(old, abs_old, sizeof(abs_old));
     build_abs_path(new, abs_new, sizeof(abs_new));
+
+    int access = reject_procfs_mutation(abs_old);
+    if (access < 0) { frame->rax = (uint64_t)access; return; }
+    access = reject_procfs_mutation(abs_new);
+    if (access < 0) { frame->rax = (uint64_t)access; return; }
+    access = check_parent_access(abs_new, true);
+    if (access < 0) { frame->rax = (uint64_t)access; return; }
 
     if (is_tmpfs_dir(abs_old) || is_tmpfs_dir(abs_new)) {
         frame->rax = (uint64_t)link_tmpfs(abs_old, abs_new);
         return;
     }
 
-    initrd_file_t file = read_initrd(old);
+    initrd_file_t file = read_initrd(abs_old);
     if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
 
     void *data_copy = NULL;
@@ -4847,8 +5047,9 @@ void sys_link(syscall_frame_t *frame) {
         memcpy(data_copy, file.data, file.size);
     }
 
-    write_initrd(new, data_copy, file.size, file.mode, file.uid, file.gid);
-    frame->rax = 0;
+    int ret = write_initrd(abs_new, data_copy, file.size, file.mode, file.uid, file.gid);
+    if (data_copy) free(data_copy);
+    frame->rax = (uint64_t)ret;
 }
 
 void sys_unlink(syscall_frame_t *frame) {
@@ -4856,20 +5057,15 @@ void sys_unlink(syscall_frame_t *frame) {
     if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
 
     char path_buf[256];
-    if (copy_from_user(path_buf, user_path, sizeof(path_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (copy_string_from_user(path_buf, user_path, sizeof(path_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char abs_path[256];
     get_absolute_path(path_buf, abs_path, sizeof(abs_path));
 
-    // /dev, /proc, and their children are synthesized by the kernel (devtmpfs,
-    // devpts, procfs). They cannot be unlinked — reject before the initrd
-    // stat lookup, which would return ENOENT for these virtual entries.
-    if (is_mounted_under(abs_path, "devtmpfs", NULL) ||
-        is_mounted_under(abs_path, "devpts", NULL) ||
-        is_procfs_path(abs_path)) {
-        frame->rax = (uint64_t)-EPERM;
-        return;
-    }
+    int access = reject_virtual_removal(abs_path);
+    if (access < 0) { frame->rax = (uint64_t)access; return; }
+    access = check_parent_access(abs_path, true);
+    if (access < 0) { frame->rax = (uint64_t)access; return; }
 
     // tmpfs entries live in RAM, not the initrd overlay.
     if (is_tmpfs_dir(abs_path)) {
@@ -4897,10 +5093,15 @@ void sys_symlink(syscall_frame_t *frame) {
     if (!target || !linkpath) { frame->rax = (uint64_t)-EINVAL; return; }
 
     char target_buf[256], linkpath_buf[256];
-    if (copy_from_user(target_buf, target, sizeof(target_buf)) < 0 || copy_from_user(linkpath_buf, linkpath, sizeof(linkpath_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (copy_string_from_user(target_buf, target, sizeof(target_buf)) < 0 || copy_string_from_user(linkpath_buf, linkpath, sizeof(linkpath_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char abs_linkpath_buf[256];
     get_absolute_path(linkpath_buf, abs_linkpath_buf, sizeof(abs_linkpath_buf));
+
+    int access = reject_procfs_mutation(abs_linkpath_buf);
+    if (access < 0) { frame->rax = (uint64_t)access; return; }
+    access = check_parent_access(abs_linkpath_buf, true);
+    if (access < 0) { frame->rax = (uint64_t)access; return; }
 
     if (is_tmpfs_dir(abs_linkpath_buf)) {
         frame->rax = (uint64_t)symlink_tmpfs(target_buf, abs_linkpath_buf, current_task_ptr->euid, current_task_ptr->egid);
@@ -4916,10 +5117,10 @@ void sys_readlink(syscall_frame_t *frame) {
     size_t bufsiz = (size_t)frame->rdx;
 
     if (!user_path || !buf || bufsiz == 0) { frame->rax = (uint64_t)-EINVAL; return; }
-    if (!user_range_ok(current_task_ptr->ctx, (uint64_t)buf, bufsiz)) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)buf, bufsiz)) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char path[256];
-    if (copy_from_user(path, user_path, sizeof(path)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (copy_string_from_user(path, user_path, sizeof(path)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char abs_path[256];
     build_abs_path(path, abs_path, sizeof(abs_path));
@@ -4984,7 +5185,7 @@ void sys_chmod(syscall_frame_t *frame) {
     if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
 
     char path_buf[256];
-    if (copy_from_user(path_buf, user_path, sizeof(path_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (copy_string_from_user(path_buf, user_path, sizeof(path_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char abs_path[256];
     get_absolute_path(path_buf, abs_path, sizeof(abs_path));
@@ -5030,6 +5231,51 @@ void sys_fchmod(syscall_frame_t *frame) {
     }
 
     frame->rax = (uint64_t)chmod_initrd(entry->path, mode & 0777);
+}
+
+static int change_path_ownership(const char *path, uid_t uid, gid_t gid, bool follow) {
+    if (current_task_ptr->euid != 0) return -EPERM;
+    if (is_mounted_under(path, "devtmpfs", NULL) || is_mounted_under(path, "devpts", NULL) || is_procfs_path(path)) return -EPERM;
+    if (is_tmpfs_dir(path)) return chown_tmpfs(path, uid, gid, follow);
+    return chown_initrd(path, uid, gid, follow);
+}
+
+void sys_chown(syscall_frame_t *frame) {
+    const char *user_path = (const char *)frame->rdi;
+    uid_t uid = (uid_t)frame->rsi;
+    gid_t gid = (gid_t)frame->rdx;
+    if (!user_path) { frame->rax = (uint64_t)-EFAULT; return; }
+
+    char path[256];
+    int status = copy_string_from_user(path, user_path, sizeof(path));
+    if (status < 0) { frame->rax = (uint64_t)status; return; }
+    char abs_path[256];
+    build_abs_path(path, abs_path, sizeof(abs_path));
+    frame->rax = (uint64_t)change_path_ownership(abs_path, uid, gid, true);
+}
+
+void sys_fchown(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    uid_t uid = (uid_t)frame->rsi;
+    gid_t gid = (gid_t)frame->rdx;
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type != FD_FILE && entry->type != FD_TMPFS) { frame->rax = (uint64_t)-EINVAL; return; }
+    frame->rax = (uint64_t)change_path_ownership(entry->path, uid, gid, true);
+}
+
+void sys_lchown(syscall_frame_t *frame) {
+    const char *user_path = (const char *)frame->rdi;
+    uid_t uid = (uid_t)frame->rsi;
+    gid_t gid = (gid_t)frame->rdx;
+    if (!user_path) { frame->rax = (uint64_t)-EFAULT; return; }
+
+    char path[256];
+    int status = copy_string_from_user(path, user_path, sizeof(path));
+    if (status < 0) { frame->rax = (uint64_t)status; return; }
+    char abs_path[256];
+    build_abs_path(path, abs_path, sizeof(abs_path));
+    frame->rax = (uint64_t)change_path_ownership(abs_path, uid, gid, false);
 }
 
 void sys_umask(syscall_frame_t *frame) {
@@ -5391,7 +5637,7 @@ void sys_rt_sigtimedwait(syscall_frame_t *frame) {
     read_vmm(current_task_ptr->ctx, &want, set_ptr, sizeof(uint64_t));
 
     // SIGKILL/SIGSTOP can't be caught this way.
-    want &= ~((1ULL << SIGKILL) | (1ULL << SIGSTOP));
+    want &= ~((1ULL << (SIGKILL - 1)) | (1ULL << (SIGSTOP - 1)));
     if (want == 0) {
         frame->rax = (uint64_t)-EINVAL;
         return;
@@ -5419,7 +5665,7 @@ void sys_rt_sigtimedwait(syscall_frame_t *frame) {
         // pending_signals is 1-indexed: bit i <=> signal i. Scan signals in @want.
         for (int sig = 1; sig < 64; sig++) {
             uint64_t bit = (1ULL << sig);
-            if (!(want & bit)) continue;
+            if (!(want & (1ULL << (sig - 1)))) continue;
             if (!(current_task_ptr->pending_signals & bit)) continue;
 
             // Consume the first pending signal in @set, regardless of whether
@@ -5452,7 +5698,7 @@ void sys_rt_sigtimedwait(syscall_frame_t *frame) {
 
         // Interrupted by an *unrelated* pending signal that has a handler?
         if (signal_pending()) {
-            uint64_t pending = current_task_ptr->pending_signals & ~current_task_ptr->blocked_signals;
+            uint64_t pending = current_task_ptr->pending_signals & ~(current_task_ptr->blocked_signals << 1);
             pending |= current_task_ptr->pending_signals & ((1ULL << SIGKILL) | (1ULL << SIGSTOP));
 
             int interrupted = 0;
@@ -5483,7 +5729,7 @@ void sys_utime(syscall_frame_t *frame) {
     if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
 
     char path_buf[256];
-    if (copy_from_user(path_buf, user_path, sizeof(path_buf)) < 0) {
+    if (copy_string_from_user(path_buf, user_path, sizeof(path_buf)) < 0) {
         frame->rax = (uint64_t)-EFAULT; return;
     }
 
@@ -5669,7 +5915,7 @@ void sys_mount(syscall_frame_t *frame) {
 
     char target_buf[64];
     char fstype_buf[32];
-    if (copy_from_user(target_buf, target, sizeof(target_buf)) < 0 || copy_from_user(fstype_buf, fstype, sizeof(fstype_buf)) < 0) {
+    if (copy_string_from_user(target_buf, target, sizeof(target_buf)) < 0 || copy_string_from_user(fstype_buf, fstype, sizeof(fstype_buf)) < 0) {
         frame->rax = (uint64_t)-EFAULT; return;
     }
 
@@ -5725,7 +5971,7 @@ void sys_umount2(syscall_frame_t *frame) {
     if (!target) { frame->rax = (uint64_t)-EINVAL; return; }
 
     char target_buf[64];
-    if (copy_from_user(target_buf, target, sizeof(target_buf)) < 0) {
+    if (copy_string_from_user(target_buf, target, sizeof(target_buf)) < 0) {
         frame->rax = (uint64_t)-EFAULT; return;
     }
 
@@ -6574,7 +6820,7 @@ void sys_openat(syscall_frame_t *frame) {
     if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
 
     char path_buf[256];
-    if (copy_from_user(path_buf, user_path, sizeof(path_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (copy_string_from_user(path_buf, user_path, sizeof(path_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char abs_path[256];
     int res = build_abs_path_at(dirfd, path_buf, abs_path, sizeof(abs_path));
@@ -6664,11 +6910,21 @@ void sys_openat(syscall_frame_t *frame) {
 
     if (!file.mode && !(flags & O_CREAT)) { frame->rax = (uint64_t)-ENOENT; return; }
 
+    int parent_access = check_parent_access(abs_path, false);
+    if (parent_access < 0) { frame->rax = (uint64_t)parent_access; return; }
+
+    int want_write = (flags & O_WRONLY) || (flags & O_RDWR);
+    int want_read = !want_write || (flags & O_RDWR);
+
     if ((flags & O_CREAT) && !file.data && !file.mode) {
+        int access = check_parent_access(abs_path, true);
+        if (access < 0) { frame->rax = (uint64_t)access; return; }
         int r = write_initrd(abs_path, "", 0, mode | 0o100000, current_task_ptr->euid, current_task_ptr->egid);
         if (r < 0) { frame->rax = (uint64_t)r; return; }
         file = read_initrd(abs_path);
     }
+
+    if (!can_access_initrd(&file, want_read, want_write, 0)) { frame->rax = (uint64_t)-EACCES; return; }
 
     // O_TRUNC: truncate existing regular file to zero length
     if ((flags & O_TRUNC) && file.data && S_ISREG(file.mode)) {
@@ -6676,12 +6932,35 @@ void sys_openat(syscall_frame_t *frame) {
         if (r < 0) { frame->rax = (uint64_t)r; return; }
     }
 
-    int want_write = (flags & O_WRONLY) || (flags & O_RDWR);
-    int want_read = !want_write || (flags & O_RDWR);
-    if (!can_access_initrd(&file, want_read, want_write, 0)) { frame->rax = (uint64_t)-EACCES; return; }
-
     int fd = alloc_fd(&current_task_ptr->fd_table, abs_path, FD_FILE, flags);
     frame->rax = (uint64_t)fd;
+}
+
+void sys_fchownat(syscall_frame_t *frame) {
+    int dirfd = (int)frame->rdi;
+    const char *user_path = (const char *)frame->rsi;
+    uid_t uid = (uid_t)frame->rdx;
+    gid_t gid = (gid_t)frame->r10;
+    int flags = (int)frame->r8;
+    if (!user_path) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    char path[256];
+    int status = copy_string_from_user(path, user_path, sizeof(path));
+    if (status < 0) { frame->rax = (uint64_t)status; return; }
+    if (path[0] == '\0') {
+        if (!(flags & AT_EMPTY_PATH)) { frame->rax = (uint64_t)-ENOENT; return; }
+        fd_entry_t *entry = get_current_fd(dirfd);
+        if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+        if (entry->type != FD_FILE && entry->type != FD_TMPFS) { frame->rax = (uint64_t)-EINVAL; return; }
+        frame->rax = (uint64_t)change_path_ownership(entry->path, uid, gid, true);
+        return;
+    }
+
+    char abs_path[256];
+    status = build_abs_path_at(dirfd, path, abs_path, sizeof(abs_path));
+    if (status < 0) { frame->rax = (uint64_t)status; return; }
+    frame->rax = (uint64_t)change_path_ownership(abs_path, uid, gid, !(flags & AT_SYMLINK_NOFOLLOW));
 }
 
 void sys_fstatat(syscall_frame_t *frame) {
@@ -6694,7 +6973,7 @@ void sys_fstatat(syscall_frame_t *frame) {
     if (!user_range_ok(current_task_ptr->ctx, (uint64_t)st, sizeof(struct stat))) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char path[256];
-    int cr = copy_from_user(path, user_path, sizeof(path));
+    int cr = copy_string_from_user(path, user_path, sizeof(path));
     if (cr < 0) { frame->rax = (uint64_t)cr; return; }
 
     char abs_path[256];
@@ -6762,21 +7041,15 @@ void sys_unlinkat(syscall_frame_t *frame) {
     if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
 
     char path_buf[256];
-    if (copy_from_user(path_buf, user_path, sizeof(path_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (copy_string_from_user(path_buf, user_path, sizeof(path_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char abs_path[256];
     int res = build_abs_path_at(dirfd, path_buf, abs_path, sizeof(abs_path));
 
     if (res < 0) { frame->rax = (uint64_t)res; return; }
 
-    // /dev, /proc, and their children are synthesized by the kernel (devtmpfs,
-    // devpts, procfs). They cannot be removed — reject before the initrd stat.
-    if (is_mounted_under(abs_path, "devtmpfs", NULL) ||
-        is_mounted_under(abs_path, "devpts", NULL) ||
-        is_procfs_path(abs_path)) {
-        frame->rax = (uint64_t)-EPERM;
-        return;
-    }
+    int mutation_status = reject_virtual_removal(abs_path);
+    if (mutation_status < 0) { frame->rax = (uint64_t)mutation_status; return; }
 
     // tmpfs: RAM-backed, handle remove/rmdir directly.
     if (is_tmpfs_dir(abs_path)) {
@@ -6813,12 +7086,15 @@ void sys_symlinkat(syscall_frame_t *frame) {
 
     char target_buf[256];
     char path_buf[256];
-    if (copy_from_user(target_buf, target, sizeof(target_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
-    if (copy_from_user(path_buf, user_path, sizeof(path_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (copy_string_from_user(target_buf, target, sizeof(target_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (copy_string_from_user(path_buf, user_path, sizeof(path_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char abs_path[256];
     int res = build_abs_path_at(newdirfd, path_buf, abs_path, sizeof(abs_path));
     if (res < 0) { frame->rax = (uint64_t)res; return; }
+
+    int mutation_status = reject_procfs_mutation(abs_path);
+    if (mutation_status < 0) { frame->rax = (uint64_t)mutation_status; return; }
 
     if (is_tmpfs_dir(abs_path)) {
         frame->rax = (uint64_t)symlink_tmpfs(target_buf, abs_path, current_task_ptr->euid, current_task_ptr->egid);
@@ -6844,7 +7120,7 @@ void sys_readlinkat(syscall_frame_t *frame) {
     if (!user_range_ok(current_task_ptr->ctx, (uint64_t)buf, bufsiz)) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char path[256];
-    if (copy_from_user(path, user_path, sizeof(path)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (copy_string_from_user(path, user_path, sizeof(path)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char abs_path[256];
     int br = build_abs_path_at(dirfd, path, abs_path, sizeof(abs_path));
@@ -6909,7 +7185,7 @@ void sys_fchmodat(syscall_frame_t *frame) {
     if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
 
     char path_buf[256];
-    if (copy_from_user(path_buf, user_path, sizeof(path_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (copy_string_from_user(path_buf, user_path, sizeof(path_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char abs_path[256];
     int res = build_abs_path_at(dirfd, path_buf, abs_path, sizeof(abs_path));
@@ -7065,7 +7341,7 @@ void sys_utimensat(syscall_frame_t *frame) {
     if (!user_path) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char path_buf[256];
-    if (copy_from_user(path_buf, user_path, sizeof(path_buf)) < 0) {
+    if (copy_string_from_user(path_buf, user_path, sizeof(path_buf)) < 0) {
         frame->rax = (uint64_t)-EFAULT; return;
     }
 
@@ -7338,7 +7614,7 @@ void sys_statx(syscall_frame_t *frame) {
     if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
 
     char path[256];
-    int cr = copy_from_user(path, user_path, sizeof(path));
+    int cr = copy_string_from_user(path, user_path, sizeof(path));
     if (cr < 0) { frame->rax = (uint64_t)cr; return; }
 
     char abs_path[256];

@@ -17,15 +17,15 @@ all: $(OBJ)
 -include $(DEP)
 
 %.o: %.c ../Makefile ../config.mk ../include/limine/limine.h
-	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/syscall/$@"
+	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/syscalls/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 %.o: %.S ../Makefile ../config.mk ../include/limine/limine.h
-	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/syscall/$@"
+	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/syscalls/$@"
 	@$(AS) $(AFLAGS) -c $< -o $@
 
 clean:
-	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/syscall/*.o $(SUBDIR)/syscall/*.d"
+	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/syscalls/*.o $(SUBDIR)/syscalls/*.d"
 	@rm -rf *.o *.d
 
 mrproper: clean

@@ -1,12 +1,13 @@
 #include <stdint.h>
 #include <stddef.h>
+#include <main/string.h>
+#include <main/spinlocks.h>
 #include <io/ac97.h>
 #include <io/io.h>
 #include <io/hpet.h>
-#include <mm/vmm.h>
-#include <main/string.h>
-#include <main/spinlocks.h>
 #include <io/terminal.h>
+#include <mm/vmm.h>
+
 uint16_t nam_base = 0;
 uint16_t nabm_base = 0;
 static bool ac97_ready = false;

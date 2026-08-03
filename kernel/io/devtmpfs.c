@@ -1,6 +1,6 @@
-#include <io/devtmpfs.h>
-#include <main/string.h>
 #include <errno.h>
+#include <main/string.h>
+#include <io/devtmpfs.h>
 
 bool device_exists_on_devtmpfs(const char* name) {
     const char *dev_name = name;

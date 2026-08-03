@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include <stddef.h>
-#include <io/keyboard.h>
 #include <main/halt.h>
+#include <io/keyboard.h>
 
 uint8_t key_buffer[128] = {0};
 volatile uint32_t key_head = 0;

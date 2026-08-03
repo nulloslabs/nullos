@@ -1,12 +1,13 @@
 #include <stdint.h>
 #include <stddef.h>
+#include <main/halt.h>
+#include <main/mp.h>
+#include <main/string.h>
+#include <io/hpet.h>
 #include <io/usb.h>
 #include <io/uhci.h>
 #include <io/usb_keyboard.h>
 #include <io/ps2_keyboard.h>
-#include <main/halt.h>
-#include <main/mp.h>
-#include <main/string.h>
 #include <mm/mm.h>
 
 usb_device_t *usb_devices_head = NULL;
@@ -57,10 +58,10 @@ void unregister_usb_device(usb_device_t *dev) {
 void poll_usb_hcds(void) {
     if (system_halted) return;
     if (get_cpu_index() != 0) return;
-    static int poll_counter = 0;
-    if (++poll_counter >= 1) {
-        poll_counter = 0;
-        poll_uhci_ports();
-        poll_usb_keyboard();
-    }
+    static uint64_t last_poll_us = 0;
+    uint64_t now = hpet_elapsed_us();
+    if (now && last_poll_us && now - last_poll_us < 4000) return;
+    last_poll_us = now;
+    poll_uhci_ports();
+    poll_usb_keyboard();
 }

@@ -2,17 +2,17 @@
 #include <stdint.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <main/panic.h>
-#include <io/initrd.h>
-#include <main/string.h>
-#include <main/gzip.h>
-#include <mm/mm.h>
-#include <mm/pmm.h>
 #include <errno.h>
 #include <dirent.h>
+#include <main/panic.h>
+#include <main/string.h>
+#include <main/gzip.h>
 #include <main/sched.h>
 #include <main/limine_req.h>
+#include <io/initrd.h>
 #include <io/terminal.h>
+#include <mm/mm.h>
+#include <mm/pmm.h>
 #include <limine.h>
 
 static uint8_t *initrd_decompressed = NULL;
@@ -769,6 +769,36 @@ int chmod_initrd(const char *path, mode_t mode) {
     }
 
     add_modified_file(norm, data_copy, file.size, file.size, new_mode, file.uid, file.gid);
+    return 0;
+}
+
+int chown_initrd(const char *path, uid_t uid, gid_t gid, bool follow) {
+    char norm[256];
+    get_norm_path_ex(path, norm, sizeof(norm), follow);
+
+    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+        if (modified_files[i].is_active && strcmp(modified_files[i].path, norm) == 0) {
+            if (uid != (uid_t)-1) modified_files[i].uid = uid;
+            if (gid != (gid_t)-1) modified_files[i].gid = gid;
+            return 0;
+        }
+    }
+
+    initrd_file_t file = follow ? stat_initrd(path) : stat_initrd_nofollow(path);
+    if (!file.mode) return -ENOENT;
+
+    size_t alloc_size = file.size + (S_ISLNK(file.mode) ? 1 : 0);
+    void *data_copy = NULL;
+    if (alloc_size > 0) {
+        data_copy = malloc(alloc_size);
+        if (!data_copy) return -ENOMEM;
+        if (file.size > 0) memcpy(data_copy, file.data, file.size);
+        if (S_ISLNK(file.mode)) ((char *)data_copy)[file.size] = '\0';
+    }
+
+    uid_t new_uid = uid == (uid_t)-1 ? file.uid : uid;
+    gid_t new_gid = gid == (gid_t)-1 ? file.gid : gid;
+    add_modified_file(norm, data_copy, file.size, alloc_size, file.mode, new_uid, new_gid);
     return 0;
 }
 

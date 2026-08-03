@@ -1,7 +1,7 @@
 #include <stdint.h>
+#include <main/timekeeping.h>
 #include <io/io.h>
 #include <io/rtc.h>
-#include <main/timekeeping.h>
 #include <io/terminal.h>
 #define CMOS_ADDR 0x70
 #define CMOS_DATA 0x71

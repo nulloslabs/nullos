@@ -1,8 +1,8 @@
 #include <stdint.h>
-#include <uacpi/acpi.h>
-#include <uacpi/tables.h>
 #include <main/madt.h>
 #include <io/terminal.h>
+#include <uacpi/acpi.h>
+#include <uacpi/tables.h>
 
 void *ioapic_phys_addr;
 

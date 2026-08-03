@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <sys/types.h>
 
 #define FD_MAX 32
 #define AT_FDCWD -100
@@ -25,6 +26,7 @@ typedef struct {
     bool used;
     int refcount;
     int lock_type;
+    pid_t owner_pid;
     char path[256];
 } flock_obj_t;
 

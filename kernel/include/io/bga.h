@@ -39,5 +39,5 @@
 
 uint8_t bga_palette_index(uint32_t color);
 uint32_t bga_palette_color(uint8_t index);
-void set_bga_fb(uint64_t width, uint64_t height, uint16_t bpp);
+int set_bga_resolution(uint64_t xres, uint64_t yres, uint64_t xres_virtual, uint64_t yres_virtual, uint64_t xoffset, uint64_t yoffset, uint16_t bpp);
 void init_bga(pci_device_t *dev);

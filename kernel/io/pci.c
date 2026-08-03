@@ -4,8 +4,12 @@
 #include <io/io.h>
 #include <io/ac97.h>
 #include <io/bga.h>
-#include <io/rtl8139.h>
 #include <io/e1000.h>
+#include <io/svga_ii.h>
+#include <io/rtl8139.h>
+#include <io/ide.h>
+#include <io/pata.h>
+#include <io/atapi.h>
 #include <io/usb.h>
 #include <io/uhci.h>
 #include <io/terminal.h>
@@ -67,8 +71,7 @@ pci_device_t* find_pci(uint16_t vendor, uint16_t device) {
 
 pci_device_t* find_pci_class(uint8_t class, uint8_t subclass, uint8_t progif) {
     for (int i = 0; i < pci_device_count; i++)
-        if (pci_devices[i].class == class && pci_devices[i].subclass == subclass
-            && pci_devices[i].progif == progif)
+        if (pci_devices[i].class == class && pci_devices[i].subclass == subclass && pci_devices[i].progif == progif)
             return &pci_devices[i];
     return NULL;
 }
@@ -199,8 +202,37 @@ void init_pci_drivers(void) {
     } known_pci_drivers[] = {
         {"ac97",    AC97_VENDOR,    AC97_DEVICE,    init_ac97},
         {"bga",     BGA_VENDOR,     BGA_DEVICE,     init_bga},
+        {"e1000",   E1000_VENDOR,   E1000_DEVICE,   init_e1000},
+        {"svga ii", SVGA_II_VENDOR, SVGA_II_DEVICE, init_svga_ii},
         {"rtl8139", RTL8139_VENDOR, RTL8139_DEVICE, init_rtl8139},
-        {"e1000",   E1000_VENDOR,   E1000_DEVICE,   init_e1000}
+    };
+
+    const struct {
+        const char *name;
+        uint8_t class;
+        uint8_t subclass;
+        uint8_t progif_mask;
+        uint8_t progif_value;
+        bool (*init)(pci_device_t*);
+    } known_storage_controllers[] = {
+        {"ide", IDE_CLASS, IDE_SUBCLASS, IDE_PROGIF_MASK, IDE_PROGIF_VALUE, init_ide},
+    };
+
+    const struct {
+        const char *name;
+        bool (*present)(void);
+        void (*init)(void);
+    } known_storage_drivers[] = {
+        {"pata", ide_has_pata, init_pata},
+        {"atapi", ide_has_atapi, init_atapi},
+    };
+
+    const struct {
+        const char *name;
+        uint8_t progif;
+        void (*init)(pci_device_t*);
+    } known_usb_drivers[] = {
+        {"uhci", USB_PROGIF_UHCI, init_uhci},
     };
 
     for (int i = 0; i < (int)(sizeof(known_pci_drivers) / sizeof(known_pci_drivers[0])); i++) {
@@ -211,13 +243,25 @@ void init_pci_drivers(void) {
         }
     }
 
-    const struct {
-        const char *name;
-        uint8_t progif;
-        void (*init)(pci_device_t*);
-    } known_usb_drivers[] = {
-        {"uhci", USB_PROGIF_UHCI, init_uhci},
-    };
+    for (int i = 0; i < (int)(sizeof(known_storage_controllers) / sizeof(known_storage_controllers[0])); i++) {
+        for (int j = 0; j < pci_device_count; j++) {
+            pci_device_t *dev = &pci_devices[j];
+
+            if (dev->class != known_storage_controllers[i].class) continue;
+            if (dev->subclass != known_storage_controllers[i].subclass) continue;
+            if ((dev->progif & known_storage_controllers[i].progif_mask) != known_storage_controllers[i].progif_value) continue;
+
+            printf("pci: found controller for %s\n", known_storage_controllers[i].name);
+            if (known_storage_controllers[i].init(dev)) {
+                for (int k = 0; k < (int)(sizeof(known_storage_drivers) / sizeof(known_storage_drivers[0])); k++) {
+                    if (!known_storage_drivers[k].present()) continue;
+                    printf("pci: found driver for %s\n", known_storage_drivers[k].name);
+                    known_storage_drivers[k].init();
+                }
+            }
+            break;
+        }
+    }
 
     for (int i = 0; i < (int)(sizeof(known_usb_drivers)/sizeof(known_usb_drivers[0])); i++) {
         for (int j = 0; j < pci_device_count; j++) {

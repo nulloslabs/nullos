@@ -39,6 +39,21 @@ static uint16_t ip_id_counter = 1;
 
 net_device_t *net_current_device = NULL;
 
+static bool parse_ipv4_packet(const uint8_t *frame, uint16_t len, uint8_t protocol, const ipv4_hdr_t **ip_out, uint16_t *header_len_out, uint16_t *total_len_out) {
+    if (!frame || len < 14 + sizeof(ipv4_hdr_t)) return false;
+    if (ntohs(*(const uint16_t *)(frame + 12)) != ETHERTYPE_IPV4) return false;
+    const ipv4_hdr_t *ip = (const ipv4_hdr_t *)(frame + 14);
+    if ((ip->ihl_ver >> 4) != 4 || ip->protocol != protocol) return false;
+    uint16_t header_len = (uint16_t)(ip->ihl_ver & 0x0F) * 4;
+    uint16_t total_len = ntohs(ip->total_len);
+    if (header_len < sizeof(ipv4_hdr_t) || total_len < header_len || total_len > len - 14) return false;
+    if (ntohs(ip->frag_off) & 0x3FFF) return false;
+    *ip_out = ip;
+    *header_len_out = header_len;
+    *total_len_out = total_len;
+    return true;
+}
+
 void register_net_device(net_device_t *dev) {
     if (!dev || !dev->send) return;
     uint64_t irq;
@@ -140,11 +155,12 @@ static uint16_t      icmp_ping_id   = 0x4E4F;
 static uint16_t      icmp_ping_seq  = 0;
 
 void handle_icmp_packet(const uint8_t *frame, uint16_t len) {
-    if (len < 14 + 20 + (int)sizeof(icmp_hdr_t)) return;
-    if (ntohs(*(const uint16_t *)(frame + 12)) != ETHERTYPE_IPV4) return;
-    const ipv4_hdr_t *ip = (const ipv4_hdr_t *)(frame + 14);
-    if (ip->protocol != IP_PROTO_ICMP) return;
-    const icmp_hdr_t *icmp = (const icmp_hdr_t *)(frame + 14 + (ip->ihl_ver & 0xF) * 4);
+    const ipv4_hdr_t *ip;
+    uint16_t ip_hlen;
+    uint16_t ip_total;
+    if (!parse_ipv4_packet(frame, len, IP_PROTO_ICMP, &ip, &ip_hlen, &ip_total)) return;
+    if (ip_total - ip_hlen < sizeof(icmp_hdr_t)) return;
+    const icmp_hdr_t *icmp = (const icmp_hdr_t *)(frame + 14 + ip_hlen);
     if (icmp->type != 0) return;
     if (ntohs(icmp->id) != icmp_ping_id || ntohs(icmp->seq) != icmp_ping_seq) return;
     
@@ -205,13 +221,14 @@ bool send_udp_packet(uint32_t dest_ip, uint16_t src_port, uint16_t dst_port,
 }
 
 void handle_udp_packet(const uint8_t *frame, uint16_t len) {
-    if (len < 14 + 20 + (int)sizeof(udp_hdr_t)) return;
-    if (ntohs(*(const uint16_t *)(frame + 12)) != ETHERTYPE_IPV4) return;
-    const ipv4_hdr_t *ip = (const ipv4_hdr_t *)(frame + 14);
-    if (ip->protocol != IP_PROTO_UDP) return;
-    const udp_hdr_t *udp = (const udp_hdr_t *)(frame + 14 + (ip->ihl_ver & 0xF) * 4);
+    const ipv4_hdr_t *ip;
+    uint16_t ip_hlen;
+    uint16_t ip_total;
+    if (!parse_ipv4_packet(frame, len, IP_PROTO_UDP, &ip, &ip_hlen, &ip_total)) return;
+    if (ip_total - ip_hlen < sizeof(udp_hdr_t)) return;
+    const udp_hdr_t *udp = (const udp_hdr_t *)(frame + 14 + ip_hlen);
     uint16_t udp_total = ntohs(udp->length);
-    if (udp_total < sizeof(udp_hdr_t)) return; // Malformed: length too small
+    if (udp_total < sizeof(udp_hdr_t) || udp_total > ip_total - ip_hlen) return;
     uint16_t data_len = udp_total - sizeof(udp_hdr_t);
     const uint8_t *payload = (const uint8_t *)(udp + 1);
     
@@ -263,9 +280,11 @@ void handle_dns_response(const uint8_t *payload, uint16_t len) {
         while (p < end) {
             uint8_t n = *p;
             if (n == 0) { p++; break; }
-            if ((n & 0xC0) == 0xC0) { p += 2; break; }
+            if ((n & 0xC0) == 0xC0) { if (end - p < 2) return; p += 2; break; }
+            if (n > 63 || (size_t)(end - p) < (size_t)n + 1) return;
             p += n + 1;
         }
+        if (end - p < 4) return;
         p += 4;  // QTYPE + QCLASS
     }
 
@@ -276,7 +295,8 @@ void handle_dns_response(const uint8_t *payload, uint16_t len) {
         while (p < end) {
             uint8_t n = *p;
             if (n == 0) { p++; break; }
-            if ((n & 0xC0) == 0xC0) { p += 2; break; }
+            if ((n & 0xC0) == 0xC0) { if (end - p < 2) return; p += 2; break; }
+            if (n > 63 || (size_t)(end - p) < (size_t)n + 1) return;
             p += n + 1;
         }
         if (p + 10 > end) break;
@@ -291,6 +311,7 @@ void handle_dns_response(const uint8_t *payload, uint16_t len) {
             spin_unlock_irqrestore(&net_lock, irq);
             return;
         }
+        if ((size_t)(end - p) < rdlen) break;
         p += rdlen;
     }
 }
@@ -388,19 +409,15 @@ static void push_tcp_rx(tcp_socket_t *sock, const uint8_t *data, uint16_t len) {
 }
 
 void handle_tcp_packet(const uint8_t *frame, uint16_t len) {
-    if (len < 14 + TCP_HDR_LEN) return;
-    if (ntohs(*(const uint16_t *)(frame + 12)) != ETHERTYPE_IPV4) return;
-
-    const ipv4_hdr_t *ip = (const ipv4_hdr_t *)(frame + 14);
-    if (ip->protocol != IP_PROTO_TCP) return;
-
-    int ip_hlen = (ip->ihl_ver & 0xF) * 4;
+    const ipv4_hdr_t *ip;
+    uint16_t ip_hlen;
+    uint16_t ip_total;
+    if (!parse_ipv4_packet(frame, len, IP_PROTO_TCP, &ip, &ip_hlen, &ip_total)) return;
+    if (ip_total - ip_hlen < TCP_HDR_LEN) return;
     const tcp_hdr_t *tcp = (const tcp_hdr_t *)(frame + 14 + ip_hlen);
     int tcp_hlen = ((tcp->data_off >> 4) & 0xF) * 4;
-
-    uint16_t ip_total    = ntohs(ip->total_len);
+    if (tcp_hlen < TCP_HDR_LEN || tcp_hlen > ip_total - ip_hlen) return;
     int      payload_len = ip_total - ip_hlen - tcp_hlen;
-    if (payload_len < 0) payload_len = 0;
 
     const uint8_t *payload = (const uint8_t *)tcp + tcp_hlen;
 

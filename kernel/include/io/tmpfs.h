@@ -74,6 +74,7 @@ int  symlink_tmpfs(const char *target, const char *path, uid_t uid, gid_t gid);
 int  rename_tmpfs(const char *old_path, const char *new_path);
 int  link_tmpfs(const char *old_path, const char *new_path);
 int  chmod_tmpfs(const char *path, mode_t mode);
+int  chown_tmpfs(const char *path, uid_t uid, gid_t gid, bool follow);
 int  truncate_tmpfs(const char *path, uint64_t size);
 int  read_tmpfs_link(const char *path, char *out, size_t out_size);
 int  next_tmpfs_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size, uint8_t *child_type, ino_t *child_ino);

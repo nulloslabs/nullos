@@ -1,5 +1,5 @@
-#include <mm/vma.h>
 #include <main/string.h>
+#include <mm/vma.h>
 
 static void set_name(char *dst, const char *src) {
     if (!src) { dst[0] = '\0'; return; }

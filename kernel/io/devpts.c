@@ -1,7 +1,7 @@
-#include <io/devpts.h>
-#include <main/string.h>
-#include <io/ptys.h>
 #include <errno.h>
+#include <main/string.h>
+#include <io/devpts.h>
+#include <io/ptys.h>
 
 int get_pts_idx(const char *name) {
     if (!name || *name == '\0') return -1;

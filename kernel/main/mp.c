@@ -1,17 +1,17 @@
 #include <main/mp.h>
-#include <io/apic.h>
-#include <io/ioapic.h>
 #include <main/idt.h>
 #include <main/gdt.h>
 #include <main/halt.h>
 #include <main/sched.h>
-#include <mm/mm.h>
-#include <mm/vmm.h>
 #include <main/string.h>
 #include <main/limine_req.h>
-#include <syscalls/syscalls.h>
 #include <main/sse.h>
+#include <io/apic.h>
+#include <io/ioapic.h>
 #include <io/terminal.h>
+#include <mm/mm.h>
+#include <mm/vmm.h>
+#include <syscalls/syscalls.h>
 cpu_t cpus[MAX_CPUS];
 int cpu_count = 0;
 volatile int ap_ready_count = 0;

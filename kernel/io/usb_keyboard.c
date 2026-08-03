@@ -1,13 +1,13 @@
 #include <stdint.h>
 #include <stddef.h>
+#include <main/string.h>
 #include <io/usb_keyboard.h>
 #include <io/usb.h>
 #include <io/keyboard.h>
 #include <io/hpet.h>
 #include <io/ttys.h>
-#include <mm/mm.h>
-#include <main/string.h>
 #include <io/terminal.h>
+#include <mm/mm.h>
 static const uint8_t hid_to_scancode[256] = {
     [0x00] = 0x00,  // Reserved (no event)
     [0x01] = 0x00,  // ErrorRollOver

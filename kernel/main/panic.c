@@ -1,7 +1,6 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdarg.h>
-#include <stdbool.h>
 #include <signal.h>
 #include <main/elf.h>
 #include <main/limine_req.h>
@@ -9,7 +8,6 @@
 #include <main/halt.h>
 #include <main/sched.h>
 #include <io/terminal.h>
-#include <mm/vmm.h>
 #include <syscalls/syscalls.h>
 #include <syscalls/syscall_impls.h>
 
@@ -18,8 +16,7 @@ static bool is_elf_range_valid(uint64_t offset, uint64_t length, uint64_t file_s
 }
 
 static bool find_kernel_symbol_table(kernel_symbol_table_t *table_out) {
-    if (!cmdline_req.response ||
-        !cmdline_req.response->executable_file) return false;
+    if (!cmdline_req.response || !cmdline_req.response->executable_file) return false;
 
     const struct limine_file *file = cmdline_req.response->executable_file;
     const uint8_t *image = (const uint8_t *)file->address;
@@ -119,6 +116,28 @@ static bool kernel_symbol_for_rip(uint64_t rip, const char **name_out, uint64_t 
     return true;
 }
 
+static int exception_to_signal(int vector) {
+    switch (vector) {
+        case 0:  return SIGFPE;   // Division error
+        case 4:  return SIGFPE;   // Overflow
+        case 5:  return SIGFPE;   // Bounds
+        case 6:  return SIGILL;   // Invalid opcode
+        case 7:  return SIGFPE;   // Device not available (x87)
+        case 8:  return SIGSEGV;  // Double fault
+        case 10: return SIGSEGV;  // Invalid TSS
+        case 11: return SIGBUS;   // Segment not present
+        case 12: return SIGSEGV;  // Stack segment fault
+        case 13: return SIGSEGV;  // General protection fault
+        case 14: return SIGSEGV;  // Page fault
+        case 16: return SIGFPE;   // x87 FP exception
+        case 17: return SIGBUS;   // Alignment check
+        case 18: return SIGBUS;   // Machine check
+        case 19: return SIGFPE;   // SIMD FP exception
+        case 30: return SIGSEGV;  // Security exception
+        default: return SIGSEGV;
+    }
+}
+
 __attribute__((noreturn)) void dopanic(const char *func, const char *msg, ...) {
     cli();
 
@@ -147,29 +166,6 @@ __attribute__((noreturn)) void dopanic(const char *func, const char *msg, ...) {
     va_end(args);
     halt();
     __builtin_unreachable();
-}
-
-// Map CPU exception vectors to signal numbers
-static int exception_to_signal(int vector) {
-    switch (vector) {
-        case 0:  return SIGFPE;   // Division error
-        case 4:  return SIGFPE;   // Overflow
-        case 5:  return SIGFPE;   // Bounds
-        case 6:  return SIGILL;   // Invalid opcode
-        case 7:  return SIGFPE;   // Device not available (x87)
-        case 8:  return SIGSEGV;  // Double fault
-        case 10: return SIGSEGV;  // Invalid TSS
-        case 11: return SIGBUS;   // Segment not present
-        case 12: return SIGSEGV;  // Stack segment fault
-        case 13: return SIGSEGV;  // General protection fault
-        case 14: return SIGSEGV;  // Page fault
-        case 16: return SIGFPE;   // x87 FP exception
-        case 17: return SIGBUS;   // Alignment check
-        case 18: return SIGBUS;   // Machine check
-        case 19: return SIGFPE;   // SIMD FP exception
-        case 30: return SIGSEGV;  // Security exception
-        default: return SIGSEGV;
-    }
 }
 
 void exception_panic(exception_frame_t *frame) {

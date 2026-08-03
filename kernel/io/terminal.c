@@ -1,43 +1,34 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <signal.h>
 #include <main/string.h>
 #include <main/limine_req.h>
 #include <main/spinlocks.h>
 #include <main/halt.h>
-#include <io/framebuffer.h>
+#include <io/fb.h>
 #include <io/bga.h>
 #include <io/fonts.h>
 #include <io/serial.h>
 #include <io/terminal.h>
+#include <io/ttys.h>
 #include <mm/mm.h>
 
 #define FONT_PENDING_BUFFER_SIZE 4096
-
-static uint32_t *back_buffer = NULL;
-static uint64_t back_buffer_width = 0;
-static uint64_t back_buffer_height = 0;
-static uint64_t back_buffer_pitch = 0;
-static bool back_buffer_initialized = false;
-static bool back_buffer_available = false;
-static bool back_buffer_dirty = false;
 
 static parser_state_t state = STATE_NORMAL;
 static char ansi_buffer[32];
 static int ansi_idx = 0;
 static bool is_bold = false;
-static bool is_reverse = false;       // SGR 7 (reverse video) — vi status line
-static uint32_t reverse_bg = 0;       // bg_color saved when entering reverse
-static int last_printable_char = ' ';          // last printable char drawn (for CSI b REP)
-static bool acs_active = false;       // ESC(0 = in DEC line-drawing charset, ESC(B = back to ASCII
-static bool expect_charset_designator = false; // just saw ESC( , next byte picks the charset
+static bool is_reverse = false;
+static uint32_t reverse_bg = 0;
+static int last_printable_char = ' ';
+static bool acs_active = false;
+static bool expect_charset_designator = false;
 static bool cursor_visible = false;
 static bool cursor_enabled = true;
 static spinlock_t term_lock = SPINLOCK_INIT;
 
-// Saved backbuffer pixels under the cursor, so we can restore them when the
-// cursor moves.  The cursor is rendered INTO the backbuffer — that way it
-// survives flush_backbuffer / scroll_region_both without flickering.
 static uint32_t cursor_saved_pixels[32 * 16]; // max glyph: 32w × 16h
 static uint64_t cursor_saved_x = 0;
 static uint64_t cursor_saved_y = 0;
@@ -55,7 +46,7 @@ static uint32_t saved_bg = 0;
 static bool     saved_bold = false;
 static bool     saved_reverse = false;
 
-static bool alt_active = false;
+static bool     alt_active = false;
 static uint64_t alt_saved_cursor_x = 0;
 static uint64_t alt_saved_cursor_y = 0;
 static uint32_t alt_saved_fg = 0;
@@ -64,10 +55,18 @@ static bool     alt_saved_bold = false;
 static bool     alt_saved_reverse = false;
 static uint32_t *alt_back_buffer = NULL;
 
-static char font_pending_buffer[FONT_PENDING_BUFFER_SIZE];
+static char   font_pending_buffer[FONT_PENDING_BUFFER_SIZE];
 static size_t font_pending_len = 0;
-static bool font_pending_overflowed = false;
-static bool font_pending_replaying = false;
+static bool   font_pending_overflowed = false;
+static bool   font_pending_replaying = false;
+
+uint32_t *back_buffer = NULL;
+uint64_t back_buffer_width = 0;
+uint64_t back_buffer_height = 0;
+uint64_t back_buffer_pitch = 0;
+bool     back_buffer_initialized = false;
+bool     back_buffer_available = false;
+bool     back_buffer_dirty = false;
 
 uint64_t cursor_x = 0;
 uint64_t cursor_y = 0;
@@ -76,9 +75,6 @@ uint32_t bg_color = 0x00000000;
 uint32_t default_color = 0x00AAAAAA;
 uint64_t line_start_y = 0; // Track where current input line started
 
-// DEC Special Graphics (VT100 line-drawing) charset, sent between
-// ESC ( 0 ... ESC ( B. Maps ASCII bytes 0x5F..0x7E to CP437 byte codes
-// for the equivalent box-drawing / symbol glyph in an 8-bit font.
 static const unsigned char acs_table[] = {
     0x20, 0x04, 0xB1, 0x20, 0x0C, 0x0D, 0x0A, 0xF8,
     0xF1, 0x20, 0x20, 0xD9, 0xBF, 0xDA, 0xC0, 0xC5,
@@ -92,6 +88,33 @@ static inline unsigned char acs_translate(unsigned char c) {
 }
 
 static void backbuffer_reload_from_fb(struct limine_framebuffer *fb);
+
+static uint64_t resize_first_row(uint64_t old_rows, uint64_t new_rows, uint64_t cursor_row) {
+    if (new_rows >= old_rows || cursor_row <= new_rows) return 0;
+    if (old_rows - cursor_row < new_rows) return old_rows - new_rows;
+    return cursor_row - new_rows / 2;
+}
+
+static void copy_resized_cells(uint32_t *dst, uint64_t new_width, uint64_t new_height, const uint32_t *src, uint64_t old_width, uint64_t old_height, uint64_t first_row) {
+    if (!dst || !src || !current_font_w || !current_font_h) return;
+
+    uint64_t old_cols = old_width / current_font_w;
+    uint64_t old_rows = old_height / current_font_h;
+    uint64_t new_cols = new_width / current_font_w;
+    uint64_t new_rows = new_height / current_font_h;
+    uint64_t copy_cols = old_cols < new_cols ? old_cols : new_cols;
+    uint64_t available_rows = first_row < old_rows ? old_rows - first_row : 0;
+    uint64_t copy_rows = available_rows < new_rows ? available_rows : new_rows;
+    uint64_t copy_width = copy_cols * current_font_w;
+
+    for (uint64_t cell_row = 0; cell_row < copy_rows; cell_row++) {
+        uint64_t src_y = (first_row + cell_row) * current_font_h;
+        uint64_t dst_y = cell_row * current_font_h;
+        for (uint64_t glyph_row = 0; glyph_row < (uint64_t)current_font_h; glyph_row++) {
+            memcpy(dst + (dst_y + glyph_row) * new_width, src + (src_y + glyph_row) * old_width, copy_width * sizeof(uint32_t));
+        }
+    }
+}
 
 // Lazily heap-allocates back_buffer + alt_back_buffer once init_mm() has run.
 static void init_terminal_backbuffer(struct limine_framebuffer *fb) {
@@ -207,6 +230,7 @@ static void flush_backbuffer(struct limine_framebuffer *fb) {
                    bb + y * width,
                    width * sizeof(uint32_t));
         }
+        (void)update_fb(0, 0, width, height);
         return;
     }
 
@@ -247,6 +271,7 @@ static void flush_backbuffer(struct limine_framebuffer *fb) {
             }
         }
     }
+    (void)update_fb(0, 0, width, height);
 }
 
 static void flush_region_backbuffer(struct limine_framebuffer *fb, uint64_t x, uint64_t y, uint64_t w, uint64_t h) {
@@ -279,6 +304,7 @@ static void flush_region_backbuffer(struct limine_framebuffer *fb, uint64_t x, u
                    back_buffer + (y + row) * back_buffer_width + x,
                    w * sizeof(uint32_t));
         }
+        (void)update_fb(x, y, w, h);
         return;
     }
 
@@ -319,6 +345,7 @@ static void flush_region_backbuffer(struct limine_framebuffer *fb, uint64_t x, u
             }
         }
     }
+    (void)update_fb(x, y, w, h);
 }
 
 static void fill_rect_backbuffer(uint64_t x, uint64_t y, uint64_t w, uint64_t h, uint32_t color) {
@@ -462,30 +489,6 @@ static uint32_t ansi_to_hex(int code, bool bold) {
     return default_color;
 }
 
-static bool is_visible_control(unsigned char c) {
-    if (c == 0x7F) return true;
-    if (c >= 0x20) return false;
-
-    switch (c) {
-        case '\a':    // BEL - rings the bell, never printed as ^G
-        case '\033':  // ESC - begins an escape sequence
-        case '\r':    // CR
-        case '\n':    // LF
-        case '\b':    // BS
-        case '\t':    // HT
-        case '\0':    // NUL - ignored
-        case '\x0E':  // SO (Shift Out) - ignored (ACS not supported)
-        case '\x0F':  // SI (Shift In) - ignored (ACS not supported)
-            return false;
-        default:
-            return true;
-    }
-}
-
-static char visible_control_char(unsigned char c) {
-    return (c == 0x7F) ? '?' : (char)(c + '@');
-}
-
 static void int_to_str(uint64_t value, char *buf, size_t buf_size, int base, bool uppercase) {
     char temp[64];
     int i = 0;
@@ -596,48 +599,90 @@ static void double_to_str(double val, int precision, char *out, size_t out_size)
 }
 
 void sync_terminal(void) {
+    if (!fb_req.response || fb_req.response->framebuffer_count < 1) return;
+    struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
+    bool resized = back_buffer_initialized && (fb->width != back_buffer_width || fb->height != back_buffer_height);
+
+    uint32_t *prepared_back_buffer = NULL;
+    uint32_t *prepared_alt_back_buffer = NULL;
+    if (resized) {
+        uint64_t required_size = fb->width * sizeof(uint32_t) * fb->height;
+        prepared_back_buffer = (uint32_t *)malloc(required_size);
+        prepared_alt_back_buffer = (uint32_t *)malloc(required_size);
+        if (prepared_back_buffer && prepared_alt_back_buffer) {
+            uint64_t total_pixels = fb->width * fb->height;
+            for (uint64_t i = 0; i < total_pixels; i++) {
+                prepared_back_buffer[i] = bg_color;
+                prepared_alt_back_buffer[i] = bg_color;
+            }
+        } else {
+            free(prepared_back_buffer);
+            free(prepared_alt_back_buffer);
+            prepared_back_buffer = NULL;
+            prepared_alt_back_buffer = NULL;
+        }
+    }
+
     uint64_t rflags;
     spin_lock_irqsave(&term_lock, &rflags);
 
-    if (!fb_req.response || fb_req.response->framebuffer_count < 1) {
-        spin_unlock_irqrestore(&term_lock, rflags);
-        return;
-    }
-
-    struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
-
     if (!back_buffer_initialized) init_terminal_backbuffer(fb);
 
+    uint32_t *old_back_buffer = NULL;
+    uint32_t *old_alt_back_buffer = NULL;
     if (fb->width != back_buffer_width || fb->height != back_buffer_height) {
+        uint64_t old_width = back_buffer_width;
+        uint64_t old_height = back_buffer_height;
+        uint64_t old_rows = current_font_h ? old_height / current_font_h : 0;
+        uint64_t new_rows = current_font_h ? fb->height / current_font_h : 0;
+        uint64_t cursor_row = current_font_h ? cursor_y / current_font_h : 0;
+        uint64_t first_row = resize_first_row(old_rows, new_rows, cursor_row);
+        uint64_t alt_cursor_row = current_font_h ? alt_saved_cursor_y / current_font_h : 0;
+        uint64_t alt_first_row = alt_active ? resize_first_row(old_rows, new_rows, alt_cursor_row) : first_row;
         uint64_t new_pitch = fb->width * sizeof(uint32_t);
-        uint64_t required_size = new_pitch * fb->height;
-        uint32_t *new_back_buffer = (uint32_t *)malloc(required_size);
-        uint32_t *new_alt_back_buffer = (uint32_t *)malloc(required_size);
-
-        cursor_x = 0;
-        cursor_y = 0;
-        line_start_y = 0;
+        uint32_t *new_back_buffer = prepared_back_buffer;
+        uint32_t *new_alt_back_buffer = prepared_alt_back_buffer;
 
         if (new_back_buffer && new_alt_back_buffer) {
-            uint64_t total_pixels = fb->width * fb->height;
-            for (uint64_t i = 0; i < total_pixels; i++) {
-                new_back_buffer[i] = bg_color;
-                new_alt_back_buffer[i] = bg_color;
+            if (back_buffer_available && back_buffer && alt_back_buffer) {
+                if (cursor_visible && cursor_saved_w > 0 && cursor_saved_h > 0 && cursor_saved_x < old_width && cursor_saved_y < old_height) {
+                    uint64_t restore_width = cursor_saved_w;
+                    uint64_t restore_height = cursor_saved_h;
+                    if (restore_width > old_width - cursor_saved_x) restore_width = old_width - cursor_saved_x;
+                    if (restore_height > old_height - cursor_saved_y) restore_height = old_height - cursor_saved_y;
+                    for (uint64_t row = 0; row < restore_height; row++) {
+                        uint64_t offset = (cursor_saved_y + row) * old_width + cursor_saved_x;
+                        for (uint64_t column = 0; column < restore_width; column++) back_buffer[offset + column] = cursor_saved_pixels[row * cursor_saved_w + column];
+                    }
+                }
+
+                if (current_font_w && current_font_h) {
+                    copy_resized_cells(new_back_buffer, fb->width, fb->height, back_buffer, old_width, old_height, first_row);
+                    copy_resized_cells(new_alt_back_buffer, fb->width, fb->height, alt_back_buffer, old_width, old_height, alt_first_row);
+                } else {
+                    uint64_t copy_width = old_width < fb->width ? old_width : fb->width;
+                    uint64_t copy_height = old_height < fb->height ? old_height : fb->height;
+                    for (uint64_t row = 0; row < copy_height; row++) {
+                        memcpy(new_back_buffer + row * fb->width, back_buffer + row * old_width, copy_width * sizeof(uint32_t));
+                        memcpy(new_alt_back_buffer + row * fb->width, alt_back_buffer + row * old_width, copy_width * sizeof(uint32_t));
+                    }
+                }
             }
 
-            free(back_buffer);
-            free(alt_back_buffer);
+            old_back_buffer = back_buffer;
+            old_alt_back_buffer = alt_back_buffer;
             back_buffer = new_back_buffer;
             alt_back_buffer = new_alt_back_buffer;
+            prepared_back_buffer = NULL;
+            prepared_alt_back_buffer = NULL;
             back_buffer_width = fb->width;
             back_buffer_height = fb->height;
             back_buffer_pitch = new_pitch;
             back_buffer_available = true;
+            back_buffer_dirty = false;
         } else {
-            free(new_back_buffer);
-            free(new_alt_back_buffer);
-            free(back_buffer);
-            free(alt_back_buffer);
+            old_back_buffer = back_buffer;
+            old_alt_back_buffer = alt_back_buffer;
             back_buffer = NULL;
             alt_back_buffer = NULL;
             back_buffer_width = fb->width;
@@ -645,13 +690,41 @@ void sync_terminal(void) {
             back_buffer_pitch = new_pitch;
             back_buffer_available = false;
         }
+
+        uint64_t row_shift = first_row * current_font_h;
+        uint64_t alt_row_shift = alt_first_row * current_font_h;
+        cursor_y = cursor_y >= row_shift ? cursor_y - row_shift : 0;
+        line_start_y = line_start_y >= row_shift ? line_start_y - row_shift : 0;
+        saved_cursor_y = saved_cursor_y >= row_shift ? saved_cursor_y - row_shift : 0;
+        alt_saved_cursor_y = alt_saved_cursor_y >= alt_row_shift ? alt_saved_cursor_y - alt_row_shift : 0;
+
+        uint64_t max_x = fb->width > (uint64_t)current_font_w ? fb->width - current_font_w : 0;
+        uint64_t max_y = fb->height > (uint64_t)current_font_h ? fb->height - current_font_h : 0;
+        if (cursor_x > max_x) cursor_x = max_x;
+        if (cursor_y > max_y) cursor_y = max_y;
+        if (line_start_y > max_y) line_start_y = max_y;
+        if (saved_cursor_x > max_x) saved_cursor_x = max_x;
+        if (saved_cursor_y > max_y) saved_cursor_y = max_y;
+        if (alt_saved_cursor_x > max_x) alt_saved_cursor_x = max_x;
+        if (alt_saved_cursor_y > max_y) alt_saved_cursor_y = max_y;
+        cursor_visible = false;
+        cursor_saved_w = 0;
+        cursor_saved_h = 0;
+        region_set = false;
+        region_top = 0;
+        region_bottom = 0;
     }
 
     flush_backbuffer(fb);
     spin_unlock_irqrestore(&term_lock, rflags);
+    free(old_back_buffer);
+    free(old_alt_back_buffer);
+    free(prepared_back_buffer);
+    free(prepared_alt_back_buffer);
+    if (resized) {
+        for (int i = 0; i < NUM_TTYS; i++) tty_signal_pgrp(i, SIGWINCH);
+    }
 }
-
-void invalidate_terminal_backbuffer(void) { back_buffer_dirty = true; }
 
 void show_cursor(bool visible) {
     if (!current_font_w || !current_font_h) return;
@@ -819,10 +892,23 @@ void clrscr(void) {
 static int putchar_unlocked(int c) {
     unsigned char ch = (unsigned char)c;
 
-    if (state == STATE_NORMAL && is_visible_control(ch)) {
-        putchar_unlocked('^');
-        putchar_unlocked(visible_control_char(ch));
-        return EOF;
+    if (ch == '\0' || ch == 0x7F || ch >= 0x80) return 0;
+    if (ch < 0x20) {
+        switch (ch) {
+            case '\a':
+            case '\b':
+            case '\t':
+            case '\n':
+            case '\v':
+            case '\f':
+            case '\r':
+            case '\x0E':
+            case '\x0F':
+            case '\033':
+                break;
+            default:
+                return 0;
+        }
     }
 
     if (!font_pending_replaying) serial_putchar(COM1, ch);
@@ -875,7 +961,9 @@ static int putchar_unlocked(int c) {
             case '\a':   break;
             case '\033': state = STATE_EXPECT_BRACKET; break;
             case '\r':   cursor_x = 0; break;
-            case '\n':   {
+            case '\n':
+            case '\v':
+            case '\f':   {
                 // LF: move down, scroll if past bottom of scroll region.
                 // ONLCR: also move to column 0 (CR) on output.
                 cursor_x = 0;

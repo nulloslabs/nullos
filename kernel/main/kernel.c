@@ -1,48 +1,51 @@
 // Look at this #include mess...
-#include <io/terminal.h>
-#include <io/framebuffer.h>
 #include <main/panic.h>
-#include <io/initrd.h>
-#include <io/devices.h>
-#include <mm/mm.h>
-// Are we there yet?
 #include <main/gdt.h>
 #include <main/idt.h>
-#include <mm/pmm.h>
-#include <mm/vmm.h>
-#include <io/hpet.h>
-#include <io/rtc.h>
 #include <main/sched.h>
 #include <main/limine_req.h>
 #include <main/acpi.h>
-// Please, let this stop...
-#include <io/fonts.h>
+// Are we there yet?
 #include <main/boot_args.h>
-#include <io/pci.h>
 #include <main/sse.h>
 #include <main/machine_info.h>
 #include <main/halt.h>
-#include <io/pic.h>
-#include <io/pit.h>
-// Almost...there...
-#include <io/apic.h>
 #include <main/mp.h>
 #include <main/elf.h>
 #include <main/string.h>
-#include <syscalls/syscalls.h>
 #include <main/madt.h>
 #include <main/utsname.h>
+// Please, let this stop...
+#include <main/rng.h>
+#include <main/stack_protector.h>
+#include <io/terminal.h>
+#include <io/fb.h>
+#include <io/initrd.h>
+#include <io/devices.h>
+#include <io/hpet.h>
+#include <io/rtc.h>
+// Almost...there...
+#include <io/fonts.h>
+#include <io/pci.h>
+#include <io/pic.h>
+#include <io/pit.h>
+#include <io/apic.h>
 #include <io/ttys.h>
 #include <io/ptys.h>
-#include <main/rng.h>
 #include <io/serial.h>
 #include <io/tmpfs.h>
 #include <io/ps2_keyboard.h>
+#include <mm/mm.h>
+#include <mm/pmm.h>
+#include <mm/vmm.h>
+#include <syscalls/syscalls.h>
 // Lets never do that again.
 
 __attribute__((noreturn)) void kmain(void) {
     cli();
     clrscr();
+    // Check if we have a framebuffer given by Limine
+    if (fb_req.response && fb_req.response->framebuffer_count >= 1) current_fb_driver = FB_LIMINE;
     init_serial_ports();
     init_default_font();
     show_cursor(true); // Show cursor as soon as possible
@@ -68,6 +71,7 @@ __attribute__((noreturn)) void kmain(void) {
     init_rtc();
     init_pit();
     init_rng();
+    init_stack_protector();
     init_sched();
     init_pci();
     init_acpi_namespace();

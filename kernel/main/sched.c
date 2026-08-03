@@ -11,9 +11,9 @@
 #include <main/fd.h>
 #include <main/msr.h>
 #include <io/terminal.h>
+#include <io/usb.h>
 #include <mm/mm.h>
 #include <mm/vmm.h>
-#include <io/usb.h>
 #include <syscalls/syscall_impls.h>
 
 task_t tasks[MAX_TASKS];

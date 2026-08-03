@@ -1,12 +1,12 @@
+#include <main/string.h>
+#include <main/spinlocks.h>
 #include <io/e1000.h>
 #include <io/io.h>
+#include <io/net.h>
+#include <io/terminal.h>
 #include <mm/mm.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
-#include <main/string.h>
-#include <io/net.h>
-#include <main/spinlocks.h>
-#include <io/terminal.h>
 static uint8_t mac_addr[6];
 static volatile uint8_t *e1000_mmio;
 

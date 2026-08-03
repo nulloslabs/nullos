@@ -15,15 +15,7 @@
 devtmpfs_device_t devtmpfs_devices[MAX_DEVTMPFS_DEVICES];
 spinlock_t devtmpfs_lock = SPINLOCK_INIT;
 
-int register_device(const char* name, 
-    uint64_t (*read_fn)(void*, uint64_t, uint64_t, int), 
-    uint64_t (*write_fn)(const void*, uint64_t, uint64_t, int)) {
-    return register_device_idx(name, read_fn, write_fn, 0);
-}
-
-int register_device_idx(const char* name, 
-    uint64_t (*read_fn)(void*, uint64_t, uint64_t, int), 
-    uint64_t (*write_fn)(const void*, uint64_t, uint64_t, int), int index) {
+static int register_device_info(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index, bool block, uint64_t size) {
     if (!name || name[0] == '\0') {
         return -EINVAL;
     }
@@ -44,11 +36,13 @@ int register_device_idx(const char* name,
 
     for (int i = 0; i < MAX_DEVTMPFS_DEVICES; i++) {
         if (!devtmpfs_devices[i].active) {
-            strncpy(devtmpfs_devices[i].name, dev_name, 63);
-            devtmpfs_devices[i].name[65] = '\0';
+            strncpy(devtmpfs_devices[i].name, dev_name, 64);
+            devtmpfs_devices[i].name[64] = '\0';
             devtmpfs_devices[i].read = read_fn;
             devtmpfs_devices[i].write = write_fn;
             devtmpfs_devices[i].index = index;
+            devtmpfs_devices[i].block = block;
+            devtmpfs_devices[i].size = size;
             devtmpfs_devices[i].active = true;
             spin_unlock_irqrestore(&devtmpfs_lock, irq);
             return 0;
@@ -57,6 +51,34 @@ int register_device_idx(const char* name,
 
     spin_unlock_irqrestore(&devtmpfs_lock, irq);
     return -ENOMEM;
+}
+
+int register_device(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int)) { return register_device_info(name, read_fn, write_fn, 0, false, 0); }
+
+int register_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index) { return register_device_info(name, read_fn, write_fn, index, false, 0); }
+
+int register_block_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index, uint64_t size) { return register_device_info(name, read_fn, write_fn, index, true, size); }
+
+int get_block_device_size(const char *name, uint64_t *size) {
+    if (!name || !size) return -EINVAL;
+    const char *dev_name = name;
+    while (*dev_name == '.' || *dev_name == '/') dev_name++;
+    if (strncmp(dev_name, "dev/", 4) == 0) dev_name += 4;
+
+    uint64_t irq;
+    spin_lock_irqsave(&devtmpfs_lock, &irq);
+    for (int i = 0; i < MAX_DEVTMPFS_DEVICES; i++) {
+        if (!devtmpfs_devices[i].active || strcmp(devtmpfs_devices[i].name, dev_name) != 0) continue;
+        if (!devtmpfs_devices[i].block) {
+            spin_unlock_irqrestore(&devtmpfs_lock, irq);
+            return -ESPIPE;
+        }
+        *size = devtmpfs_devices[i].size;
+        spin_unlock_irqrestore(&devtmpfs_lock, irq);
+        return 0;
+    }
+    spin_unlock_irqrestore(&devtmpfs_lock, irq);
+    return -ENOENT;
 }
 
 int unregister_device(const char* name) {
@@ -77,6 +99,8 @@ int unregister_device(const char* name) {
             devtmpfs_devices[i].name[0] = '\0';
             devtmpfs_devices[i].read = NULL;
             devtmpfs_devices[i].write = NULL;
+            devtmpfs_devices[i].block = false;
+            devtmpfs_devices[i].size = 0;
             spin_unlock_irqrestore(&devtmpfs_lock, irq);
             return 0;
         }
@@ -249,6 +273,8 @@ void init_devices(void) {
         devtmpfs_devices[i].name[0] = '\0';
         devtmpfs_devices[i].read = NULL;
         devtmpfs_devices[i].write = NULL;
+        devtmpfs_devices[i].block = false;
+        devtmpfs_devices[i].size = 0;
     }
 
     register_device("null", null_read, null_write);

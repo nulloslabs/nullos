@@ -1,13 +1,17 @@
-#include <freestanding/stdbool.h>
-#include <freestanding/stdint.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <errno.h>
 #include <main/limine_req.h>
 #include <io/io.h>
+#include <io/fb.h>
 #include <io/pci.h>
 #include <io/terminal.h>
 #include <io/bga.h>
 #include <mm/vmm.h>
 
 static uint16_t bga_version = 0;
+static uint32_t bga_vram_size = 0;
+static bool bga_ready = false;
 
 static uint16_t read_bga_register(uint16_t index) {
     outw(BGA_IOPORT_INDEX, index);
@@ -17,6 +21,17 @@ static uint16_t read_bga_register(uint16_t index) {
 static void write_bga_register(uint16_t index, uint16_t value) {
     outw(BGA_IOPORT_INDEX, index);
     outw(BGA_IOPORT_DATA, value);
+}
+
+static uint32_t get_bga_vram_size(pci_device_t *dev, uint32_t bar0) {
+    uint32_t command = read_pci(dev->bus, dev->dev, dev->func, 0x04);
+    write_pci(dev->bus, dev->dev, dev->func, 0x04, command & ~0x2u);
+    write_pci(dev->bus, dev->dev, dev->func, 0x10, 0xFFFFFFFFu);
+    uint32_t mask = read_pci(dev->bus, dev->dev, dev->func, 0x10);
+    write_pci(dev->bus, dev->dev, dev->func, 0x10, bar0);
+    write_pci(dev->bus, dev->dev, dev->func, 0x04, command);
+    mask &= 0xFFFFFFF0u;
+    return mask ? (~mask + 1u) : 0;
 }
 
 static bool bpp_supported_by_bga(uint16_t bpp) {
@@ -113,28 +128,47 @@ static void update_framebuffer_masks(void) {
     }
 }
 
-void set_bga_fb(uint64_t width, uint64_t height, uint16_t bpp) {
-    if (!fb_req.response || fb_req.response->framebuffer_count < 1) return;
+int set_bga_resolution(uint64_t xres, uint64_t yres, uint64_t xres_virtual, uint64_t yres_virtual, uint64_t xoffset, uint64_t yoffset, uint16_t bpp) {
+    if (!fb_req.response || fb_req.response->framebuffer_count < 1) return -ENODEV;
     struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
 
-    if (bga_version == 0) {
+    if (!bga_ready || bga_version == 0) {
         printf("bga: adapter is not initialized\n");
-        return;
+        return -ENODEV;
     }
 
-    if (width < 320 || width > 2560 || height < 200 || height > 1600) {
+    if (xres < 320 || xres > 2560 || yres < 200 || yres > 1600) {
         printf("bga: unsupported resolution\n");
-        return;
+        return -EINVAL;
+    }
+
+    if (xres_virtual < xres || yres_virtual < yres || xres_virtual > UINT16_MAX || yres_virtual > UINT16_MAX || xoffset > xres_virtual - xres || yoffset > yres_virtual - yres) {
+        printf("bga: invalid virtual resolution or offset\n");
+        return -EINVAL;
     }
 
     if (!bpp_supported_by_bga(bpp)) {
         printf("bga: unsupported bpp\n");
-        return;
+        return -EINVAL;
     }
 
+    uint64_t bytes_per_pixel = (bpp + 7) / 8;
+    if (xres_virtual > UINT64_MAX / yres_virtual || xres_virtual * yres_virtual > UINT64_MAX / bytes_per_pixel || xres_virtual * yres_virtual * bytes_per_pixel > bga_vram_size) {
+        printf("bga: mode exceeds vram size\n");
+        return -ENOMEM;
+    }
+
+    uint16_t old_xres = read_bga_register(BGA_INDEX_XRES);
+    uint16_t old_yres = read_bga_register(BGA_INDEX_YRES);
+    uint16_t old_bpp = read_bga_register(BGA_INDEX_BPP);
+    uint16_t old_xres_virtual = read_bga_register(BGA_INDEX_VIRT_WIDTH);
+    uint16_t old_x_offset = read_bga_register(BGA_INDEX_X_OFFSET);
+    uint16_t old_y_offset = read_bga_register(BGA_INDEX_Y_OFFSET);
+    uint16_t old_enable = read_bga_register(BGA_INDEX_ENABLE);
+
     write_bga_register(BGA_INDEX_ENABLE, BGA_DISABLED);
-    write_bga_register(BGA_INDEX_XRES, width);
-    write_bga_register(BGA_INDEX_YRES, height);
+    write_bga_register(BGA_INDEX_XRES, xres);
+    write_bga_register(BGA_INDEX_YRES, yres);
     write_bga_register(BGA_INDEX_BPP, bpp);
     uint16_t enable_flags = BGA_ENABLED | BGA_LFB_ENABLED;
     bool eight_bit_dac = bpp == 8 && bga_version >= BGA_DISPI_ID4;
@@ -142,28 +176,46 @@ void set_bga_fb(uint64_t width, uint64_t height, uint16_t bpp) {
     write_bga_register(BGA_INDEX_ENABLE, enable_flags);
 
     if (bpp == 8) program_bga_palette(eight_bit_dac);
+    if (bga_version >= BGA_DISPI_ID1) write_bga_register(BGA_INDEX_VIRT_WIDTH, xres_virtual);
+    write_bga_register(BGA_INDEX_X_OFFSET, xoffset);
+    write_bga_register(BGA_INDEX_Y_OFFSET, yoffset);
 
-    if (bga_version >= BGA_DISPI_ID1) write_bga_register(BGA_INDEX_VIRT_WIDTH, width);
-
-    uint16_t actual_width = read_bga_register(BGA_INDEX_XRES);
-    uint16_t actual_height = read_bga_register(BGA_INDEX_YRES);
+    uint16_t actual_xres = read_bga_register(BGA_INDEX_XRES);
+    uint16_t actual_yres = read_bga_register(BGA_INDEX_YRES);
     uint16_t actual_bpp = read_bga_register(BGA_INDEX_BPP);
-    uint16_t virtual_width = actual_width;
+    uint16_t actual_xres_virtual = actual_xres;
+    uint16_t maximum_yres_virtual = actual_yres;
 
-    if (bga_version >= BGA_DISPI_ID1) virtual_width = read_bga_register(BGA_INDEX_VIRT_WIDTH);
-
-    if (actual_width != width || actual_height != height || actual_bpp != bpp || virtual_width < actual_width) {
-        printf("bga: adapter rejected framebuffer mode\n");
-        return;
+    if (bga_version >= BGA_DISPI_ID1) {
+        actual_xres_virtual = read_bga_register(BGA_INDEX_VIRT_WIDTH);
+        maximum_yres_virtual = read_bga_register(BGA_INDEX_VIRT_HEIGHT);
     }
 
-    fb->width = (uint64_t)actual_width;
-    fb->height = (uint64_t)actual_height;
-    fb->pitch = (uint64_t)virtual_width * ((actual_bpp + 7) / 8);
+    if (actual_xres != xres || actual_yres != yres || actual_bpp != bpp || actual_xres_virtual < xres || maximum_yres_virtual < yres_virtual || read_bga_register(BGA_INDEX_X_OFFSET) != xoffset || read_bga_register(BGA_INDEX_Y_OFFSET) != yoffset) {
+        write_bga_register(BGA_INDEX_ENABLE, BGA_DISABLED);
+        write_bga_register(BGA_INDEX_XRES, old_xres);
+        write_bga_register(BGA_INDEX_YRES, old_yres);
+        write_bga_register(BGA_INDEX_BPP, old_bpp);
+        if (bga_version >= BGA_DISPI_ID1) write_bga_register(BGA_INDEX_VIRT_WIDTH, old_xres_virtual);
+        write_bga_register(BGA_INDEX_X_OFFSET, old_x_offset);
+        write_bga_register(BGA_INDEX_Y_OFFSET, old_y_offset);
+        write_bga_register(BGA_INDEX_ENABLE, old_enable);
+        printf("bga: adapter rejected framebuffer mode\n");
+        return -EINVAL;
+    }
+
+    fb->width = (uint64_t)actual_xres;
+    fb->height = (uint64_t)actual_yres;
+    fb->pitch = (uint64_t)actual_xres_virtual * ((actual_bpp + 7) / 8);
     fb->bpp = actual_bpp;
+    fb_xres_virtual = actual_xres_virtual;
+    fb_yres_virtual = yres_virtual;
+    fb_xoffset = xoffset;
+    fb_yoffset = yoffset;
 
     update_framebuffer_masks();
     sync_terminal();
+    return 0;
 }
 
 void init_bga(pci_device_t *dev) {
@@ -197,6 +249,12 @@ void init_bga(pci_device_t *dev) {
         return;
     }
 
+    bga_vram_size = get_bga_vram_size(dev, bar0);
+    if (bga_vram_size < PAGE_SIZE) {
+        printf("bga: invalid vram bar size\n");
+        return;
+    }
+
     write_bga_register(BGA_INDEX_ID, BGA_DISPI_ID5);
     bga_version = read_bga_register(BGA_INDEX_ID);
 
@@ -214,11 +272,11 @@ void init_bga(pci_device_t *dev) {
             return;
     }
 
-    uint64_t width = fb->width;
-    uint64_t height = fb->height;
+    uint64_t xres = fb->width;
+    uint64_t yres = fb->height;
     uint16_t bpp = fb->bpp;
 
-    if (width < 320 || width > 2560 || height < 200 || height > 1600) {
+    if (xres < 320 || xres > 2560 || yres < 200 || yres > 1600) {
         printf("bga: unsupported resolution\n");
         return;
     }
@@ -228,10 +286,21 @@ void init_bga(pci_device_t *dev) {
         return;
     }
 
-    fb->address = phys_to_virt(phys_vram);
-    set_bga_fb((uint16_t)width, (uint16_t)height, bpp);
+    fb->address = vmap_mmio(phys_vram, (bga_vram_size + PAGE_SIZE - 1) / PAGE_SIZE);
+    if (!fb->address) {
+        printf("bga: unable to map vram\n");
+        return;
+    }
 
-    if (read_bga_register(BGA_INDEX_XRES) != width || read_bga_register(BGA_INDEX_YRES) != height || read_bga_register(BGA_INDEX_BPP) != bpp) return;
+    bga_ready = true;
 
+    if (set_bga_resolution(xres, yres, xres, yres, 0, 0, bpp) < 0) {
+        bga_ready = false;
+        return;
+    }
+
+    if (read_bga_register(BGA_INDEX_XRES) != xres || read_bga_register(BGA_INDEX_YRES) != yres || read_bga_register(BGA_INDEX_BPP) != bpp) return;
+
+    current_fb_driver = FB_BGA;
     printf("bga: initialized bga\n");
 }

@@ -67,6 +67,7 @@ int delete_initrd(const char *path);
 int rmdir_initrd(const char *path);
 int symlink_initrd(const char *target, const char *path, uid_t uid, gid_t gid);
 int chmod_initrd(const char *path, mode_t mode);
+int chown_initrd(const char *path, uid_t uid, gid_t gid, bool follow);
 int get_initrd_entry(int index, directory_entry_t* entry);
 int next_initrd_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size,
                       uint8_t *child_type, ino_t *child_ino);

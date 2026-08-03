@@ -2,11 +2,11 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <main/elf.h>
-#include <io/initrd.h>
 #include <main/msr.h>
 #include <main/spinlocks.h>
 #include <main/rng.h>
 #include <main/string.h>
+#include <io/initrd.h>
 #include <io/devtmpfs.h>
 #include <io/procfs.h>
 #include <mm/mm.h>
@@ -14,6 +14,68 @@
 #include <mm/vmm.h>
 #include <mm/vma.h>
 #include <syscalls/syscalls.h>
+
+#define ELF_USER_ADDR_MAX 0x0000800000000000ULL
+#define ELF_MAX_PHNUM 128
+
+static bool elf_range_valid(uint64_t offset, uint64_t length, uint64_t size) {
+    return offset <= size && length <= size - offset;
+}
+
+static bool elf_add_valid(uint64_t a, uint64_t b, uint64_t *out) {
+    if (a > UINT64_MAX - b) return false;
+    *out = a + b;
+    return true;
+}
+
+static int validate_elf_image(const uint8_t *data, uint64_t size, uint64_t base_addr, const elf64_ehdr_t **ehdr_out) {
+    if (!data || size < sizeof(elf64_ehdr_t)) return -ENOEXEC;
+
+    const elf64_ehdr_t *ehdr = (const elf64_ehdr_t *)data;
+    if (ehdr->magic != ELF_MAGIC || ehdr->class != ELF_CLASS64 || ehdr->data != ELF_DATA2LSB || ehdr->machine != EM_X86_64) return -ENOEXEC;
+    if (ehdr->type != ET_EXEC && ehdr->type != ET_DYN) return -ENOEXEC;
+    if (ehdr->ehsize < sizeof(*ehdr) || ehdr->phentsize != sizeof(elf64_phdr_t) || ehdr->phnum == 0 || ehdr->phnum > ELF_MAX_PHNUM) return -ENOEXEC;
+
+    uint64_t phdr_size = (uint64_t)ehdr->phnum * sizeof(elf64_phdr_t);
+    if (!elf_range_valid(ehdr->phoff, phdr_size, size)) return -ENOEXEC;
+
+    uint64_t entry;
+    if (!elf_add_valid(base_addr, ehdr->entry, &entry) || entry >= ELF_USER_ADDR_MAX) return -ENOEXEC;
+
+    const elf64_phdr_t *phdrs = (const elf64_phdr_t *)(data + ehdr->phoff);
+    bool entry_is_executable = false;
+    bool has_load = false;
+    for (uint16_t i = 0; i < ehdr->phnum; i++) {
+        const elf64_phdr_t *ph = &phdrs[i];
+        if (ph->type == PT_INTERP) {
+            if (ph->filesz < 2 || ph->filesz > 256 || !elf_range_valid(ph->offset, ph->filesz, size)) return -ENOEXEC;
+            if (data[ph->offset + ph->filesz - 1] != '\0') return -ENOEXEC;
+            continue;
+        }
+        if (ph->type != PT_LOAD) continue;
+        has_load = true;
+        if (ph->filesz > ph->memsz || !elf_range_valid(ph->offset, ph->filesz, size)) return -ENOEXEC;
+        if ((ph->flags & PF_W) && (ph->flags & PF_X)) return -ENOEXEC;
+
+        uint64_t start;
+        uint64_t end;
+        if (!elf_add_valid(base_addr, ph->vaddr, &start) || !elf_add_valid(start, ph->memsz, &end)) return -ENOEXEC;
+        if (start >= ELF_USER_ADDR_MAX || end > ELF_USER_ADDR_MAX || end < start) return -ENOEXEC;
+        if ((ph->offset & (PAGE_SIZE - 1)) != (ph->vaddr & (PAGE_SIZE - 1))) return -ENOEXEC;
+        if ((ph->flags & PF_X) && entry >= start && entry < end) entry_is_executable = true;
+    }
+
+    if (!has_load || !entry_is_executable) return -ENOEXEC;
+    if (ehdr_out) *ehdr_out = ehdr;
+    return 0;
+}
+
+static bool can_execute_file(const initrd_file_t *file) {
+    if (!file || !current_task_ptr) return false;
+    if (current_task_ptr->euid == 0) return (file->mode & 0111) != 0;
+    int shift = current_task_ptr->euid == file->uid ? 6 : (current_task_ptr->egid == file->gid ? 3 : 0);
+    return ((file->mode >> shift) & 1) != 0;
+}
 
 static uint64_t aslr_random_offset(uint64_t max_pages) {
     uint64_t val;
@@ -120,14 +182,11 @@ static uint64_t setup_stack(vmm_context_t *ctx, uint64_t v_rsp, char **argv, cha
     return v_rsp;
 }
 
-static int load_elf_segments(vmm_context_t *ctx, uint8_t *data,
-                              elf64_ehdr_t *ehdr, uint64_t base_addr,
-                              elf64_dyn_t **dynamic_out, vma_table_t *vmas,
-                              const char *name) {
-    elf64_phdr_t *phdrs = (elf64_phdr_t *)(data + ehdr->phoff);
+static int load_elf_segments(vmm_context_t *ctx, const uint8_t *data, const elf64_ehdr_t *ehdr, uint64_t base_addr, elf64_dyn_t **dynamic_out, vma_table_t *vmas, const char *name) {
+    const elf64_phdr_t *phdrs = (const elf64_phdr_t *)(data + ehdr->phoff);
 
     for (int i = 0; i < ehdr->phnum; i++) {
-        elf64_phdr_t *ph = &phdrs[i];
+        const elf64_phdr_t *ph = &phdrs[i];
 
         if (ph->type == PT_LOAD) {
             uint64_t seg_start = base_addr + ph->vaddr;
@@ -147,7 +206,11 @@ static int load_elf_segments(vmm_context_t *ctx, uint8_t *data,
             for (uint64_t a = page_start; a < page_end; a += 0x1000) {
                 if (get_vmm_phys(ctx, a) == 0) {
                     void *page = pmalloc();
-                    map_vmm(ctx, a, (uint64_t)page, VMM_USER | VMM_WRITABLE | VMM_NX);
+                    if (!page) return -ENOMEM;
+                    if (!map_vmm(ctx, a, (uint64_t)page, VMM_USER | VMM_WRITABLE | VMM_NX)) {
+                        pfree(page);
+                        return -ENOMEM;
+                    }
                 }
             }
 
@@ -222,21 +285,22 @@ int execute_elf(const char *path, char **argv, char **envp) {
     if (!file.data) return -ENOENT;
 
     if (S_ISDIR(file.mode)) return -EISDIR;
-    if (!(file.mode & S_IXUGO)) return -EPERM;
+    if (!can_execute_file(&file)) return -EACCES;
 
     uint8_t *data = (uint8_t *)file.data;
-    elf64_ehdr_t *ehdr = (elf64_ehdr_t *)data;
-
-    if (ehdr->magic != ELF_MAGIC || ehdr->class != ELF_CLASS64 || ehdr->machine != EM_X86_64) return -ENOEXEC;
+    const elf64_ehdr_t *ehdr = NULL;
+    uint64_t base_addr = 0;
+    if (file.size >= sizeof(elf64_ehdr_t) && ((elf64_ehdr_t *)data)->type == ET_DYN) base_addr = 0x100000000ULL + aslr_random_offset(0x40000);
+    int validation = validate_elf_image(data, file.size, base_addr, &ehdr);
+    if (validation < 0) return validation;
 
     vmm_context_t *ctx = create_vmm_context();
     if (!ctx) return -ENOMEM;
 
     // ASLR: randomize PIE base address
-    uint64_t base_addr = (ehdr->type == ET_DYN) ? (0x100000000ULL + aslr_random_offset(0x40000)) : 0;
     const char *interp_path = NULL;
 
-    elf64_phdr_t *phdrs = (elf64_phdr_t *)(data + ehdr->phoff);
+    const elf64_phdr_t *phdrs = (const elf64_phdr_t *)(data + ehdr->phoff);
     for (int i = 0; i < ehdr->phnum; i++) {
         if (phdrs[i].type == PT_INTERP) {
             interp_path = (const char *)(data + phdrs[i].offset);
@@ -248,7 +312,8 @@ int execute_elf(const char *path, char **argv, char **envp) {
     vma_table_t local_vmas;
     init_vma_table(&local_vmas);
 
-    load_elf_segments(ctx, data, ehdr, base_addr, NULL, &local_vmas, path);
+    int load_status = load_elf_segments(ctx, data, ehdr, base_addr, NULL, &local_vmas, path);
+    if (load_status < 0) { destroy_vmm_context(ctx); return load_status; }
 
     uint64_t phdr_addr = 0;
     for (int i = 0; i < ehdr->phnum; i++) {
@@ -265,12 +330,14 @@ int execute_elf(const char *path, char **argv, char **envp) {
         initrd_file_t ifile = read_initrd(interp_path);
         if (ifile.data) {
             uint8_t *idata = (uint8_t *)ifile.data;
-            elf64_ehdr_t *iehdr = (elf64_ehdr_t *)idata;
-            // ASLR: randomize interpreter base
-            interp_base = (iehdr->type == ET_DYN) ? (0x5000000000ULL + aslr_random_offset(0x40000)) : 0;
-            load_elf_segments(ctx, idata, iehdr, interp_base, NULL, &local_vmas, interp_path);
+            const elf64_ehdr_t *iehdr = NULL;
+            if (ifile.size >= sizeof(elf64_ehdr_t) && ((elf64_ehdr_t *)idata)->type == ET_DYN) interp_base = 0x5000000000ULL + aslr_random_offset(0x40000);
+            validation = validate_elf_image(idata, ifile.size, interp_base, &iehdr);
+            if (validation < 0) { destroy_vmm_context(ctx); return validation; }
+            load_status = load_elf_segments(ctx, idata, iehdr, interp_base, NULL, &local_vmas, interp_path);
+            if (load_status < 0) { destroy_vmm_context(ctx); return load_status; }
             entry = iehdr->entry + interp_base;
-        }
+        } else { destroy_vmm_context(ctx); return -ENOENT; }
     }
 
     elf64_auxv_t auxv[10];
@@ -286,7 +353,7 @@ int execute_elf(const char *path, char **argv, char **envp) {
 
     uint64_t stack_vaddr = USER_STACK_BASE - USER_STACK_SIZE;
     void *stack = vmap_user_at(ctx, stack_vaddr, USER_STACK_SIZE, VMM_USER | VMM_WRITABLE | VMM_NX);
-    if (!stack) return -ENOMEM;
+    if (!stack) { destroy_vmm_context(ctx); return -ENOMEM; }
     add_vma(&local_vmas, stack_vaddr, stack_vaddr + USER_STACK_SIZE,
             VMA_PROT_READ | VMA_PROT_WRITE, VMA_FLAG_ANON | VMA_FLAG_STACK, 0, "[stack]");
 
@@ -306,6 +373,10 @@ int execute_elf(const char *path, char **argv, char **envp) {
     heap_start = (heap_start + 0xFFF) & ~0xFFFULL; // page align
 
     pid_t pid = create_task((void(*)(void))entry, 3, ctx, v_rsp);
+    if (pid < 0) {
+        destroy_vmm_context(ctx);
+        return pid;
+    }
     if (pid >= 0) {
         tasks[pid].stack_base = stack;
         tasks[pid].brk = heap_start;
@@ -348,21 +419,22 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     if (!file.data) return -ENOENT;
 
     if (S_ISDIR(file.mode)) return -EISDIR;
-    if (!(file.mode & S_IXUGO)) return -EPERM;
+    if (!can_execute_file(&file)) return -EACCES;
 
     uint8_t *data = (uint8_t *)file.data;
-    elf64_ehdr_t *ehdr = (elf64_ehdr_t *)data;
-
-    if (ehdr->magic != ELF_MAGIC || ehdr->class != ELF_CLASS64 || ehdr->machine != EM_X86_64) return -ENOEXEC;
+    const elf64_ehdr_t *ehdr = NULL;
+    uint64_t base_addr = 0;
+    if (file.size >= sizeof(elf64_ehdr_t) && ((elf64_ehdr_t *)data)->type == ET_DYN) base_addr = 0x100000000ULL + aslr_random_offset(0x40000);
+    int validation = validate_elf_image(data, file.size, base_addr, &ehdr);
+    if (validation < 0) return validation;
 
     vmm_context_t *ctx = create_vmm_context();
     if (!ctx) return -ENOMEM;
 
     // ASLR: randomize PIE base address
-    uint64_t base_addr = (ehdr->type == ET_DYN) ? (0x100000000ULL + aslr_random_offset(0x40000)) : 0;
     const char *interp_path = NULL;
 
-    elf64_phdr_t *phdrs = (elf64_phdr_t *)(data + ehdr->phoff);
+    const elf64_phdr_t *phdrs = (const elf64_phdr_t *)(data + ehdr->phoff);
     for (int i = 0; i < ehdr->phnum; i++) {
         if (phdrs[i].type == PT_INTERP) {
             interp_path = (const char *)(data + phdrs[i].offset);
@@ -374,7 +446,8 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     vma_table_t local_vmas;
     init_vma_table(&local_vmas);
 
-    load_elf_segments(ctx, data, ehdr, base_addr, NULL, &local_vmas, path);
+    int load_status = load_elf_segments(ctx, data, ehdr, base_addr, NULL, &local_vmas, path);
+    if (load_status < 0) { destroy_vmm_context(ctx); return load_status; }
 
     uint64_t phdr_addr = 0;
     for (int i = 0; i < ehdr->phnum; i++) {
@@ -391,12 +464,14 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
         initrd_file_t ifile = read_initrd(interp_path);
         if (ifile.data) {
             uint8_t *idata = (uint8_t *)ifile.data;
-            elf64_ehdr_t *iehdr = (elf64_ehdr_t *)idata;
-            // ASLR: randomize interpreter base
-            interp_base = (iehdr->type == ET_DYN) ? (0x5000000000ULL + aslr_random_offset(0x40000)) : 0;
-            load_elf_segments(ctx, idata, iehdr, interp_base, NULL, &local_vmas, interp_path);
+            const elf64_ehdr_t *iehdr = NULL;
+            if (ifile.size >= sizeof(elf64_ehdr_t) && ((elf64_ehdr_t *)idata)->type == ET_DYN) interp_base = 0x5000000000ULL + aslr_random_offset(0x40000);
+            validation = validate_elf_image(idata, ifile.size, interp_base, &iehdr);
+            if (validation < 0) { destroy_vmm_context(ctx); return validation; }
+            load_status = load_elf_segments(ctx, idata, iehdr, interp_base, NULL, &local_vmas, interp_path);
+            if (load_status < 0) { destroy_vmm_context(ctx); return load_status; }
             entry = iehdr->entry + interp_base;
-        }
+        } else { destroy_vmm_context(ctx); return -ENOENT; }
     }
 
     elf64_auxv_t auxv[10];
@@ -412,7 +487,7 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
 
     uint64_t stack_vaddr = USER_STACK_BASE - USER_STACK_SIZE;
     void *stack = vmap_user_at(ctx, stack_vaddr, USER_STACK_SIZE, VMM_USER | VMM_WRITABLE | VMM_NX);
-    if (!stack) return -ENOMEM;
+    if (!stack) { destroy_vmm_context(ctx); return -ENOMEM; }
     add_vma(&local_vmas, stack_vaddr, stack_vaddr + USER_STACK_SIZE, VMA_PROT_READ | VMA_PROT_WRITE, VMA_FLAG_ANON | VMA_FLAG_STACK, 0, "[stack]");
 
     char *empty_envp[] = { NULL };

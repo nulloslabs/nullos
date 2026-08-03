@@ -55,9 +55,9 @@ syscall_entry:
     pop rax
     pop rbx
     pop rcx
-    mov rdx, rcx
-    shr rdx, 48
-    jz .Lrcx_ok
+    movabs rdx, 0x0000800000000000
+    cmp rcx, rdx
+    jb .Lrcx_ok
     xor rcx, rcx           // Force non-canonical/kernel addresses to 0 to safely fault in ring 3
 .Lrcx_ok:
     pop rdx
@@ -69,6 +69,11 @@ syscall_entry:
     pop r9
     pop r10
     pop r11
+    push rdx
+    movabs rdx, 0xfffffffffffc8fff
+    and r11, rdx
+    or r11, 2
+    pop rdx
     pop r12
     pop r13
     pop r14
