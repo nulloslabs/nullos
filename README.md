@@ -14,7 +14,7 @@ A secure, fast and privacy-focused hobby OS.
 | Done | Framebuffer, BGA, SVGA II support | |
 | Done | Sound card support | |
 | Done | Initrd support | |
-| Done | GZIP decompression support | No compression support. | |
+| Done | GZIP decompression support | No compression support. |
 | Done | GDT, IDT and SSE support | |
 | Done | Modular font system | |
 | Done | Serial port support | |
