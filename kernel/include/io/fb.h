@@ -5,7 +5,7 @@
 typedef enum {
     FB_NONE,    // No framebuffer driver
     FB_LIMINE,  // Framebuffer provided by Limine, VESA/GOP
-    FB_BGA,     // BGA (Bochs Graphics Adapter)
+    FB_BGA,     // Bochs Graphics Adapter
     FB_SVGA_II, // VMware SVGA II
 } fb_driver_t;
 
