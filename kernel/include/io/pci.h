@@ -19,7 +19,6 @@ typedef struct {
     int   count;
 } intx_chain_t;
 
-
 extern pci_device_t pci_devices[MAX_PCI_DEVICES];
 extern int pci_device_count;
 

@@ -53,11 +53,17 @@ static int register_device_info(const char *name, uint64_t (*read_fn)(void *, ui
     return -ENOMEM;
 }
 
-int register_device(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int)) { return register_device_info(name, read_fn, write_fn, 0, false, 0); }
+int register_device(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int)) {
+    return register_device_info(name, read_fn, write_fn, 0, false, 0);
+}
 
-int register_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index) { return register_device_info(name, read_fn, write_fn, index, false, 0); }
+int register_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index) {
+    return register_device_info(name, read_fn, write_fn, index, false, 0);
+}
 
-int register_block_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index, uint64_t size) { return register_device_info(name, read_fn, write_fn, index, true, size); }
+int register_block_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index, uint64_t size) {
+    return register_device_info(name, read_fn, write_fn, index, true, size);
+}
 
 int get_block_device_size(const char *name, uint64_t *size) {
     if (!name || !size) return -EINVAL;
@@ -294,16 +300,16 @@ void init_devices(void) {
         }
     }
 
-    register_device_idx("tty",  read_tty, write_tty, 0);
+    register_device_idx("tty",     read_tty, write_tty, 0);
     register_device_idx("console", read_tty, write_tty, 0);
-    register_device_idx("tty0", read_tty, write_tty, 0);
-    register_device_idx("tty1", read_tty, write_tty, 1);
-    register_device_idx("tty2", read_tty, write_tty, 2);
-    register_device_idx("tty3", read_tty, write_tty, 3);
-    register_device_idx("tty4", read_tty, write_tty, 4);
-    register_device_idx("tty5", read_tty, write_tty, 5);
-    register_device_idx("tty6", read_tty, write_tty, 6);
-    register_device_idx("tty7", read_tty, write_tty, 7);
+    register_device_idx("tty0",    read_tty, write_tty, 0);
+    register_device_idx("tty1",    read_tty, write_tty, 1);
+    register_device_idx("tty2",    read_tty, write_tty, 2);
+    register_device_idx("tty3",    read_tty, write_tty, 3);
+    register_device_idx("tty4",    read_tty, write_tty, 4);
+    register_device_idx("tty5",    read_tty, write_tty, 5);
+    register_device_idx("tty6",    read_tty, write_tty, 6);
+    register_device_idx("tty7",    read_tty, write_tty, 7);
 
     register_device("ptmx", read_ptmx, write_ptmx);
 
