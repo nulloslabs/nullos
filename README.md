@@ -9,18 +9,19 @@ A secure, fast and privacy-focused hobby OS.
 | Status | Feature | Notes |
 | :--- | :--- | :--- |
 | Done | USB support | Only UHCI. |
-| Done | ACPI support |
-| Done | PCI support |
-| Done | Sound card support |
-| Done | Initrd support |
-| Done | GZIP decompression support | No compression support. |
-| Done | GDT, IDT and SSE support |
-| Done | Modular font system |
-| Done | Serial port support |
-| Done | Syscall support |
-| Done | ELF executable support |
-| Done | MP support |
-| Done | Networking and networking card support |
+| Done | ACPI support | |
+| Done | PCI support | |
+| Done | Framebuffer, BGA, SVGA II support | |
+| Done | Sound card support | |
+| Done | Initrd support | |
+| Done | GZIP decompression support | No compression support. | |
+| Done | GDT, IDT and SSE support | |
+| Done | Modular font system | |
+| Done | Serial port support | |
+| Done | Syscall support | |
+| Done | ELF executable support | |
+| Done | MP support | |
+| Done | Networking and networking card support | |
 
 ## 🛠️ Build Requirements
 
