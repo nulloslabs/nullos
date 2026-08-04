@@ -6,12 +6,19 @@
 #define LEGACY_IRQ_BASE   32         // PIC/IOAPIC remap base
 #define MSI_VECTOR_BASE   48         // first vector we hand out for MSI
 #define MSI_VECTOR_END    96         // exclusive end (48 vectors available)
+#define MAX_INTX_SHARED   8
 
 typedef struct {
     uint8_t bus, dev, func;
     uint16_t vendor, device;
     uint8_t class, subclass, progif;
 } pci_device_t;
+
+typedef struct {
+    void (*fns[MAX_INTX_SHARED])(void);
+    int   count;
+} intx_chain_t;
+
 
 extern pci_device_t pci_devices[MAX_PCI_DEVICES];
 extern int pci_device_count;

@@ -2,7 +2,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include <stdbool.h>
+#include <main/spinlocks.h>
 #include <io/pci.h>
 
 #define IDE_CLASS        0x01
@@ -59,18 +59,18 @@ typedef struct {
     uint16_t flags;
 } __attribute__((packed)) ide_prd_t;
 
+extern bool is_pata_present;
+extern bool is_atapi_present;
+extern spinlock_t ide_lock;
+extern uint8_t ide_dma_data[IDE_DMA_BUFFER_SIZE] __attribute__((aligned(4096)));
+
 void get_ide_device(uint8_t index, ide_device_t *device);
 void select_ide_device(const ide_device_t *device);
 void delay_ide_400ns(const ide_device_t *device);
 int wait_ide_not_busy(const ide_device_t *device);
 int wait_ide_drq(const ide_device_t *device);
-void lock_ide(uint64_t *flags);
-void unlock_ide(uint64_t flags);
-uint8_t *get_ide_dma_data(void);
 int prepare_ide_dma(const ide_device_t *device, uint32_t bytes, bool read);
 int start_ide_dma(const ide_device_t *device);
-bool ide_has_pata(void);
-bool ide_has_atapi(void);
 bool make_ide_disk_name(char *name, size_t name_size, const char *prefix, uint64_t index);
 bool make_ide_numbered_name(char *name, size_t name_size, const char *prefix, uint64_t index);
 bool init_ide(pci_device_t *dev);

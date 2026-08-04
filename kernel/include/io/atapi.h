@@ -1,12 +1,6 @@
 #pragma once
 
 #include <stdint.h>
-#include <io/ide.h>
-
-#define ATAPI_CLASS        0x01
-#define ATAPI_SUBCLASS     0x01
-#define ATAPI_PROGIF_MASK  0x80
-#define ATAPI_PROGIF_VALUE 0x80
 
 #define ATAPI_COMMAND_IDENTIFY_PACKET 0xA1
 #define ATAPI_COMMAND_PACKET          0xA0

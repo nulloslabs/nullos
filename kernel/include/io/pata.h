@@ -1,12 +1,6 @@
 #pragma once
 
 #include <stdint.h>
-#include <io/ide.h>
-
-#define PATA_CLASS        0x01
-#define PATA_SUBCLASS     0x01
-#define PATA_PROGIF_MASK  0x80
-#define PATA_PROGIF_VALUE 0x80
 
 #define PATA_COMMAND_READ_DMA    0xC8
 #define PATA_COMMAND_WRITE_DMA   0xCA

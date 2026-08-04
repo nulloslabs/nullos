@@ -14,19 +14,12 @@
 #include <io/uhci.h>
 #include <io/terminal.h>
 
-pci_device_t pci_devices[MAX_PCI_DEVICES];
-int pci_device_count = 0;
-
-#define MAX_INTX_SHARED 8
-typedef struct {
-    void (*fns[MAX_INTX_SHARED])(void);
-    int   count;
-} intx_chain_t;
-
 static void (*msi_handlers[256])(void) = { 0 };
 static intx_chain_t intx_chains[16] = { 0 }; // legacy IRQs 0..15
-
 static uint8_t next_msi_vector = MSI_VECTOR_BASE;
+
+pci_device_t pci_devices[MAX_PCI_DEVICES];
+int pci_device_count = 0;
 
 // Called from every per-vector ISR stub in pci_isr.S
 void pci_dispatch(uint8_t vector) {
@@ -220,11 +213,11 @@ void init_pci_drivers(void) {
 
     const struct {
         const char *name;
-        bool (*present)(void);
+        const bool *present;
         void (*init)(void);
     } known_storage_drivers[] = {
-        {"pata", ide_has_pata, init_pata},
-        {"atapi", ide_has_atapi, init_atapi},
+        {"pata", &is_pata_present, init_pata},
+        {"atapi", &is_atapi_present, init_atapi},
     };
 
     const struct {
@@ -254,7 +247,7 @@ void init_pci_drivers(void) {
             printf("pci: found controller for %s\n", known_storage_controllers[i].name);
             if (known_storage_controllers[i].init(dev)) {
                 for (int k = 0; k < (int)(sizeof(known_storage_drivers) / sizeof(known_storage_drivers[0])); k++) {
-                    if (!known_storage_drivers[k].present()) continue;
+                    if (!known_storage_drivers[k].present) continue;
                     printf("pci: found driver for %s\n", known_storage_drivers[k].name);
                     known_storage_drivers[k].init();
                 }

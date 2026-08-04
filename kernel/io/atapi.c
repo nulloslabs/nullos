@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <main/string.h>
+#include <main/spinlocks.h>
 #include <io/atapi.h>
 #include <io/devices.h>
 #include <io/ide.h>
@@ -103,7 +104,7 @@ static int read_atapi_index(int index, void *data, uint64_t count, uint64_t offs
     if (offset >= size || count > size - offset) return -EINVAL;
 
     uint64_t flags;
-    lock_ide(&flags);
+    spin_lock_irqsave(&ide_lock, &flags);
     uint64_t completed = 0;
     int status = 0;
     while (completed < count) {
@@ -120,10 +121,10 @@ static int read_atapi_index(int index, void *data, uint64_t count, uint64_t offs
         if (status < 0) break;
         uint64_t bytes = (uint64_t)chunk * ATAPI_SECTOR_SIZE - sector_offset;
         if (bytes > remaining) bytes = remaining;
-        memcpy((uint8_t *)data + completed, get_ide_dma_data() + sector_offset, bytes);
+        memcpy((uint8_t *)data + completed, ide_dma_data + sector_offset, bytes);
         completed += bytes;
     }
-    unlock_ide(flags);
+    spin_unlock_irqrestore(&ide_lock, flags);
     return status;
 }
 
@@ -149,7 +150,7 @@ static uint64_t write_atapi_device(const void *data, uint64_t count, uint64_t of
 void init_atapi(void) {
     int found = 0;
     uint64_t flags;
-    lock_ide(&flags);
+    spin_lock_irqsave(&ide_lock, &flags);
     for (uint8_t i = 0; i < IDE_MAX_DEVICES; i++) {
         ide_device_t device;
         uint64_t sectors;
@@ -169,7 +170,7 @@ void init_atapi(void) {
         if (first_atapi < 0) first_atapi = index;
         found++;
     }
-    unlock_ide(flags);
+    spin_unlock_irqrestore(&ide_lock, flags);
     if (found) printf("atapi: initialized atapi\n");
     else printf("atapi: no atapi drive found\n");
 }

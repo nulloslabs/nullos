@@ -65,7 +65,7 @@ static int read_pata_index(int index, void *data, uint64_t count, uint64_t offse
     if (offset >= size || count > size - offset) return -EINVAL;
 
     uint64_t flags;
-    lock_ide(&flags);
+    spin_lock_irqsave(&ide_lock, &flags);
     uint64_t completed = 0;
     int status = 0;
     while (completed < count) {
@@ -82,10 +82,10 @@ static int read_pata_index(int index, void *data, uint64_t count, uint64_t offse
         if (status < 0) break;
         uint64_t bytes = (uint64_t)chunk * PATA_SECTOR_SIZE - sector_offset;
         if (bytes > remaining) bytes = remaining;
-        memcpy((uint8_t *)data + completed, get_ide_dma_data() + sector_offset, bytes);
+        memcpy((uint8_t *)data + completed, ide_dma_data + sector_offset, bytes);
         completed += bytes;
     }
-    unlock_ide(flags);
+    spin_unlock_irqrestore(&ide_lock, flags);
     return status;
 }
 
@@ -98,7 +98,7 @@ static int write_pata_index(int index, const void *data, uint64_t count, uint64_
     if (offset >= size || count > size - offset) return -EINVAL;
 
     uint64_t flags;
-    lock_ide(&flags);
+    spin_lock_irqsave(&ide_lock, &flags);
     uint64_t completed = 0;
     int status = 0;
     while (completed < count) {
@@ -118,13 +118,13 @@ static int write_pata_index(int index, const void *data, uint64_t count, uint64_
             bytes = PATA_SECTOR_SIZE - sector_offset;
             if (bytes > remaining) bytes = remaining;
         }
-        memcpy(get_ide_dma_data() + sector_offset, (const uint8_t *)data + completed, bytes);
+        memcpy(ide_dma_data + sector_offset, (const uint8_t *)data + completed, bytes);
         status = transfer_pata(index, lba, (uint8_t)chunk, true);
         if (status < 0) break;
         completed += bytes;
     }
     if (status == 0) status = flush_pata_cache(index);
-    unlock_ide(flags);
+    spin_unlock_irqrestore(&ide_lock, flags);
     return status;
 }
 
@@ -171,6 +171,10 @@ void init_pata(void) {
         if (first_pata < 0) first_pata = i;
         found++;
     }
-    if (found) printf("pata: initialized pata\n");
-    else printf("pata: no pata drive found\n");
+
+    if (!found) {
+        printf("pata: no pata drive found\n");
+        return;
+    }
+    printf("pata: initialized pata\n");
 }

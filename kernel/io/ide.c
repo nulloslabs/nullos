@@ -12,11 +12,12 @@ static uint8_t ide_bus = 0;
 static uint8_t ide_dev = 0;
 static uint8_t ide_func = 0;
 static bool ide_ready = false;
-static bool ide_pata_present = false;
-static bool ide_atapi_present = false;
-static spinlock_t ide_lock = SPINLOCK_INIT;
 static ide_prd_t ide_prdt[2] __attribute__((aligned(16)));
-static uint8_t ide_dma_data[IDE_DMA_BUFFER_SIZE] __attribute__((aligned(4096)));
+
+bool is_pata_present = false;
+bool is_atapi_present = false;
+spinlock_t ide_lock = SPINLOCK_INIT;
+uint8_t ide_dma_data[IDE_DMA_BUFFER_SIZE] __attribute__((aligned(4096)));
 
 void delay_ide_400ns(const ide_device_t *device) {
     inb(device->control_base);
@@ -48,16 +49,6 @@ int wait_ide_drq(const ide_device_t *device) {
     }
     return -ETIMEDOUT;
 }
-
-void lock_ide(uint64_t *flags) { spin_lock_irqsave(&ide_lock, flags); }
-
-void unlock_ide(uint64_t flags) { spin_unlock_irqrestore(&ide_lock, flags); }
-
-uint8_t *get_ide_dma_data(void) { return ide_dma_data; }
-
-bool ide_has_pata(void) { return ide_pata_present; }
-
-bool ide_has_atapi(void) { return ide_atapi_present; }
 
 bool make_ide_disk_name(char *name, size_t name_size, const char *prefix, uint64_t index) {
     if (!name || !name_size || !prefix) return false;
@@ -178,9 +169,9 @@ static void detect_ide_devices(void) {
         uint8_t signature_high = inb(device.io_base + IDE_REG_LBA_HIGH);
         if (!signature_mid && !signature_high && !(status & (IDE_STATUS_ERROR | IDE_STATUS_FAULT)) && wait_ide_drq(&device) == 0) {
             for (int word = 0; word < 256; word++) inw(device.io_base + IDE_REG_DATA);
-            ide_pata_present = true;
+            is_pata_present = true;
         } else if ((signature_mid == 0x14 && signature_high == 0xEB) || (signature_mid == 0x69 && signature_high == 0x96)) {
-            ide_atapi_present = true;
+            is_atapi_present = true;
         }
     }
 }
