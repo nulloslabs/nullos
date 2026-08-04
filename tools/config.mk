@@ -1,7 +1,11 @@
 DEBUG := 0
-CC = gcc
+
+CC = cc
 LD = $(CC)
 CFLAGS = -MMD -MP
+ifeq ($(DEBUG),1)
+	CFLAGS := -g $(CFLAGS)
+endif
 LDFLAGS = 
 STRIP = strip
 STRIPFLAGS = 

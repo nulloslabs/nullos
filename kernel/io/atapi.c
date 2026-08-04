@@ -4,7 +4,6 @@
 #include <main/string.h>
 #include <main/spinlocks.h>
 #include <io/atapi.h>
-#include <io/devices.h>
 #include <io/ide.h>
 #include <io/io.h>
 #include <io/terminal.h>
@@ -130,7 +129,7 @@ static int read_atapi_index(int index, void *data, uint64_t count, uint64_t offs
 
 int read_atapi(void *data, uint64_t count, uint64_t offset) { return read_atapi_index(first_atapi, data, count, offset); }
 
-static uint64_t read_atapi_device(void *data, uint64_t count, uint64_t offset, int index) {
+uint64_t read_atapi_device(void *data, uint64_t count, uint64_t offset, int index) {
     if (index < 0 || index >= IDE_MAX_DEVICES || !atapi_ready[index]) return (uint64_t)-ENODEV;
     uint64_t size = atapi_sectors[index] * ATAPI_SECTOR_SIZE;
     if (offset >= size) return 0;
@@ -139,12 +138,18 @@ static uint64_t read_atapi_device(void *data, uint64_t count, uint64_t offset, i
     return status < 0 ? (uint64_t)status : count;
 }
 
-static uint64_t write_atapi_device(const void *data, uint64_t count, uint64_t offset, int index) {
+uint64_t write_atapi_device(const void *data, uint64_t count, uint64_t offset, int index) {
     (void)data;
     (void)count;
     (void)offset;
     (void)index;
     return (uint64_t)-EROFS;
+}
+
+bool atapi_device_size(int index, uint64_t *size) {
+    if (index < 0 || index >= IDE_MAX_DEVICES || !atapi_ready[index] || !size) return false;
+    *size = atapi_sectors[index] * ATAPI_SECTOR_SIZE;
+    return true;
 }
 
 void init_atapi(void) {
@@ -157,16 +162,9 @@ void init_atapi(void) {
         get_ide_device(i, &device);
         if (identify_atapi(&device) < 0 || get_atapi_capacity(&device, &sectors) < 0) continue;
         int index = found;
-        char name[24];
-        if (!make_ide_numbered_name(name, sizeof(name), "sr", index)) continue;
         atapi_devices[index] = device;
         atapi_sectors[index] = sectors;
         atapi_ready[index] = true;
-        if (register_block_device_idx(name, read_atapi_device, write_atapi_device, index, sectors * ATAPI_SECTOR_SIZE) < 0) {
-            atapi_ready[index] = false;
-            printf("atapi: unable to register %s\n", name);
-            continue;
-        }
         if (first_atapi < 0) first_atapi = index;
         found++;
     }

@@ -33,7 +33,7 @@ iso: tools kernel initrd
 		cp ../tools/limine-binary/BOOTX64.EFI main/EFI/BOOT && \
 		cp ../kernel/nullkrnl main/boot && \
 		cp ../initrd/initrd.cpio.gz main/boot && \
-		cp ../config/limine.conf main/boot && \
+		cp ../limine.conf main/boot && \
 		$(XORRISO) -as mkisofs $(XORRISOFLAGS) main -o $(OUTFILE) > /dev/null 2>&1 && \
 		../tools/limine-binary/limine bios-install $(OUTFILE) > /dev/null 2>&1; \
 	else \

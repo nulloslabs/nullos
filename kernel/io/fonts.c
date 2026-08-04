@@ -10,6 +10,7 @@
 #include <io/terminal.h>
 #include <io/devtmpfs.h>
 #include <io/procfs.h>
+#include <syscalls/syscall_impls.h>
 #include <limine.h>
 
 unsigned char current_font[16384];
@@ -689,7 +690,7 @@ static uint8_t builtin_8x16_font[] = {
 static int read_font_file(const char *path, const void **data, uint64_t *size,
                           char proc_buf[PROCFS_MAX_CONTENT], int link_depth) {
     if (link_depth >= 40) return -ELOOP;
-    if (device_exists_on_devtmpfs(path)) return -EEXIST;
+    if (is_devtmpfs_device_path(path)) return -EEXIST;
 
     if (is_procfs_path(path)) {
         proc_node_t node;

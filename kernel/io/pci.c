@@ -247,7 +247,7 @@ void init_pci_drivers(void) {
             printf("pci: found controller for %s\n", known_storage_controllers[i].name);
             if (known_storage_controllers[i].init(dev)) {
                 for (int k = 0; k < (int)(sizeof(known_storage_drivers) / sizeof(known_storage_drivers[0])); k++) {
-                    if (!known_storage_drivers[k].present) continue;
+                    if (!*known_storage_drivers[k].present) continue;
                     printf("pci: found driver for %s\n", known_storage_drivers[k].name);
                     known_storage_drivers[k].init();
                 }

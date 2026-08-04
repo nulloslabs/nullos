@@ -2,7 +2,6 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <main/string.h>
-#include <io/devices.h>
 #include <io/ide.h>
 #include <io/io.h>
 #include <io/pata.h>
@@ -132,7 +131,7 @@ int read_pata(void *data, uint64_t count, uint64_t offset) { return read_pata_in
 
 int write_pata(const void *data, uint64_t count, uint64_t offset) { return write_pata_index(first_pata, data, count, offset); }
 
-static uint64_t read_pata_device(void *data, uint64_t count, uint64_t offset, int index) {
+uint64_t read_pata_device(void *data, uint64_t count, uint64_t offset, int index) {
     uint64_t sectors = pata_sectors[index] < PATA_LBA28_LIMIT ? pata_sectors[index] : PATA_LBA28_LIMIT;
     uint64_t size = sectors * PATA_SECTOR_SIZE;
     if (offset >= size) return 0;
@@ -141,13 +140,20 @@ static uint64_t read_pata_device(void *data, uint64_t count, uint64_t offset, in
     return status < 0 ? (uint64_t)status : count;
 }
 
-static uint64_t write_pata_device(const void *data, uint64_t count, uint64_t offset, int index) {
+uint64_t write_pata_device(const void *data, uint64_t count, uint64_t offset, int index) {
     uint64_t sectors = pata_sectors[index] < PATA_LBA28_LIMIT ? pata_sectors[index] : PATA_LBA28_LIMIT;
     uint64_t size = sectors * PATA_SECTOR_SIZE;
     if (offset >= size) return (uint64_t)-ENOSPC;
     if (count > size - offset) count = size - offset;
     int status = write_pata_index(index, data, count, offset);
     return status < 0 ? (uint64_t)status : count;
+}
+
+bool pata_device_size(int index, uint64_t *size) {
+    if (index < 0 || index >= IDE_MAX_DEVICES || !pata_ready[index] || !size) return false;
+    uint64_t sectors = pata_sectors[index] < PATA_LBA28_LIMIT ? pata_sectors[index] : PATA_LBA28_LIMIT;
+    *size = sectors * PATA_SECTOR_SIZE;
+    return true;
 }
 
 void init_pata(void) {
@@ -157,17 +163,9 @@ void init_pata(void) {
         uint64_t sectors;
         get_ide_device(i, &device);
         if (identify_pata(&device, &sectors) < 0) continue;
-        char name[20];
-        if (!make_ide_disk_name(name, sizeof(name), "hd", i)) continue;
         pata_devices[i] = device;
         pata_sectors[i] = sectors;
         pata_ready[i] = true;
-        uint64_t size = (sectors < PATA_LBA28_LIMIT ? sectors : PATA_LBA28_LIMIT) * PATA_SECTOR_SIZE;
-        if (register_block_device_idx(name, read_pata_device, write_pata_device, i, size) < 0) {
-            pata_ready[i] = false;
-            printf("pata: unable to register %s\n", name);
-            continue;
-        }
         if (first_pata < 0) first_pata = i;
         found++;
     }

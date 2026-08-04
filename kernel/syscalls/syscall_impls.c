@@ -666,112 +666,6 @@ static int open_tmpfs_common(const char *abs_path, uint32_t flags, mode_t mode) 
     return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_TMPFS, flags);
 }
 
-static void deliver_sig_to_task(int i, int sig) {
-    if (sig == SIGKILL) {
-        // SIGKILL cannot be ignored or caught
-        if (tasks[i].pid == current_task_ptr->pid) {
-            exit_task(128 + sig);
-        }
-        tasks[i].term_sig = sig;
-        tasks[i].state = TASK_ZOMBIE;
-        for (int j = 1; j < MAX_TASKS; j++) {
-            if (tasks[j].state != TASK_DEAD && tasks[j].ppid == tasks[i].pid) {
-                if (tasks[j].state == TASK_ZOMBIE) tasks[j].state = TASK_DEAD;
-                else tasks[j].ppid = 1;
-            }
-        }
-        for (int j = 0; j < FD_MAX; j++) {
-            if (tasks[i].fd_table.entries[j].open) free_fd(&tasks[i].fd_table, j);
-        }
-        // Notify parent
-        for (int j = 0; j < MAX_TASKS; j++) {
-            if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
-                tasks[j].pending_signals |= (1ULL << SIGCHLD);
-                if (tasks[j].state == TASK_STOPPED) tasks[j].state = TASK_READY;
-                break;
-            }
-        }
-        return;
-    }
-    switch (sig) {
-        case SIGSTOP:
-            // SIGSTOP: cannot be caught, blocked, or ignored. Always stops.
-            if (tasks[i].state == TASK_RUNNING || tasks[i].state == TASK_READY) {
-                tasks[i].state = TASK_STOPPED;
-                tasks[i].stopped_by_signal = 1;
-                tasks[i].stop_reported = 0;
-                // Notify parent so waitpid(WUNTRACED) wakes up
-                for (int j = 0; j < MAX_TASKS; j++) {
-                    if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
-                        tasks[j].pending_signals |= (1ULL << SIGCHLD);
-                        break;
-                    }
-                }
-                // If the signal targets the caller, stop immediately by
-                // yielding to the scheduler before kill() returns.
-                if (tasks[i].pid == current_task_ptr->pid) {
-                    spin_unlock(&sched_lock);
-                    __asm__ volatile("int $32");
-                    spin_lock(&sched_lock);
-                }
-            }
-            break;
-        case SIGTSTP:
-        case SIGTTIN:
-        case SIGTTOU: {
-            uint64_t handler = tasks[i].sigactions[sig * 4];
-            if (handler == (uint64_t)SIG_IGN) {
-                break;  // ignored: drop the signal
-            }
-            if (handler == (uint64_t)SIG_DFL) {
-                // Default action: stop the task right now.
-                if (tasks[i].state == TASK_RUNNING || tasks[i].state == TASK_READY) {
-                    tasks[i].state = TASK_STOPPED;
-                    tasks[i].stopped_by_signal = 1;
-                    tasks[i].stop_reported = 0;
-                    for (int j = 0; j < MAX_TASKS; j++) {
-                        if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
-                            tasks[j].pending_signals |= (1ULL << SIGCHLD);
-                            break;
-                        }
-                    }
-                    if (tasks[i].pid == current_task_ptr->pid) {
-                        spin_unlock(&sched_lock);
-                        __asm__ volatile("int $32");
-                        spin_lock(&sched_lock);
-                    }
-                }
-            } else {
-                // Custom handler installed: defer to check_signals() so it
-                // builds the signal trampoline frame and traps to user mode.
-                tasks[i].pending_signals |= (1ULL << sig);
-                if (tasks[i].state == TASK_STOPPED)
-                    tasks[i].state = TASK_READY;
-            }
-            break;
-        }
-        case SIGCONT:
-            if (tasks[i].state == TASK_STOPPED) {
-                tasks[i].state = TASK_READY;
-                tasks[i].stop_reported = 0;
-                // Notify parent of the continue event
-                for (int j = 0; j < MAX_TASKS; j++) {
-                    if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
-                        tasks[j].pending_signals |= (1ULL << SIGCHLD);
-                        break;
-                    }
-                }
-            }
-            tasks[i].pending_signals &= ~((1ULL << SIGSTOP) | (1ULL << SIGTSTP));
-            break;
-        default:
-            tasks[i].pending_signals |= (1ULL << sig);
-            if (tasks[i].state == TASK_STOPPED)
-                tasks[i].state = TASK_READY;
-            break;
-    }
-}
-
 static uint64_t resolve_futex_key(uint32_t *uaddr, syscall_frame_t *frame) {
     if (!uaddr || !user_range_ok(current_task_ptr->ctx, (uint64_t)uaddr, sizeof(uint32_t))) {
         frame->rax = (uint64_t)-EFAULT;
@@ -1612,6 +1506,13 @@ bool is_mounted_under(const char *path, const char *filesystemtype, char *relati
 
     spin_unlock_irqrestore(&vfs_lock, irq);
     return found;
+}
+
+bool is_devtmpfs_device_path(const char *path) {
+    char relative_path[256];
+    return is_mounted_under(path, "devtmpfs", relative_path) &&
+           relative_path[0] != '\0' &&
+           device_exists_on_devtmpfs(relative_path);
 }
 
 void register_vfs_mount(const char *path, const char *fstype) {
@@ -4150,34 +4051,65 @@ void sys_execve(syscall_frame_t *frame) {
         // Parse interpreter from shebang line
         char *p = (char *)probe.data + 2;
         while (*p == ' ' || *p == '\t') p++;
-        char interp[256] = {0};
-        int ii = 0;
-        while (*p && *p != '\n' && *p != '\r' && *p != ' ' && ii < 255)
-            interp[ii++] = *p++;
-        interp[ii] = '\0';
 
-        if (ii > 0) {
+        char interp[256] = {0};
+        int interp_len = 0;
+        while (*p && *p != '\n' && *p != '\r' && *p != ' ' && *p != '\t' && interp_len < 255)
+            interp[interp_len++] = *p++;
+        interp[interp_len] = '\0';
+
+        while (*p == ' ' || *p == '\t') p++;
+
+        char interp_arg[256] = {0};
+        int interp_arg_len = 0;
+        while (*p && *p != '\n' && *p != '\r' && interp_arg_len < 255)
+            interp_arg[interp_arg_len++] = *p++;
+        interp_arg[interp_arg_len] = '\0';
+
+        if (interp_len > 0) {
             char **orig_argv = NULL;
             int orig_argc = copy_from_user_strarray(&orig_argv, (const char **)user_argv, 63);
             if (orig_argc < 0) { frame->rax = (uint64_t)orig_argc; return; }
-            int new_argc = orig_argc + 1;
+
+            bool has_interp_arg = interp_arg_len > 0;
+            int script_index = has_interp_arg ? 2 : 1;
+            int new_argc = orig_argc + 1 + has_interp_arg;
             char **new_argv = vmalloc((new_argc + 1) * sizeof(char *));
             if (!new_argv) {
                 free_strarray(orig_argv, orig_argc);
                 frame->rax = (uint64_t)-ENOMEM; return;
             }
-            new_argv[0] = malloc(256);
-            new_argv[1] = malloc(256);
-            if (!new_argv[0] || !new_argv[1]) {
-                if (new_argv[0]) free(new_argv[0]);
-                if (new_argv[1]) free(new_argv[1]);
+
+            new_argv[0] = malloc(interp_len + 1);
+            if (!new_argv[0]) {
                 free_strarray(orig_argv, orig_argc);
                 vfree(new_argv);
                 frame->rax = (uint64_t)-ENOMEM; return;
             }
-            memcpy(new_argv[0], interp, ii + 1);
-            memcpy(new_argv[1], path_buf, strlen(path_buf) + 1);
-            for (int i = 1; i < orig_argc; i++) new_argv[i + 1] = orig_argv[i];
+            memcpy(new_argv[0], interp, interp_len + 1);
+
+            if (has_interp_arg) {
+                new_argv[1] = malloc(interp_arg_len + 1);
+                if (!new_argv[1]) {
+                    free(new_argv[0]);
+                    free_strarray(orig_argv, orig_argc);
+                    vfree(new_argv);
+                    frame->rax = (uint64_t)-ENOMEM; return;
+                }
+                memcpy(new_argv[1], interp_arg, interp_arg_len + 1);
+            }
+
+            new_argv[script_index] = malloc(strlen(path_buf) + 1);
+            if (!new_argv[script_index]) {
+                free(new_argv[0]);
+                if (has_interp_arg) free(new_argv[1]);
+                free_strarray(orig_argv, orig_argc);
+                vfree(new_argv);
+                frame->rax = (uint64_t)-ENOMEM; return;
+            }
+            memcpy(new_argv[script_index], path_buf, strlen(path_buf) + 1);
+
+            for (int i = 1; i < orig_argc; i++) new_argv[script_index + i] = orig_argv[i];
             new_argv[new_argc] = NULL;
             // Copy envp
             char **envp_ptrs = NULL;
@@ -4201,6 +4133,9 @@ void sys_execve(syscall_frame_t *frame) {
                 }
                 current_task_ptr->pending_signals = 0;
             }
+            free(new_argv[0]);
+            if (has_interp_arg) free(new_argv[1]);
+            free(new_argv[script_index]);
             free_strarray(orig_argv, orig_argc);
             free_strarray(envp_ptrs, envc);
             vfree(new_argv);

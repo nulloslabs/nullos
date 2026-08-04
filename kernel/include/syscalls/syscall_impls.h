@@ -9,6 +9,7 @@ void wake_clear_child_tid(task_t *task);
 int copy_from_user(void *kdest, const void *usrc, size_t size);
 int copy_to_user(const void *udest, const void *ksrc, size_t size);
 bool is_mounted_under(const char* path, const char* fstype, char* relative_out);
+bool is_devtmpfs_device_path(const char *path);
 void register_vfs_mount(const char *path, const char *fstype);
 int enumerate_vfs_mounts(int index, char *out_line, size_t line_size);
 void check_signals(syscall_frame_t *frame);

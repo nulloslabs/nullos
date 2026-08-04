@@ -22,6 +22,7 @@ typedef struct {
 
 extern spinlock_t tty_lock;
 
+void deliver_sig_to_task(int i, int sig);
 tty_t *get_tty(int idx);
 int read_tty_ring(tty_ring_t *r, char *buf, int len);
 int write_tty_ring(tty_ring_t *r, const char *buf, int len);

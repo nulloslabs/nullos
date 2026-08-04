@@ -46,13 +46,18 @@ initrd:
 			'::shutdown:/bin/umount -a -r' \
 			> main/etc/inittab && \
 		printf '%s\n' \
-			'#!/bin/sh' \
+			'#!/bin/busybox sh' \
+			'' \
+			'/bin/busybox --install -s' \
+			'rm -rf /linuxrc' \
+			'' \
 			'mount -t devtmpfs devtmpfs /dev' \
 			'mkdir -p /dev/pts' \
 			'mount -t devpts devpts /dev/pts' \
 			'mount -t proc proc /proc' \
 			'mount -t tmpfs tmpfs /tmp' \
 			'mount -t tmpfs run /run' \
+			'hostname -F /etc/hostname' \
 			> main/etc/init.d/rcS && \
 		chmod +x main/etc/init.d/rcS && \
 		printf '%s\n' \
@@ -66,36 +71,24 @@ initrd:
 		printf 'user:$$5$$user$$Lssaar/36bdTMOfh5iRLlvKBQ/QgRHkvu/nltxEXH/9:19863:0:99999:7:::\n' >> main/etc/shadow && \
 		chmod 644 main/etc/passwd main/etc/group && \
 		chmod 600 main/etc/shadow && \
-		printf "\nWelcome to NullOS!\n\nAn OS that's fast, secure and private.\n\n" > main/etc/motd && \
+		printf '%s\n' \
+			'' \
+			'Welcome to NullOS!' \
+			'' \
+			'An OS that'\''s secure, fast and private.' \
+			'' \
+			> main/etc/motd && \
+		printf 'nullos' > main/etc/hostname && \
 		for p in $(PACKAGE_NAMES); do \
 			repo=$$(dirname $$p) && \
 			name=$$(basename $$p) && \
 			[ -f packages/$$name.pkg.tar.zst ] || \
 			(curl -fsL -o packages/$$name.pkg.tar.zst https://archlinux.org/packages/$$repo/x86_64/$$name/download/ || \
 			 curl -fsL -o packages/$$name.pkg.tar.zst https://archlinux.org/packages/$$repo/any/$$name/download/) && \
-			if [ "$(KERNEL)" = "Darwin" ]; then \
-				docker run --rm -v "$(PWD)":"$(PWD)" -w "$(PWD)" alpine sh -c 'apk add --no-cache zstd >/dev/null 2>&1 && tar --zstd -xf packages/$$name.pkg.tar.zst -C main'; \
-			else \
-				tar --zstd -xf packages/$$name.pkg.tar.zst -C main; \
-			fi; \
+			zstd -dc packages/$$name.pkg.tar.zst | tar -xf - -C main; \
 		done && \
 		find main -type f -name ".*" -delete && \
-		if [ "$(KERNEL)" = "Darwin" ]; then \
-			docker run --rm -v "$(PWD)":"$(PWD)" -w "$(PWD)" alpine sh -c ' \
-				main/usr/bin/busybox --list-full | grep -v "^bin/busybox$$" | while read applet; do \
-					dir="main/$$(dirname $$applet)" && \
-					target=$$(realpath --relative-to="$$dir" main/usr/bin/busybox) && \
-					ln -sf "$$target" "main/$$applet"; \
-				done \
-			'; \
-		else \
-			main/usr/bin/busybox --list-full | grep -v '^bin/busybox$$' | while read applet; do \
-				dir="main/$$(dirname $$applet)" && \
-				target=$$(realpath --relative-to="$$dir" main/usr/bin/busybox) && \
-				ln -sf "$$target" "main/$$applet"; \
-			done; \
-		fi && \
-		(cd main && ln -sf sbin/init init) && \
+		(cd main && ln -sf /bin/busybox sbin/init && ln -sf sbin/init init) && \
 		rm -f main/linuxrc && \
 		printf "  %-7s %s\n" "CPIO" "$(SUBDIR)/$(OUTFILE)" && \
 		(cd main && find . -print0 | $(CPIO) $(CPIOFLAGS) 2>/dev/null) | gzip -9 > $(OUTFILE); \

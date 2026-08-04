@@ -24,20 +24,21 @@ A secure, fast and privacy-focused hobby OS.
 
 ## 🛠️ Build Requirements
 
-| Linux (x86_64) | MacOS (any) | Other (x86_64) |
-| :--- | :--- | :--- |
-| | `docker` | |
-| `gcc` | `x86_64-elf-gcc` | `x86_64-linux-gnu-gcc` |
-| `ld` | `x86_64-elf-ld` | `x86_64-linux-gnu-ld` |
-| `strip` | `x86_64-elf-strip` | `x86_64-linux-gnu-strip` |
-| `make` | `gmake` | `gmake` |
-| `xorriso` | `xorriso` | `xorriso` |
-| `qemu-system-x86_64` | `qemu-system-x86_64` | `qemu-system-x86_64` |
-| `curl` | `curl` | `curl` |
-| `tar` | `tar` | `tar` |
-| `cpio` | `cpio` | `cpio` |
-| `zstd` | | `zstd` |
-| `xz` | `xz` | `xz` |
+| Linux (x86_64) | macOS (any) | Other (any) | Notes |
+| :--- | :--- | :--- | :--- |
+| `cc` | `cc` | `cc` | `Host C compiler` |
+| `gcc` | `x86_64-elf-gcc` | `x86_64-elf-gcc` | `Target C compiler` |
+| `ld` | `x86_64-elf-ld` | `x86_64-elf-ld` | |
+| `strip` | `x86_64-elf-strip` | `x86_64-elf-strip` | |
+| `make` | `gmake` | `gmake` | |
+| `xorriso` | `xorriso` | `xorriso` | |
+| `qemu-system-x86_64` | `qemu-system-x86_64` | `qemu-system-x86_64` | |
+| `curl` | `curl` | `curl` | |
+| `tar` | `tar` | `tar` | |
+| `cpio` | `cpio` | `cpio` | |
+| `gzip` | `gzip` | `gzip` | |
+| `zstd` | `zstd` | `zstd` | |
+| `xz` | `xz` | `xz` | |
 
 ## 🚀 Getting Started
 

@@ -10,6 +10,9 @@
 #include <io/ttys.h>
 #include <io/ptys.h>
 #include <io/keyboard.h>
+#include <io/ide.h>
+#include <io/pata.h>
+#include <io/atapi.h>
 #include <syscalls/syscall_impls.h>
 
 devtmpfs_device_t devtmpfs_devices[MAX_DEVTMPFS_DEVICES];
@@ -163,10 +166,6 @@ static uint64_t write_ptmx(const void *buf, uint64_t count, uint64_t offset, int
     return (uint64_t)-EIO;
 }
 
-// Non-blocking read from the active TTY's input ring buffer.
-// Returns whatever bytes are available (0 if empty — the caller, sys_read,
-// handles blocking by yielding to the scheduler). All /dev/ttyN reads go to
-// tty0 today since there is no VT switching.
 static uint64_t read_tty(void* buf, uint64_t count, uint64_t offset, int dev_idx) {
     (void)offset;
     spinlock_t *lk = &tty_lock;
@@ -223,50 +222,46 @@ static uint64_t write_urandom(const void* buf, uint64_t count, uint64_t offset, 
     return count;
 }
 
-uint64_t read_device(const char* name, void* buf, uint64_t count, uint64_t offset) {
-    const char *dev_name = name;
-    while (*dev_name == '.' || *dev_name == '/') dev_name++;
-    if (strncmp(dev_name, "dev/", 4) == 0) dev_name += 4;
+uint64_t read_device(const char *name, void *buf, uint64_t count, uint64_t offset) {
+    while (*name == '/') name++;
 
     uint64_t irq;
     spin_lock_irqsave(&devtmpfs_lock, &irq);
 
     for (int i = 0; i < MAX_DEVTMPFS_DEVICES; i++) {
-        if (devtmpfs_devices[i].active && strcmp(devtmpfs_devices[i].name, dev_name) == 0) {
-            uint64_t (*read_fn)(void*, uint64_t, uint64_t, int) = devtmpfs_devices[i].read;
-            int index = devtmpfs_devices[i].index;
-            spin_unlock_irqrestore(&devtmpfs_lock, irq);
+        if (!devtmpfs_devices[i].active) continue;
+        if (strcmp(devtmpfs_devices[i].name, name) != 0) continue;
 
-            if (read_fn) {
-                return read_fn(buf, count, offset, index);
-            }
-            return (uint64_t)-EPERM;
-        }
+        uint64_t (*read_fn)(void *, uint64_t, uint64_t, int) = devtmpfs_devices[i].read;
+        int index = devtmpfs_devices[i].index;
+
+        spin_unlock_irqrestore(&devtmpfs_lock, irq);
+
+        if (!read_fn) return (uint64_t)-EPERM;
+        return read_fn(buf, count, offset, index);
     }
 
     spin_unlock_irqrestore(&devtmpfs_lock, irq);
     return (uint64_t)-ENOENT;
 }
 
-uint64_t write_device(const char* name, const void* buf, uint64_t count, uint64_t offset) {
-    const char *dev_name = name;
-    while (*dev_name == '.' || *dev_name == '/') dev_name++;
-    if (strncmp(dev_name, "dev/", 4) == 0) dev_name += 4;
+uint64_t write_device(const char *name, const void *buf, uint64_t count, uint64_t offset) {
+    while (*name == '/') name++;
 
     uint64_t irq;
     spin_lock_irqsave(&devtmpfs_lock, &irq);
 
     for (int i = 0; i < MAX_DEVTMPFS_DEVICES; i++) {
-        if (devtmpfs_devices[i].active && strcmp(devtmpfs_devices[i].name, dev_name) == 0) {
-            uint64_t (*write_fn)(const void*, uint64_t, uint64_t, int) = devtmpfs_devices[i].write;
-            int index = devtmpfs_devices[i].index;
-            spin_unlock_irqrestore(&devtmpfs_lock, irq);
+        if (!devtmpfs_devices[i].active) continue;
+        if (strcmp(devtmpfs_devices[i].name, name) != 0) continue;
 
-            if (write_fn) {
-                return write_fn(buf, count, offset, index);
-            }
-            return (uint64_t)-EPERM;
-        }
+        uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int) = devtmpfs_devices[i].write;
+        int index = devtmpfs_devices[i].index;
+
+        spin_unlock_irqrestore(&devtmpfs_lock, irq);
+
+        if (!write_fn) return (uint64_t)-EPERM;
+        return write_fn(buf, count, offset, index);
     }
 
     spin_unlock_irqrestore(&devtmpfs_lock, irq);
@@ -314,6 +309,31 @@ void init_devices(void) {
     register_device("ptmx", read_ptmx, write_ptmx);
 
     register_device("urandom", read_urandom, write_urandom);
+
+    {
+        char name[24];
+        uint64_t size;
+
+        if (is_pata_present) {
+            for (int i = 0; i < IDE_MAX_DEVICES; i++) {
+                if (!pata_device_size(i, &size)) continue;
+                if (!make_ide_disk_name(name, sizeof(name), "hd", i)) continue;
+                if (register_block_device_idx(name, read_pata_device, write_pata_device, i, size) < 0) {
+                    printf("devices: unable to register %s\n", name);
+                }
+            }
+        }
+
+        if (is_atapi_present) {
+            for (int i = 0; i < IDE_MAX_DEVICES; i++) {
+                if (!atapi_device_size(i, &size)) continue;
+                if (!make_ide_numbered_name(name, sizeof(name), "sr", i)) continue;
+                if (register_block_device_idx(name, read_atapi_device, write_atapi_device, i, size) < 0) {
+                    printf("devices: unable to register %s\n", name);
+                }
+            }
+        }
+    }
 
     printf("devices: initialized devices\n");
 }

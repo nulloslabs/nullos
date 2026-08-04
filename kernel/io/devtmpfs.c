@@ -3,15 +3,13 @@
 #include <io/devtmpfs.h>
 
 bool device_exists_on_devtmpfs(const char* name) {
-    const char *dev_name = name;
-    while (*dev_name == '.' || *dev_name == '/') dev_name++;
-    if (strncmp(dev_name, "dev/", 4) == 0) dev_name += 4;
+    while (*name == '/') name++;
 
     uint64_t irq;
     spin_lock_irqsave(&devtmpfs_lock, &irq);
 
     for (int i = 0; i < MAX_DEVTMPFS_DEVICES; i++) {
-        if (devtmpfs_devices[i].active && strcmp(devtmpfs_devices[i].name, dev_name) == 0) {
+        if (devtmpfs_devices[i].active && strcmp(devtmpfs_devices[i].name, name) == 0) {
             spin_unlock_irqrestore(&devtmpfs_lock, irq);
             return true;
         }
@@ -39,4 +37,3 @@ const char *get_devtmpfs_device_name(int index) {
     spin_unlock_irqrestore(&devtmpfs_lock, irq);
     return NULL;
 }
-

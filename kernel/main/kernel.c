@@ -59,7 +59,6 @@ __attribute__((noreturn)) void kmain(void) {
     init_vmm();
     init_mm();
     init_initrd();
-    init_devices();
     init_tmpfs();
     init_ttys();
     init_ptys();
@@ -79,6 +78,7 @@ __attribute__((noreturn)) void kmain(void) {
     cache_machine_info();
     cache_utsname();
     init_pci_drivers();
+    init_devices();
     init_syscalls();
 
     if (current_apic_mode != APIC_NONE) { init_mp(); init_apic_timer(250); }

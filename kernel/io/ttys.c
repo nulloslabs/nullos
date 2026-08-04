@@ -15,34 +15,99 @@ spinlock_t tty_lock = SPINLOCK_INIT;
 // Track which TTY receives keyboard input (no VT switching yet, so we use the last active TTY)
 static int keyboard_tty = 0;
 static int keyboard_pty = -1;
+static bool extended_pending = false;
 
-// NOTE: Another static function in syscall_impls.c is exactly named deliver_sig_to_task, watch out!
-static void deliver_sig_to_task(int idx, int sig) {
-    task_t *t = &tasks[idx];
-    if (t->sigactions[sig * 4] == (uint64_t)SIG_IGN) return;
-
-    if (sig == SIGTSTP || sig == SIGSTOP) {
-        if (t->sigactions[sig * 4] == (uint64_t)SIG_DFL) {
-            // Stop in place and notify the parent for waitpid(WUNTRACED).
-            if (t->state == TASK_RUNNING || t->state == TASK_READY) {
-                t->state = TASK_STOPPED;
-                t->stopped_by_signal = 1;
-                t->stop_reported = 0;
+void deliver_sig_to_task(int i, int sig) {
+    if (sig == SIGKILL) {
+        // SIGKILL cannot be ignored or caught
+        if (tasks[i].pid == current_task_ptr->pid) {
+            exit_task(128 + sig);
+        }
+        tasks[i].term_sig = sig;
+        tasks[i].state = TASK_ZOMBIE;
+        for (int j = 1; j < MAX_TASKS; j++) {
+            if (tasks[j].state != TASK_DEAD && tasks[j].ppid == tasks[i].pid) {
+                if (tasks[j].state == TASK_ZOMBIE) tasks[j].state = TASK_DEAD;
+                else tasks[j].ppid = 1;
+            }
+        }
+        for (int j = 0; j < FD_MAX; j++) {
+            if (tasks[i].fd_table.entries[j].open) free_fd(&tasks[i].fd_table, j);
+        }
+        // Notify parent
+        for (int j = 0; j < MAX_TASKS; j++) {
+            if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
+                tasks[j].pending_signals |= (1ULL << SIGCHLD);
+                if (tasks[j].state == TASK_STOPPED) tasks[j].state = TASK_READY;
+                break;
+            }
+        }
+        return;
+    }
+    switch (sig) {
+        case SIGSTOP:
+            // SIGSTOP: cannot be caught, blocked, or ignored. Always stops.
+            if (tasks[i].state == TASK_RUNNING || tasks[i].state == TASK_READY) {
+                tasks[i].state = TASK_STOPPED;
+                tasks[i].stopped_by_signal = 1;
+                tasks[i].stop_reported = 0;
+                // Notify parent so waitpid(WUNTRACED) wakes up
                 for (int j = 0; j < MAX_TASKS; j++) {
-                    if (tasks[j].state != TASK_DEAD && tasks[j].pid == t->ppid) {
+                    if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
                         tasks[j].pending_signals |= (1ULL << SIGCHLD);
                         break;
                     }
                 }
             }
-        } else {
-            // Installed handler: just pend; handler runs at next syscall.
-            t->pending_signals |= (1ULL << sig);
+            break;
+        case SIGTSTP:
+        case SIGTTIN:
+        case SIGTTOU: {
+            uint64_t handler = tasks[i].sigactions[sig * 4];
+            if (handler == (uint64_t)SIG_IGN) {
+                break;  // ignored: drop the signal
+            }
+            if (handler == (uint64_t)SIG_DFL) {
+                // Default action: stop the task right now.
+                if (tasks[i].state == TASK_RUNNING || tasks[i].state == TASK_READY) {
+                    tasks[i].state = TASK_STOPPED;
+                    tasks[i].stopped_by_signal = 1;
+                    tasks[i].stop_reported = 0;
+                    for (int j = 0; j < MAX_TASKS; j++) {
+                        if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
+                            tasks[j].pending_signals |= (1ULL << SIGCHLD);
+                            break;
+                        }
+                    }
+                }
+            } else {
+                // Custom handler installed: defer to check_signals() so it
+                // builds the signal trampoline frame and traps to user mode.
+                tasks[i].pending_signals |= (1ULL << sig);
+                if (tasks[i].state == TASK_STOPPED)
+                    tasks[i].state = TASK_READY;
+            }
+            break;
         }
-    } else {
-        t->pending_signals |= (1ULL << sig);
-        // Wake a stopped task so it can run its handler / be terminated.
-        if (t->state == TASK_STOPPED) t->state = TASK_READY;
+        case SIGCONT:
+            if (tasks[i].state == TASK_STOPPED) {
+                tasks[i].state = TASK_READY;
+                tasks[i].stop_reported = 0;
+                // Notify parent of the continue event
+                for (int j = 0; j < MAX_TASKS; j++) {
+                    if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
+                        tasks[j].pending_signals |= (1ULL << SIGCHLD);
+                        break;
+                    }
+                }
+            }
+            tasks[i].pending_signals &= ~((1ULL << SIGSTOP) | (1ULL << SIGTSTP));
+            break;
+        default:
+            tasks[i].pending_signals |= (1ULL << sig);
+            if (tasks[i].state == TASK_STOPPED)
+                tasks[i].state = TASK_READY;
+            break;
     }
 }
 
@@ -83,9 +148,6 @@ static void write_tty_input_str(const char *s) {
         }
     }
 }
-
-// State for 0xE0 extended scancode prefix (PS/2 set 1).
-static bool extended_pending = false;
 
 void tty_process_scancode(uint8_t sc) {
     // --- Alt key tracking ---

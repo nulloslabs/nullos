@@ -725,12 +725,15 @@ int symlink_initrd(const char *target, const char *path, uid_t uid, gid_t gid) {
     char norm[256];
     get_norm_path_ex(path, norm, sizeof(norm), false);
 
+    initrd_file_t existing = stat_initrd_nofollow(path);
+    if (existing.mode) return -EEXIST;
+
     size_t len = strlen(target);
     char *copy = malloc(len + 1);
     if (!copy) return -ENOMEM;
     strcpy(copy, target);
 
-    add_modified_file(norm, copy, len, len, 0xA000 | 0777, uid, gid); // S_IFLNK
+    add_modified_file(norm, copy, len, len + 1, 0xA000 | 0777, uid, gid);
     return 0;
 }
 
