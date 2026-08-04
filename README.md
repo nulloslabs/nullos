@@ -67,4 +67,4 @@ This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) f
 
 ## 🤝 Contributing
 
-NullOS is currently a solo hobby project, but technical discussions and bug reports are always welcome!
+NullOS is maintained by NullOS Labs, a small hobby development team. Technical discussions, contributions, and bug reports are always welcome!
