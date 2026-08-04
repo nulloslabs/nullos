@@ -8,6 +8,7 @@
 #include <mm/vmm.h>
 #include <mm/pmm.h>
 #include <mm/mm.h>
+
 vmm_context_t kernel_context;
 static uint64_t vmalloc_cursor = 0xffffc00000000000;
 static uint64_t vuser_cursor   = USER_MMAP_BASE;
@@ -450,44 +451,41 @@ void* vmalloc_ex(vmm_context_t* ctx, size_t size, uint64_t flags) {
 
 void* vmalloc_user_ex(vmm_context_t* ctx, size_t size) { return vmalloc_ex(ctx, size, VMM_WRITABLE | VMM_USER | VMM_NX); }
 
-void* vmap_user_range(vmm_context_t* ctx, size_t size, uint64_t flags) {
-    if (size == 0) return NULL;
-
-    uint64_t num_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
-    uint64_t map_size = num_pages * PAGE_SIZE;
-
-    uint64_t flags_irq;
-    spin_lock_irqsave(&vmm_lock, &flags_irq);
-
-    uint64_t start_addr = vuser_cursor;
-    vuser_cursor += map_size;
-
-    spin_unlock_irqrestore(&vmm_lock, flags_irq);
-
-    return vmap_user_at(ctx, start_addr, map_size, flags);
-}
-
 void* vmap_mmio(uint64_t phys, size_t num_pages) {
     if (num_pages == 0) return NULL;
-    
+
     uint64_t flags_irq;
     spin_lock_irqsave(&vmm_lock, &flags_irq);
-    
+
     void* start_addr = (void*)vmalloc_cursor;
-    vmalloc_cursor += (num_pages * PAGE_SIZE);
-    
+    vmalloc_cursor += num_pages * PAGE_SIZE;
+
     spin_unlock_irqrestore(&vmm_lock, flags_irq);
 
     uint64_t curr_addr = (uint64_t)start_addr;
-    uint64_t curr_phys = phys & ~0xFFFULL; // Align to page
+    uint64_t curr_phys = phys & ~(PAGE_SIZE - 1);
 
-    for (uint64_t i = 0; i < num_pages; i++) {
-        map_vmm(&kernel_context, curr_addr, curr_phys, VMM_PRESENT | VMM_WRITABLE | VMM_PWT | VMM_PCD | VMM_NX);
+    for (size_t i = 0; i < num_pages; i++) {
+        if (!map_vmm(&kernel_context, curr_addr, curr_phys, VMM_WRITABLE | VMM_PWT | VMM_PCD | VMM_NX | VMM_EXTERNAL)) {
+            for (size_t j = 0; j < i; j++) unmap_vmm(&kernel_context, (uint64_t)start_addr + j * PAGE_SIZE);
+            return NULL;
+        }
+
         curr_addr += PAGE_SIZE;
         curr_phys += PAGE_SIZE;
     }
 
-    return (void*)((uintptr_t)start_addr + (phys & 0xFFFULL)); // Return aligned + offset
+    return (void*)((uintptr_t)start_addr + (phys & (PAGE_SIZE - 1)));
+}
+
+void vunmap_mmio(void* addr, size_t num_pages) {
+    if (!addr || num_pages == 0) return;
+
+    uint64_t base = (uintptr_t)addr & ~(PAGE_SIZE - 1);
+
+    for (size_t i = 0; i < num_pages; i++) {
+        unmap_vmm(&kernel_context, base + i * PAGE_SIZE);
+    }
 }
 
 void* vmap_user_at(vmm_context_t* ctx, uint64_t virt, size_t size, uint64_t flags) {
@@ -512,6 +510,23 @@ void* vmap_user_at(vmm_context_t* ctx, uint64_t virt, size_t size, uint64_t flag
         curr_addr += PAGE_SIZE;
     }
     return (void*)virt;
+}
+
+void* vmap_user_range(vmm_context_t* ctx, size_t size, uint64_t flags) {
+    if (size == 0) return NULL;
+
+    uint64_t num_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint64_t map_size = num_pages * PAGE_SIZE;
+
+    uint64_t flags_irq;
+    spin_lock_irqsave(&vmm_lock, &flags_irq);
+
+    uint64_t start_addr = vuser_cursor;
+    vuser_cursor += map_size;
+
+    spin_unlock_irqrestore(&vmm_lock, flags_irq);
+
+    return vmap_user_at(ctx, start_addr, map_size, flags);
 }
 
 void* vmalloc(size_t size) { return vmalloc_ex(&kernel_context, size, VMM_WRITABLE | VMM_NX); }

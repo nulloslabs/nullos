@@ -1,5 +1,6 @@
-#include <stddef.h>
 #include <stdint.h>
+#include <stddef.h>
+#include <ctype.h>
 #include <main/acpi.h>
 #include <main/limine_req.h>
 #include <main/spinlocks.h>
@@ -16,29 +17,10 @@
 #include <io/terminal.h>
 #include <mm/mm.h>
 #include <mm/vmm.h>
-#include <uacpi/kernel_api.h>
-#include <uacpi/status.h>
 #include <uacpi/uacpi.h>
 #include <uacpi/utilities.h>
-
-typedef struct {
-    uacpi_pci_address address;
-} uacpi_pci_handle_t;
-
-typedef struct {
-    spinlock_t lock;
-} uacpi_lock_t;
-
-typedef struct {
-    spinlock_t lock;
-    uacpi_u32 counter;
-} uacpi_event_t;
-
-typedef struct {
-    uacpi_u32 irq;
-    uacpi_interrupt_handler handler;
-    uacpi_handle context;
-} uacpi_irq_t;
+#include <uacpi/kernel_api.h>
+#include <uacpi/status.h>
 
 static uacpi_irq_t *acpi_irq;
 static spinlock_t pci_config_lock = SPINLOCK_INIT;
@@ -73,13 +55,22 @@ void *uacpi_kernel_map(uacpi_phys_addr addr, uacpi_size len) {
 }
 
 void uacpi_kernel_unmap(void *addr, uacpi_size len) {
-    (void)addr;
-    (void)len;
+    if (!addr || addr == UACPI_MAP_FAILED || !len) return;
+
+    uacpi_size offset = (uintptr_t)addr & (PAGE_SIZE - 1);
+    if (len > SIZE_MAX - offset) return;
+
+    uacpi_size span = offset + len;
+    uacpi_size pages = (span + PAGE_SIZE - 1) / PAGE_SIZE;
+
+    vunmap_mmio(addr, pages);
 }
 
 void uacpi_kernel_log(uacpi_log_level level, const uacpi_char *message) {
     (void)level;
-    printf("acpi: %s", message);
+    // I like lowercase logs :P
+    printf("acpi: ");
+    for (; *message; message++) putchar(tolower((unsigned char)*message));
 }
 
 void *uacpi_kernel_alloc(uacpi_size size) {
