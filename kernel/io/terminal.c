@@ -189,10 +189,6 @@ static void backbuffer_reload_from_fb(struct limine_framebuffer *fb) {
     }
 }
 
-// Check whether the backbuffer pixel format matches the VRAM format exactly
-// so we can use memcpy instead of per-pixel color conversion.  The backbuffer
-// stores 0x00RRGGBB (R at bits 16..23, G at 8..15, B at 0..7).  This is a
-// native match for 32bpp XRGB framebuffers (the overwhelmingly common case).
 static inline bool fb_format_matches_bb(struct limine_framebuffer *fb) {
     return fb->bpp == 32 &&
            fb->red_mask_size   == 8 && fb->red_mask_shift   == 16 &&
@@ -209,11 +205,8 @@ static void flush_backbuffer(struct limine_framebuffer *fb) {
 
     // Validate framebuffer dimensions
     if (width == 0 || height == 0 || width > 8192 || height > 8192) return;
+    if (width != back_buffer_width || height != back_buffer_height) return;
 
-    // Lazy re-sync: if /dev/fb0 was written by userspace since we last touched
-    // the cached image, the cache is now stale. Pull fresh pixels out of the
-    // live framebuffer BEFORE flushing so we don't spray the user's garbage
-    // with the pre-write terminal image.
     if (back_buffer_dirty) {
         backbuffer_reload_from_fb(fb);
         back_buffer_dirty = false;
@@ -224,13 +217,16 @@ static void flush_backbuffer(struct limine_framebuffer *fb) {
 
     // Fast path: 32bpp XRGB — backbuffer IS native pixel format, just memcpy.
     if (fb_format_matches_bb(fb)) {
-        uint32_t *bb = back_buffer;
-        for (uint64_t y = 0; y < height; y++) {
-            memcpy(fb_addr + y * fb->pitch,
-                   bb + y * width,
-                   width * sizeof(uint32_t));
+        if (fb->pitch == back_buffer_pitch) {
+            memcpy(fb_addr, back_buffer, back_buffer_pitch * back_buffer_height);
+        } else {
+            for (uint64_t y = 0; y < back_buffer_height; y++) {
+                memcpy(fb_addr + y * fb->pitch,
+                       back_buffer + y * back_buffer_width,
+                       back_buffer_pitch);
+            }
         }
-        (void)update_fb(0, 0, width, height);
+        (void)update_fb(0, 0, back_buffer_width, back_buffer_height);
         return;
     }
 
@@ -280,11 +276,6 @@ static void flush_region_backbuffer(struct limine_framebuffer *fb, uint64_t x, u
     if (x >= fb->width || y >= fb->height) return;
     if (w == 0 || h == 0 || w > 8192 || h > 8192) return;
 
-    // Lazy resync: if userspace wrote to /dev/fb0 since the last full
-    // redraw, the back buffer is stale EVERYWHERE — not just in this rect.
-    // Repainting a small region from the cached (pre-corruption) image
-    // would bleed old terminal text through the user's garbage. Pull fresh
-    // pixels out of the live fb first, then the region push is correct.
     if (back_buffer_dirty) {
         backbuffer_reload_from_fb(fb);
         back_buffer_dirty = false;
@@ -731,10 +722,7 @@ void show_cursor(bool visible) {
     if (cursor_visible == visible) return;
     if (!fb_req.response || fb_req.response->framebuffer_count < 1) return;
     struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
-
-    if (!back_buffer_initialized) {
-        init_terminal_backbuffer(fb);
-    }
+    if (!back_buffer_initialized) init_terminal_backbuffer(fb);
 
     if (back_buffer_available) {
         uint64_t cw = current_font_w;
@@ -773,9 +761,6 @@ void show_cursor(bool visible) {
             }
         }
     } else {
-        // Fallback: no backbuffer, XOR cursor directly in VRAM.
-        // XOR is self-inverting (a ^ b ^ b = a), so the same operation
-        // both draws and erases the cursor — no save/restore needed.
         uint8_t *fb_addr = (uint8_t *)fb->address;
         uint8_t bpp = fb->bpp;
         uint8_t bpp_bytes = (bpp + 7) / 8;
@@ -813,13 +798,8 @@ void scroll(void) {
     if (!fb_req.response || fb_req.response->framebuffer_count < 1) return;
     struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
     uint64_t line_height = current_font_h;
+    if (!back_buffer_initialized) init_terminal_backbuffer(fb);
 
-    // Initialize back buffer if not already done (inline)
-    if (!back_buffer_initialized) {
-        init_terminal_backbuffer(fb);
-    }
-
-    // Scroll - use direct fb memmove for speed (avoids cursor flicker)
     if (back_buffer_available) {
         scroll_region_both(1, bg_color);
     } else {
@@ -852,12 +832,7 @@ void clrscr(void) {
         return;
     }
 
-    // Initialize back buffer if not already done (inline)
-    if (!back_buffer_initialized) {
-        init_terminal_backbuffer(fb);
-    }
-
-    // Hide cursor before clearing
+    if (!back_buffer_initialized) init_terminal_backbuffer(fb);
     if (cursor_visible) show_cursor(false);
 
     // Clear screen - use back buffer if available, otherwise direct FB
@@ -940,10 +915,7 @@ static int putchar_unlocked(int c) {
     if (!fb_req.response || fb_req.response->framebuffer_count < 1) return EOF;
     struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
 
-    // Initialize back buffer if not already done (inline)
-    if (!back_buffer_initialized) {
-        init_terminal_backbuffer(fb);
-    }
+    if (!back_buffer_initialized) init_terminal_backbuffer(fb);
 
     show_cursor(false);
 

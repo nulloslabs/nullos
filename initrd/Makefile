@@ -63,12 +63,12 @@ initrd:
 		printf '%s\n' \
 			'export PS1="\\w \\$$ "' \
 			'export PATH=/usr/sbin:/usr/bin:/sbin:/bin' \
+			'umask 022' \
 			> main/etc/profile && \
 		printf "NullOS (\\\\r)\n\n" > main/etc/issue && \
 		printf "root:x:0:0:root:/root:/bin/bash\nuser:x:1000:1000:user:/home/user:/bin/bash\n" > main/etc/passwd && \
 		printf "root:x:0:\nuser:x:1000:\n" > main/etc/group && \
 		printf 'root:$$5$$nullos$$bdWJDaAMKrT0iGP6LnRmZJf5O8ImIPr0ChFp1JF2VID:19863:0:99999:7:::\n' > main/etc/shadow && \
-		printf 'user:$$5$$user$$Lssaar/36bdTMOfh5iRLlvKBQ/QgRHkvu/nltxEXH/9:19863:0:99999:7:::\n' >> main/etc/shadow && \
 		chmod 644 main/etc/passwd main/etc/group && \
 		chmod 600 main/etc/shadow && \
 		printf '%s\n' \
