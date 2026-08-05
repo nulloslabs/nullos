@@ -12,6 +12,7 @@ A secure, fast and privacy-focused hobby OS.
 | Done | ACPI support | |
 | Done | PCI support | |
 | Done | Framebuffer, BGA, SVGA II support | |
+| Done | IDE PATA and ATAPI support | |
 | Done | Sound card support | |
 | Done | Initrd support | |
 | Done | GZIP decompression support | No compression support. |
