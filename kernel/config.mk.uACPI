@@ -1,8 +1,0 @@
-include config.mk
-
-# Everything is in config.mk already, we just change CFLAGS and OUTFILE
-
-CFLAGS := $(filter-out -I../include/ -I../include/freestanding/ -I../include/limine/ -I../uacpi/include/,$(CFLAGS)) -I./include/ -I./include/freestanding/ -I./include/limine/ -I./uacpi/include
-STRIPFLAGS := $(STRIPFLAGS) --strip-debug
-
-OUTFILE := uacpi/build/libuacpi.a
