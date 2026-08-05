@@ -8,61 +8,61 @@ A secure, fast and privacy-focused hobby OS.
 
 | Status | Feature |
 | :--- | :--- |
-| `Done` | `UHCI USB support` |
-| `Done` | `ACPI support` |
-| `Done` | `PCI support` |
-| `Done` | `Framebuffer, BGA, SVGA II support` |
-| `Done` | `IDE PATA and ATAPI support` |
-| `Done` | `Sound card support` |
-| `Done` | `Initrd support` |
-| `Done` | `Gzip decompression support` |
-| `Done` | `GDT, IDT and SSE support` |
-| `Done` | `Modular font system` |
-| `Done` | `Serial port support` |
-| `Done` | `Syscall support` |
-| `Done` | `ELF executable support` |
-| `Done` | `MP support` |
-| `Done` | `Networking stack and NIC support` |
+| Done | UHCI USB support |
+| Done | ACPI support |
+| Done | PCI support |
+| Done | Framebuffer, BGA, SVGA II support |
+| Done | IDE PATA and ATAPI support |
+| Done | Sound card support |
+| Done | Initrd support |
+| Done | Gzip decompression support |
+| Done | GDT, IDT and SSE support |
+| Done | Modular font system |
+| Done | Serial port support |
+| Done | Syscall support |
+| Done | ELF executable support |
+| Done | MP support |
+| Done | Networking stack and NIC support |
 
 ## 🛠️ Build Requirements
 
 | Linux (x86_64) | macOS (any) | Other (any) | Notes |
 | :--- | :--- | :--- | :--- |
-| `cc` | `cc` | `cc` | `Host C compiler` |
-| `gcc` | `x86_64-elf-gcc` | `x86_64-elf-gcc` | `Target C compiler` |
-| `ld` | `x86_64-elf-ld` | `x86_64-elf-ld` | |
-| `strip` | `x86_64-elf-strip` | `x86_64-elf-strip` | |
-| `make` | `gmake` | `gmake` | |
-| `xorriso` | `xorriso` | `xorriso` | |
-| `qemu-system-x86_64` | `qemu-system-x86_64` | `qemu-system-x86_64` | |
-| `curl` | `curl` | `curl` | |
-| `tar` | `tar` | `tar` | |
-| `cpio` | `cpio` | `cpio` | |
-| `gzip` | `gzip` | `gzip` | |
-| `zstd` | `zstd` | `zstd` | |
-| `xz` | `xz` | `xz` | |
+| cc | cc | cc | Host C compiler |
+| gcc | x86_64-elf-gcc | x86_64-elf-gcc | Target C compiler |
+| ld | x86_64-elf-ld | x86_64-elf-ld | |
+| strip | x86_64-elf-strip | x86_64-elf-strip | |
+| make | gmake | gmake | |
+| xorriso | xorriso | xorriso | |
+| qemu-system-x86_64 | qemu-system-x86_64 | qemu-system-x86_64 | |
+| curl | curl | curl | |
+| tar | tar | tar | |
+| cpio | cpio | cpio | |
+| gzip | gzip | gzip | |
+| zstd | zstd | zstd | |
+| xz | xz | xz | |
 
 ## 🚀 Getting Started
 
 **1. Clone the repository:**
 
-```bash
+bash
 # You can remove --depth=1 to clone the entire commit history (may take a while)
 git clone --depth=1 https://github.com/asmileyguy/nullos.git
 cd nullos
-```
+
 
 **2. Build the kernel and ISO:**
 
-```bash
+bash
 make
-```
+
 
 **3. Run in QEMU:**
     
-```bash
+bash
 make qemu
-```
+
 
 ## 📜 License
 
