@@ -12,7 +12,7 @@ else
 	QEMUFLAGS := -M accel=tcg $(QEMUFLAGS)
 endif
 
-ISOFILE = iso/system.iso
+ISOFILE = iso/nullos.iso
 
 undefine ARCH
 undefine KERNEL

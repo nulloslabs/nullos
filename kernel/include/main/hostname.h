@@ -1,6 +1,6 @@
 #pragma once
 
-#define DEFAULT_HOSTNAME "(none)"
+#define HOSTNAME_DEFAULT "(none)"
 #define HOSTNAME_MAX_LEN 65
 
 int get_hostname(char *name, size_t len);

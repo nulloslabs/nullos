@@ -4351,7 +4351,7 @@ void sys_uname(syscall_frame_t *frame) {
 
     if (!bufp) { frame->rax = (uint64_t)-EFAULT; return; }
 
-    struct utsname info = utsname_info;
+    struct utsname info = utsname;
     get_hostname(info.nodename, sizeof(info.nodename));
     get_domainname(info.domainname, sizeof(info.domainname));
 

@@ -14,8 +14,6 @@
 #include <io/ttys.h>
 #include <mm/mm.h>
 
-#define FONT_PENDING_BUFFER_SIZE 4096
-
 static parser_state_t state = STATE_NORMAL;
 static char ansi_buffer[32];
 static int ansi_idx = 0;

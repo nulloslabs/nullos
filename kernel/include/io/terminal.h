@@ -5,6 +5,8 @@
 #include <limine.h>
 #include <io/fb.h>
 
+#define FONT_PENDING_BUFFER_SIZE 4096
+
 typedef enum {
     STATE_NORMAL,
     STATE_EXPECT_BRACKET,

@@ -27,7 +27,7 @@ iso: tools kernel initrd
 		[ ../tools/limine-binary/limine -nt $(OUTFILE) ] || \
 	    [ ../tools/limine-binary/limine-bios.sys -nt $(OUTFILE) ] || [ ../tools/limine-binary/limine-bios-cd.bin -nt $(OUTFILE) ] || [ ../tools/limine-binary/limine-uefi-cd.sys -nt $(OUTFILE) ] || \
 		[ ../tools/limine-binary/BOOTX64.EFI -nt $(OUTFILE) ]; then \
-		printf "  %-7s %s\n" "XORRISO" "$(SUBDIR)/system.iso" && \
+		printf "  %-7s %s\n" "XORRISO" "$(SUBDIR)/$(OUTFILE)" && \
 		mkdir -p main/boot main/EFI/BOOT && \
 		cp ../tools/limine-binary/limine-bios.sys ../tools/limine-binary/limine-bios-cd.bin ../tools/limine-binary/limine-uefi-cd.bin main/boot && \
 		cp ../tools/limine-binary/BOOTX64.EFI main/EFI/BOOT && \

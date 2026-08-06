@@ -4,7 +4,7 @@
 #include <main/spinlocks.h>
 #include <main/string.h>
 
-static char current_hostname[HOSTNAME_MAX_LEN] = DEFAULT_HOSTNAME;
+static char current_hostname[HOSTNAME_MAX_LEN] = HOSTNAME_DEFAULT;
 static spinlock_t hostname_lock = SPINLOCK_INIT;
 
 int get_hostname(char *name, size_t len) {

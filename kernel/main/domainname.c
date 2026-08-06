@@ -4,7 +4,7 @@
 #include <main/spinlocks.h>
 #include <main/string.h>
 
-static char current_domainname[DOMAINNAME_MAX_LEN] = DEFAULT_DOMAINNAME;
+static char current_domainname[DOMAINNAME_MAX_LEN] = DOMAINNAME_DEFAULT;
 static spinlock_t domainname_lock = SPINLOCK_INIT;
 
 int get_domainname(char *name, size_t len) {
