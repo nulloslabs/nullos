@@ -29,7 +29,7 @@ initrd:
 	if [ ! -f $(OUTFILE) ] || [ ! -d main ] || [ Makefile -nt $(OUTFILE) ] || [ config.mk -nt $(OUTFILE) ] || [ -n "$$missing" ] || [ -n "$$extra" ] || [ -n "$$(find main -newer $(OUTFILE) 2>/dev/null | head -1)" ]; then \
 		mkdir -p main packages && \
 		mkdir -p main/home main/root main/dev main/proc main/etc main/var main/usr main/tmp main/run && \
-		mkdir -p main/home/user main/etc/init.d main/usr/bin main/usr/sbin main/usr/lib main/usr/include && \
+		mkdir -p main/etc/init.d main/usr/bin main/usr/sbin main/usr/lib main/usr/include && \
 		mkdir -p main/var/db main/var/cache main/var/log main/var/lib main/var/tmp && \
 		chmod 1777 main/tmp main/var/tmp && \
 		chmod 755 main/run && \

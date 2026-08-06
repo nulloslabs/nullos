@@ -1,8 +1,10 @@
 #include <main/string.h>
 #include <main/limine_req.h>
 #include <main/spinlocks.h>
+#include <main/sched.h>
 #include <io/terminal.h>
 #include <mm/pmm.h>
+#include <mm/oom.h>
 static uint8_t* bitmap = NULL;
 static uint8_t* ref_counts = NULL;
 static uint64_t max_pages = 0;
@@ -39,6 +41,11 @@ void* pmalloc(void) {
         }
     }
     spin_unlock_irqrestore(&pmm_lock, flags);
+    // sched_lock is held by syscall_entry across the whole syscall;
+    // kill_oom() needs to acquire it internally, so release it first.
+    spin_unlock(&sched_lock);
+    kill_oom();
+    spin_lock(&sched_lock);
     return NULL; // OOM
 }
 
@@ -68,6 +75,9 @@ void* prealloc(uint64_t count) {
         }
     }
     spin_unlock_irqrestore(&pmm_lock, flags);
+    spin_unlock(&sched_lock);
+    kill_oom();
+    spin_lock(&sched_lock);
     return NULL;
 }
 

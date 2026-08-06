@@ -48,12 +48,12 @@
 
 #define _SIGSET_NWORDS (1024 / (8 * sizeof(unsigned long)))
 
-typedef struct { unsigned long __val[_SIGSET_NWORDS]; } sigset_t;
-
 typedef uint64_t old_sigset_t;
 
+typedef struct { unsigned long __val[_SIGSET_NWORDS]; } sigset_t;
+
 typedef struct sigaltstack {
-    void   *ss_sp;
-    int     ss_flags;
-    size_t  ss_size;
+    void *ss_sp;
+    int ss_flags;
+    size_t ss_size;
 } stack_t;

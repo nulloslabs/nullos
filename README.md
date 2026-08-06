@@ -64,6 +64,9 @@ make
 make qemu
 ```
 
+> [!NOTE]
+> The root password is 'nullos'.
+
 ## 📜 License
 
 This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.

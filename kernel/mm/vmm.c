@@ -11,26 +11,8 @@
 
 vmm_context_t kernel_context;
 static uint64_t vmalloc_cursor = 0xffffc00000000000;
-static uint64_t vuser_cursor   = USER_MMAP_BASE;
+static uint64_t vuser_cursor = USER_MMAP_BASE;
 static spinlock_t vmm_lock = SPINLOCK_INIT;
-
-// Helper: Get virtual address of a physical page using HHDM
-void* phys_to_virt(uint64_t phys) { return (void*)(phys + hhdm_req.response->offset); }
-
-uint64_t virt_to_phys(void* virt) {
-    uintptr_t addr = (uintptr_t)virt;
-    
-    // Check if it's in the kernel executable range
-    if (addr >= 0xffffffff80000000) { if (eaddr_req.response) { return addr - eaddr_req.response->virtual_base + eaddr_req.response->physical_base; } }
-    
-    if (addr >= KERNEL_HEAP_BASE && addr < KERNEL_HEAP_LIMIT) { return get_vmm_phys(&kernel_context, addr); }
-
-    // Check if it's in the vmalloc range (e.g. malloc buffers pushing into controllers)
-    if (addr >= 0xffffc00000000000 && addr < 0xffffffff80000000) { return get_vmm_phys(&kernel_context, addr); }
-    
-    // HHDM (Higher Half Direct Map) range
-    return addr - hhdm_req.response->offset;
-}
 
 static uint64_t* get_vmm_next_level(uint64_t* current_level, uint64_t index, bool allocate, uint64_t flags) {
     if (!current_level) { return NULL; }
@@ -52,6 +34,74 @@ static uint64_t* get_vmm_next_level(uint64_t* current_level, uint64_t index, boo
     current_level[index] = (uint64_t)next_level_phys | VMM_PRESENT | VMM_WRITABLE | VMM_USER;
     
     return next_level_virt;
+}
+
+static uint64_t get_or_fault_vmm_phys(vmm_context_t* ctx, uint64_t virt) {
+    uint64_t phys = get_vmm_phys(ctx, virt);
+    if (phys != 0) return phys;
+
+    uint64_t page_addr = virt & ~(uint64_t)(PAGE_SIZE - 1);
+    uint64_t pte = get_vmm_pte(ctx, page_addr);
+    if (pte & VMM_DEMAND) {
+        uint64_t stored_flags = pte & ~VMM_DEMAND;
+        void *p = pmalloc();
+        if (!p) return 0;
+        memset(phys_to_virt((uint64_t)p), 0, PAGE_SIZE);
+        map_vmm(ctx, page_addr, (uint64_t)p, stored_flags);
+        return (uint64_t)p + (virt & (PAGE_SIZE - 1));
+    }
+    return 0;
+}
+
+static bool vmm_user_page_valid(vmm_context_t *ctx, uint64_t virt, bool write) {
+    if (!ctx || !ctx->pml4) return false;
+    uint64_t pml4_idx = (virt >> 39) & 0x1FF;
+    uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
+    uint64_t pd_idx = (virt >> 21) & 0x1FF;
+    uint64_t pt_idx = (virt >> 12) & 0x1FF;
+    uint64_t required_upper = VMM_PRESENT | VMM_USER;
+    if (write) required_upper |= VMM_WRITABLE;
+
+    uint64_t pml4e = ctx->pml4[pml4_idx];
+    if ((pml4e & required_upper) != required_upper) return false;
+    uint64_t *pdpt = (uint64_t *)phys_to_virt(pml4e & 0x000ffffffffff000ULL);
+    uint64_t pdpte = pdpt[pdpt_idx];
+    if ((pdpte & required_upper) != required_upper) return false;
+    if (pdpte & (1ULL << 7)) return true;
+    uint64_t *pd = (uint64_t *)phys_to_virt(pdpte & 0x000ffffffffff000ULL);
+    uint64_t pde = pd[pd_idx];
+    if ((pde & required_upper) != required_upper) return false;
+    if (pde & (1ULL << 7)) return true;
+    uint64_t *pt = (uint64_t *)phys_to_virt(pde & 0x000ffffffffff000ULL);
+
+    uint64_t pte = pt[pt_idx];
+    if (pte & VMM_PRESENT) {
+        return (pte & required_upper) == required_upper;
+    }
+    if (pte & VMM_DEMAND) {
+        uint64_t required_user = VMM_USER;
+        if (write) required_user |= VMM_WRITABLE;
+        return (pte & required_user) == required_user;
+    }
+    return false;
+}
+
+// Helper: Get virtual address of a physical page using HHDM
+void* phys_to_virt(uint64_t phys) { return (void*)(phys + hhdm_req.response->offset); }
+
+uint64_t virt_to_phys(void* virt) {
+    uintptr_t addr = (uintptr_t)virt;
+    
+    // Check if it's in the kernel executable range
+    if (addr >= 0xffffffff80000000) { if (eaddr_req.response) { return addr - eaddr_req.response->virtual_base + eaddr_req.response->physical_base; } }
+    
+    if (addr >= KERNEL_HEAP_BASE && addr < KERNEL_HEAP_LIMIT) { return get_vmm_phys(&kernel_context, addr); }
+
+    // Check if it's in the vmalloc range (e.g. malloc buffers pushing into controllers)
+    if (addr >= 0xffffc00000000000 && addr < 0xffffffff80000000) { return get_vmm_phys(&kernel_context, addr); }
+    
+    // HHDM (Higher Half Direct Map) range
+    return addr - hhdm_req.response->offset;
 }
 
 void set_vmm_user(vmm_context_t* ctx, uint64_t virt) {
@@ -106,6 +156,32 @@ bool map_vmm(vmm_context_t* ctx, uint64_t virt, uint64_t phys, uint64_t flags) {
     // Invalidate the TLB for this address
     __asm__ volatile("invlpg (%0)" : : "r"(virt) : "memory");
     
+    spin_unlock_irqrestore(&vmm_lock, flags_irq);
+    return true;
+}
+
+bool reserve_vmm(vmm_context_t* ctx, uint64_t virt, uint64_t flags) {
+    uint64_t flags_irq;
+    spin_lock_irqsave(&vmm_lock, &flags_irq);
+
+    uint64_t pml4_idx = (virt >> 39) & 0x1FF;
+    uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
+    uint64_t pd_idx   = (virt >> 21) & 0x1FF;
+    uint64_t pt_idx   = (virt >> 12) & 0x1FF;
+
+    uint64_t* pdpt = get_vmm_next_level(ctx->pml4, pml4_idx, true, flags);
+    if (!pdpt) { spin_unlock_irqrestore(&vmm_lock, flags_irq); return false; }
+    uint64_t* pd   = get_vmm_next_level(pdpt, pdpt_idx, true, flags);
+    if (!pd)   { spin_unlock_irqrestore(&vmm_lock, flags_irq); return false; }
+    uint64_t* pt   = get_vmm_next_level(pd, pd_idx, true, flags);
+    if (!pt)   { spin_unlock_irqrestore(&vmm_lock, flags_irq); return false; }
+
+    // Store flags in PTE with VMM_DEMAND marker but without VMM_PRESENT.
+    // The CPU ignores all bits when present=0, so we can freely use them
+    // to remember what permissions this page should have once faulted in.
+    pt[pt_idx] = (flags & ~VMM_PRESENT) | VMM_DEMAND;
+    __asm__ volatile("invlpg (%0)" : : "r"(virt) : "memory");
+
     spin_unlock_irqrestore(&vmm_lock, flags_irq);
     return true;
 }
@@ -166,26 +242,20 @@ uint64_t get_vmm_phys(vmm_context_t* ctx, uint64_t virt) {
     return phys;
 }
 
-static bool vmm_user_page_valid(vmm_context_t *ctx, uint64_t virt, bool write) {
+// Read raw PTE (including non-present demand entries)
+uint64_t get_vmm_pte(vmm_context_t* ctx, uint64_t virt) {
     uint64_t pml4_idx = (virt >> 39) & 0x1FF;
     uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
-    uint64_t pd_idx = (virt >> 21) & 0x1FF;
-    uint64_t pt_idx = (virt >> 12) & 0x1FF;
-    uint64_t required = VMM_PRESENT | VMM_USER;
-    if (write) required |= VMM_WRITABLE;
+    uint64_t pd_idx   = (virt >> 21) & 0x1FF;
+    uint64_t pt_idx   = (virt >> 12) & 0x1FF;
 
-    uint64_t pml4e = ctx->pml4[pml4_idx];
-    if ((pml4e & required) != required) return false;
-    uint64_t *pdpt = (uint64_t *)phys_to_virt(pml4e & 0x000ffffffffff000ULL);
-    uint64_t pdpte = pdpt[pdpt_idx];
-    if ((pdpte & required) != required) return false;
-    if (pdpte & (1ULL << 7)) return true;
-    uint64_t *pd = (uint64_t *)phys_to_virt(pdpte & 0x000ffffffffff000ULL);
-    uint64_t pde = pd[pd_idx];
-    if ((pde & required) != required) return false;
-    if (pde & (1ULL << 7)) return true;
-    uint64_t *pt = (uint64_t *)phys_to_virt(pde & 0x000ffffffffff000ULL);
-    return (pt[pt_idx] & required) == required;
+    uint64_t* pdpt = get_vmm_next_level(ctx->pml4, pml4_idx, false, 0);
+    if (!pdpt) return 0;
+    uint64_t* pd = get_vmm_next_level(pdpt, pdpt_idx, false, 0);
+    if (!pd) return 0;
+    uint64_t* pt = get_vmm_next_level(pd, pd_idx, false, 0);
+    if (!pt) return 0;
+    return pt[pt_idx];
 }
 
 bool vmm_user_range_valid(vmm_context_t *ctx, uint64_t addr, size_t size, bool write) {
@@ -209,14 +279,14 @@ void read_vmm(vmm_context_t* ctx, void* dest, uint64_t virt_src, size_t size) {
     uint64_t curr_src = virt_src;
 
     while (remaining > 0) {
-        uint64_t phys = get_vmm_phys(ctx, curr_src & ~0xFFFULL);
+        uint64_t phys = get_or_fault_vmm_phys(ctx, curr_src);
         if (!phys) return;
 
         uint64_t offset = curr_src & 0xFFF;
         size_t to_copy = 4096 - offset;
         if (to_copy > remaining) to_copy = remaining;
 
-        memcpy(d, (uint8_t*)phys_to_virt(phys) + offset, to_copy);
+        memcpy(d, (uint8_t*)phys_to_virt(phys & ~0xFFFULL) + offset, to_copy);
 
         d += to_copy;
         curr_src += to_copy;
@@ -230,14 +300,14 @@ void write_vmm(vmm_context_t* ctx, uint64_t virt_dest, const void* src, size_t s
     uint64_t curr_dest = virt_dest;
 
     while (remaining > 0) {
-        uint64_t phys = get_vmm_phys(ctx, curr_dest & ~0xFFFULL);
+        uint64_t phys = get_or_fault_vmm_phys(ctx, curr_dest);
         if (!phys) return;
 
         uint64_t offset = curr_dest & 0xFFF;
         size_t to_copy = 4096 - offset;
         if (to_copy > remaining) to_copy = remaining;
 
-        memcpy((uint8_t*)phys_to_virt(phys) + offset, s, to_copy);
+        memcpy((uint8_t*)phys_to_virt(phys & ~0xFFFULL) + offset, s, to_copy);
 
         s += to_copy;
         curr_dest += to_copy;
@@ -250,14 +320,14 @@ void memset_vmm(vmm_context_t* ctx, uint64_t virt_dest, int val, size_t size) {
     uint64_t curr_dest = virt_dest;
 
     while (remaining > 0) {
-        uint64_t phys = get_vmm_phys(ctx, curr_dest & ~0xFFFULL);
+        uint64_t phys = get_or_fault_vmm_phys(ctx, curr_dest);
         if (!phys) return;
 
         uint64_t offset = curr_dest & 0xFFF;
         size_t to_copy = 4096 - offset;
         if (to_copy > remaining) to_copy = remaining;
 
-        memset((uint8_t*)phys_to_virt(phys) + offset, val, to_copy);
+        memset((uint8_t*)phys_to_virt(phys & ~0xFFFULL) + offset, val, to_copy);
 
         curr_dest += to_copy;
         remaining -= to_copy;
@@ -278,10 +348,9 @@ vmm_context_t* create_vmm_context(void) {
     // allocate physical page for PML4
     void* pml4_raw = pmalloc();
     if (!pml4_raw) { free(ctx); return NULL; }
-    uint64_t pml4_phys = (uint64_t)pml4_raw;
 
     // get virtual address
-    ctx->pml4 = (uint64_t*)phys_to_virt(pml4_phys);
+    ctx->pml4 = (uint64_t*)phys_to_virt((uint64_t)pml4_raw);
 
     // zero it out
     memset(ctx->pml4, 0, PAGE_SIZE);
@@ -353,10 +422,15 @@ vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
 
                 for (uint64_t pt_i = 0; pt_i < 512; pt_i++) {
                     uint64_t entry = pt[pt_i];
-                    if (!(entry & VMM_PRESENT)) continue;
-                    if (!(entry & VMM_USER)) continue;
-
                     uint64_t virt = (pml4_i << 39) | (pdpt_i << 30) | (pd_i << 21) | (pt_i << 12);
+
+                    if (!(entry & VMM_PRESENT)) {
+                        if (entry & VMM_DEMAND) {
+                            reserve_vmm(child, virt, entry & ~VMM_PRESENT);
+                        }
+                        continue;
+                    }
+                    if (!(entry & VMM_USER)) continue;
 
                     if (entry & VMM_EXTERNAL) {
                         uint64_t phys = entry & 0x000ffffffffff000ULL;
@@ -494,18 +568,15 @@ void* vmap_user_at(vmm_context_t* ctx, uint64_t virt, size_t size, uint64_t flag
     uint64_t curr_addr = virt & ~0xFFFULL;
 
     for (uint64_t i = 0; i < num_pages; i++) {
-        // If already mapped, we can either skip or remap.
-        // For mmap over existing, we should probably unmap first or just remap.
-        // Let's just map.
-        if (get_vmm_phys(ctx, curr_addr) == 0) {
-            void* phys = pmalloc();
-            if (!phys) return NULL; // Should probably rollback
-            map_vmm(ctx, curr_addr, (uint64_t)phys, flags | VMM_PRESENT | VMM_USER);
-            memset(phys_to_virt((uint64_t)phys), 0, PAGE_SIZE);
-        } else {
-            // Already mapped. Just update flags.
-            uint64_t phys = get_vmm_phys(ctx, curr_addr);
+        uint64_t phys = get_vmm_phys(ctx, curr_addr);
+        if (phys != 0) {
+            // Page is already physically backed (e.g. MAP_FIXED over existing):
+            // just update its flags in-place.
             map_vmm(ctx, curr_addr, phys, flags | VMM_PRESENT | VMM_USER);
+        } else {
+            // Not yet backed: reserve for demand paging.
+            // The physical page is allocated lazily on first access (#PF).
+            reserve_vmm(ctx, curr_addr, flags | VMM_USER);
         }
         curr_addr += PAGE_SIZE;
     }

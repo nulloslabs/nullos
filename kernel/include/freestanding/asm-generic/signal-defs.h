@@ -17,12 +17,12 @@
 #define SIG_UNBLOCK  1
 #define SIG_SETMASK  2
 
+#define SIG_DFL ((__sighandler_t)0)
+#define SIG_IGN ((__sighandler_t)1)
+#define SIG_ERR ((__sighandler_t)-1)
+
 typedef void __signalfn_t(int);
 typedef __signalfn_t *__sighandler_t;
 
 typedef void __restorefn_t(void);
 typedef __restorefn_t *__sigrestore_t;
-
-#define SIG_DFL ((__sighandler_t)0)
-#define SIG_IGN ((__sighandler_t)1)
-#define SIG_ERR ((__sighandler_t)-1)

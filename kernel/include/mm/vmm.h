@@ -17,6 +17,7 @@
 #define VMM_PCD      (1ULL << 4)
 #define VMM_SHARED   (1ULL << 9)
 #define VMM_EXTERNAL (1ULL << 10)
+#define VMM_DEMAND   (1ULL << 11) // demand-paged: reserved but not yet backed
 #define VMM_NX       (1ULL << 63)
 
 typedef struct {
@@ -55,6 +56,8 @@ void vunmap_mmio(void* addr, size_t num_pages);
 
 void* vmap_user_at(vmm_context_t* ctx, uint64_t virt, size_t size, uint64_t flags);
 void* vmap_user_range(vmm_context_t* ctx, size_t size, uint64_t flags);
+bool  reserve_vmm(vmm_context_t* ctx, uint64_t virt, uint64_t flags);
+uint64_t get_vmm_pte(vmm_context_t* ctx, uint64_t virt);
 
 void* vmalloc(size_t size);
 void* vmalloc_user(size_t size);

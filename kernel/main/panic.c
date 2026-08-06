@@ -8,6 +8,7 @@
 #include <main/halt.h>
 #include <main/sched.h>
 #include <io/terminal.h>
+#include <mm/pf.h>
 #include <syscalls/syscalls.h>
 #include <syscalls/syscall_impls.h>
 
@@ -187,6 +188,12 @@ void exception_panic(exception_frame_t *frame) {
 
     // Check if the fault came from user mode (Ring 3)
     if ((frame->cs & 3) != 0) {
+        // Vector 14 = page fault: try demand-paging first.
+        // If handle_pf resolves it (returns 0), just return and the CPU retries the
+        // faulting instruction transparently.
+        if (frame->vector == 14 && handle_pf(frame->cr2, frame->error_code) == 0)
+            return;
+
         int sig = exception_to_signal(frame->vector);
 
         current_task_ptr->pending_signals |= (1ULL << sig);
