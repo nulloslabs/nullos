@@ -1,10 +1,11 @@
 *.o
 *.d
-nullkrnl*
-*.cpio.gz
-*.tar.xz
+*.a
+*.cpio*
+*.tar*
 *.iso
 
+kernel/nullkrnl
 iso/main/
 initrd/main/
 initrd/packages/
