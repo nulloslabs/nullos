@@ -2,11 +2,11 @@
 *.d
 nullkrnl*
 *.cpio.gz
+*.tar.xz
 *.iso
 
 iso/main/
 initrd/main/
 initrd/packages/
 tools/limine-binary/
-tools/limine-binary.tar.xz
 kernel/include/limine/
