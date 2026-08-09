@@ -1,5 +1,6 @@
 #pragma once
 
+#ifndef __ASSEMBLY__
 #include <stdint.h>
 #include <signal.h>
 #include <ucontext.h>
@@ -10,9 +11,10 @@
 #include <mm/vmm.h>
 #include <mm/vma.h>
 #include <syscalls/syscalls.h>
+#endif
 
 #define MAX_TASKS 64
-#define USER_STACK_SIZE (4 * 1024 * 1024)
+#define USER_STACK_SIZE (1 * 1024 * 1024)
 #define KERNEL_STACK_SIZE 32768
 #define TASK_STDIN_BUF_SIZE 256
 
@@ -22,6 +24,7 @@
 #define TASK_ZOMBIE 3
 #define TASK_STOPPED 4
 
+#ifndef __ASSEMBLY__
 // TODO (maybe): Make this shit of a struct less messier
 typedef struct {
     pid_t pid;
@@ -60,6 +63,8 @@ typedef struct {
     uint64_t sigactions[32 * 4];
     uint64_t pending_signals;
     uint64_t blocked_signals;
+    uint64_t real_timer_deadline_us;
+    uint64_t real_timer_interval_us;
     // I don't know what any of these things below me does...
     uint64_t orig_rax;
     int *clear_child_tid;
@@ -89,4 +94,6 @@ void schedule(void);
 void exit_task(int status);
 const vma_table_t *task_vma_table(int pid_idx);
 bool signal_pending(void);
+void update_interval_timers(void);
 void init_sched(void);
+#endif

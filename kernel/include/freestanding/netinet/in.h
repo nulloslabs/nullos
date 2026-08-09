@@ -2,6 +2,12 @@
 
 #include <stdint.h>
 
+#define IPPROTO_IP   0
+#define IPPROTO_ICMP 1
+#define IPPROTO_TCP  6
+#define IPPROTO_UDP  17
+#define IPPROTO_RAW  255
+
 static inline uint16_t htons(uint16_t x) { return (uint16_t)((x >> 8) | (x << 8)); }
 static inline uint16_t ntohs(uint16_t x) { return htons(x); }
 static inline uint32_t htonl(uint32_t x) { return ((x & 0xFF000000) >> 24) | ((x & 0x00FF0000) >> 8) | ((x & 0x0000FF00) << 8)  | ((x & 0x000000FF) << 24); }

@@ -1,21 +1,29 @@
 #pragma once
 
+#include <stddef.h>
+#include <sys/uio.h>
+
 #define AF_UNSPEC 0
 #define AF_UNIX   1
 #define AF_LOCAL  AF_UNIX
 #define AF_INET   2
 #define AF_INET6  10
+#define AF_PACKET 17
 
 #define PF_UNSPEC AF_UNSPEC
 #define PF_UNIX   AF_UNIX
 #define PF_LOCAL  AF_LOCAL
 #define PF_INET   AF_INET
 #define PF_INET6  AF_INET6
+#define PF_PACKET AF_PACKET
 
 #define SOCK_STREAM    1
 #define SOCK_DGRAM     2
 #define SOCK_RAW       3
 #define SOCK_SEQPACKET 5
+#define SOCK_TYPE_MASK 0x000f
+#define SOCK_NONBLOCK  0x0800
+#define SOCK_CLOEXEC   0x080000
 
 #define SOL_SOCKET 1
 #define SO_REUSEADDR 2
@@ -28,6 +36,7 @@
 #define MSG_OOB       0x01
 #define MSG_PEEK      0x02
 #define MSG_DONTROUTE 0x04
+#define MSG_DONTWAIT  0x40
 #define MSG_WAITALL   0x100
 
 #define SHUT_RD 0
@@ -51,4 +60,14 @@ struct sockaddr_storage {
 struct linger {
     int l_onoff;
     int l_linger;
+};
+
+struct msghdr {
+    void         *msg_name;
+    socklen_t     msg_namelen;
+    struct iovec *msg_iov;
+    size_t        msg_iovlen;
+    void         *msg_control;
+    size_t        msg_controllen;
+    int           msg_flags;
 };

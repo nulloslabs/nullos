@@ -2,6 +2,9 @@
 #include <main/string.h>
 #include <main/spinlocks.h>
 #include <io/net.h>
+#include <io/sockets.h>
+#include <io/net_sockets.h>
+#include <io/packet_sockets.h>
 #include <io/hpet.h>
 #include <io/io.h>
 #include <mm/mm.h>
@@ -60,6 +63,15 @@ void register_net_device(net_device_t *dev) {
     spin_lock_irqsave(&net_lock, &irq);
     if (!net_current_device) { net_current_device = dev; }
     spin_unlock_irqrestore(&net_lock, irq);
+}
+
+void poll_net_device(void) {
+    net_device_t *dev;
+    uint64_t irq;
+    spin_lock_irqsave(&net_lock, &irq);
+    dev = net_current_device;
+    spin_unlock_irqrestore(&net_lock, irq);
+    if (dev && dev->poll) dev->poll();
 }
 
 static bool send_ip_packet(uint32_t dest_ip, uint8_t proto,
@@ -145,7 +157,14 @@ bool resolve_arp(uint32_t ip, uint8_t mac_out[6]) {
     spin_unlock_irqrestore(&net_lock, irq);
     // Continue below unlocked so we don't block
     send_arp_request(ip);
-    for (uint32_t i = 0; i < 1000000; i++) { if (arp_cache_valid && arp_cached_ip == ip) { memcpy(mac_out, arp_cached_mac, 6); return true; } io_wait(); }
+    for (uint32_t i = 0; i < 1000000; i++) {
+        poll_net_device();
+        if (arp_cache_valid && arp_cached_ip == ip) {
+            memcpy(mac_out, arp_cached_mac, 6);
+            return true;
+        }
+        io_wait();
+    }
     return false;
 }
 
@@ -237,6 +256,7 @@ void handle_udp_packet(const uint8_t *frame, uint16_t len) {
     udp_rx_callback_t cb = udp_callback;
     spin_unlock_irqrestore(&net_lock, irq);
 
+    net_udp_tap_rx(ip->src, ntohs(udp->src_port), ntohs(udp->dst_port), payload, data_len);
     if (cb) cb(ip->src, ntohs(udp->src_port), ntohs(udp->dst_port), payload, data_len);
 }
 
@@ -342,6 +362,7 @@ uint32_t resolve_dns(const char *hostname) {
     if (!send_udp_packet(NET_DNS_IP, DNS_SRC_PORT, DNS_PORT, buf, (uint16_t)off)) { udp_callback = NULL; return 0; }
 
     for (int i = 0; i < 3000; i++) {
+        poll_net_device();
         if (dns_got_reply) {
             uint32_t ip = dns_resolved_ip;
             udp_callback = NULL;
@@ -527,6 +548,7 @@ tcp_socket_t *connect_tcp(uint32_t remote_ip, uint16_t remote_port) {
 
     // Wait for SYN+ACK
     for (int i = 0; i < 5000; i++) {
+        poll_net_device();
         if (sock->state == TCP_ESTABLISHED) return sock;
         if (sock->state == TCP_CLOSED) break;
         sleep(1);
@@ -615,7 +637,7 @@ void free_tcp(tcp_socket_t *sock) {
     free(sock);
 }
 
-void poll_tcp(tcp_socket_t *sock) { (void)sock; io_wait(); }
+void poll_tcp(tcp_socket_t *sock) { (void)sock; poll_net_device(); }
 
 bool check_tcp_connected(tcp_socket_t *sock) { return sock && sock->state == TCP_ESTABLISHED; }
 
@@ -629,6 +651,7 @@ void handle_net_packet(net_device_t *dev, const uint8_t *frame, uint16_t len) {
     spin_unlock_irqrestore(&net_lock, irq);
     if (!is_current_device) return;
 
+    net_packet_tap_rx(frame, len);
     handle_arp_packet(frame, len);
     handle_icmp_packet(frame, len);
     handle_udp_packet(frame, len);

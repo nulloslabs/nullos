@@ -4,13 +4,15 @@
 .extern current_task_ptr
 .extern dispatch_syscall
 
+#include <main/sched.h>
+
 syscall_entry:
     // switch to kernel stack
     swapgs
     mov [rip + saved_user_rsp], rsp
     mov rsp, [rip + current_task_ptr]
     mov rsp, [rsp + 48]
-    add rsp, 32768
+    add rsp, KERNEL_STACK_SIZE
 
     // build syscall_frame_t
     push r15

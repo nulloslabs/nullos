@@ -119,13 +119,39 @@ static void poll_e1000(void) {
 void init_e1000(pci_device_t *dev) {
     if (!dev) return;
 
-    // Enable bus mastering
-    uint32_t cmd = read_pci(dev->bus, dev->dev, dev->func, 0x04);
-    write_pci(dev->bus, dev->dev, dev->func, 0x04, cmd | 0x0004);
+    set_pci_d0(dev);
 
-    // BAR0 should be MMIO
+    // Enable memory-space decoding and bus mastering.
+    uint32_t cmd = read_pci(dev->bus, dev->dev, dev->func, 0x04);
+    write_pci(dev->bus, dev->dev, dev->func, 0x04, cmd | 0x0006);
+
+    // BAR0 is a 128 KiB MMIO aperture. It is not RAM and therefore is not
+    // covered by the HHDM; map it explicitly with cache-disabled attributes.
     uint32_t bar0 = read_pci(dev->bus, dev->dev, dev->func, 0x10);
-    e1000_mmio = (volatile uint8_t*)phys_to_virt(bar0 & ~0xF);
+    if (bar0 & 0x1) {
+        printf("e1000: bar0 is not a memory bar\n");
+        return;
+    }
+
+    uint32_t bar_type = (bar0 >> 1) & 0x3;
+    uint64_t mmio_phys = bar0 & 0xFFFFFFF0ULL;
+    if (bar_type == 0x2) {
+        uint32_t bar1 = read_pci(dev->bus, dev->dev, dev->func, 0x14);
+        mmio_phys |= (uint64_t)bar1 << 32;
+    } else if (bar_type == 0x3) {
+        printf("e1000: invalid bar0 type\n");
+        return;
+    }
+    if (mmio_phys == 0) {
+        printf("e1000: invalid bar0 address\n");
+        return;
+    }
+
+    e1000_mmio = vmap_mmio(mmio_phys, E1000_MMIO_SIZE / PAGE_SIZE);
+    if (!e1000_mmio) {
+        printf("e1000: unable to map bar0\n");
+        return;
+    }
 
     // Read MAC Address
     if (detect_eeprom()) {
@@ -203,5 +229,6 @@ void init_e1000(pci_device_t *dev) {
 
     memcpy(e1000_net_device.mac, mac_addr, 6);
     e1000_net_device.send = send_e1000;
+    e1000_net_device.poll = poll_e1000;
     register_net_device(&e1000_net_device);
 }

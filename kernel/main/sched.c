@@ -10,6 +10,8 @@
 #include <main/sse.h>
 #include <main/fd.h>
 #include <main/msr.h>
+#include <main/mp.h>
+#include <main/timekeeping.h>
 #include <io/terminal.h>
 #include <io/usb.h>
 #include <mm/mm.h>
@@ -86,6 +88,8 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
             tasks[i].term_sig = 0;
             tasks[i].pending_signals = 0;
             tasks[i].blocked_signals = 0;
+            tasks[i].real_timer_deadline_us = 0;
+            tasks[i].real_timer_interval_us = 0;
             tasks[i].on_altstack = false;
             tasks[i].sas_ss_sp = NULL;
             tasks[i].sas_ss_size = 0;
@@ -188,6 +192,8 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
             memcpy(tasks[i].sigactions, current_task_ptr->sigactions, sizeof(tasks[i].sigactions));
             tasks[i].blocked_signals = current_task_ptr->blocked_signals;
             tasks[i].pending_signals = 0;
+            tasks[i].real_timer_deadline_us = 0;
+            tasks[i].real_timer_interval_us = 0;
             tasks[i].sid = current_task_ptr->sid;
             tasks[i].term_sig = 0;
             tasks[i].on_altstack = false;
@@ -319,6 +325,8 @@ pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *ctx, uint64_t flag
         // our model keeps a per-task bitmap we start clean (the group signal
         // semantic is approximated by kill targeting the thread).
         tasks[i].pending_signals  = 0;
+        tasks[i].real_timer_deadline_us = 0;
+        tasks[i].real_timer_interval_us = 0;
         tasks[i].term_sig         = 0;
         tasks[i].on_altstack      = false;
         tasks[i].sas_ss_sp        = current_task_ptr->sas_ss_sp;
@@ -421,7 +429,31 @@ pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *ctx, uint64_t flag
     return -EAGAIN;
 }
 
+void update_interval_timers(void) {
+    uint64_t now = time_get_realtime_us();
+
+    for (int i = 0; i < MAX_TASKS; i++) {
+        task_t *task = &tasks[i];
+        if (task->state == TASK_DEAD || task->state == TASK_ZOMBIE ||
+            task->real_timer_deadline_us == 0 || now < task->real_timer_deadline_us) {
+            continue;
+        }
+
+        task->pending_signals |= (1ULL << SIGALRM);
+        if (task->real_timer_interval_us) {
+            uint64_t elapsed = now - task->real_timer_deadline_us;
+            uint64_t periods = elapsed / task->real_timer_interval_us + 1;
+            task->real_timer_deadline_us += periods * task->real_timer_interval_us;
+        } else {
+            task->real_timer_deadline_us = 0;
+        }
+
+        if (task->state == TASK_STOPPED) task->state = TASK_READY;
+    }
+}
+
 void schedule(void) {
+    update_interval_timers();
     check_futex_timeouts();
 
     int old_task = current_task;
@@ -471,8 +503,10 @@ void schedule(void) {
         current_task_ptr = &tasks[current_task];
 
         // Ensure TSS.RSP0 is updated so Ring 3 -> Ring 0 interrupts use the correct stack!
+        // Use get_cpu_index() so APs update their own TSS, not always CPU 0's.
         if (tasks[next].kernel_stack) {
-            set_tss_kernel_stack_for_cpu(0, (void*)((uint64_t)tasks[next].kernel_stack + KERNEL_STACK_SIZE));
+            set_tss_kernel_stack_for_cpu(get_cpu_index(),
+                (void*)((uint64_t)tasks[next].kernel_stack + KERNEL_STACK_SIZE));
         }
 
         if (tasks[next].ctx && tasks[next].ctx != tasks[old_task].ctx) {
@@ -480,8 +514,11 @@ void schedule(void) {
         }
 
         write_msr(MSR_FS_BASE, tasks[next].fs_base);
-        write_msr(MSR_KERNEL_GS_BASE, tasks[next].gs_base);
-        write_msr(MSR_GS_BASE, (uint64_t)current_task_ptr);
+        // MSR_GS_BASE holds the user's gs_base (visible in ring 3 via GS).
+        // MSR_KERNEL_GS_BASE holds current_task_ptr so that swapgs in
+        // syscall_entry swaps in the kernel's task pointer, not user GS.
+        write_msr(MSR_GS_BASE, tasks[next].gs_base);
+        write_msr(MSR_KERNEL_GS_BASE, (uint64_t)current_task_ptr);
 
         // Eager FPU restore of the incoming task.  clts first so the
         // xrstor/fxrstor doesn't #NM (TS should already be clear in our

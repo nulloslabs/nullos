@@ -40,7 +40,7 @@ void kill_oom(void) {
             if (tasks[i].pgid == tasks[target_idx].pgid) tasks[i].pending_signals |= (1ULL << SIGKILL);
         }
     } else {
-        panic("out of memory, could not find any processes to kill");
+        panic("out of memory");
     }
 
     spin_unlock_irqrestore(&sched_lock, flags);

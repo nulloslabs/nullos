@@ -115,7 +115,7 @@ typedef enum {
 } tcp_state_t;
 
 // --- TCP socket ---
-#define TCP_RX_BUF_SIZE (64 * 1024)
+#define TCP_RX_BUF_SIZE (16 * 1024)
 
 typedef struct {
     tcp_state_t state;
@@ -138,10 +138,12 @@ typedef struct {
 typedef struct net_device {
     uint8_t mac[6];
     bool (*send)(const void *data, uint16_t len);
+    void (*poll)(void);
 } net_device_t;
 
 void register_net_device(net_device_t *dev);
 extern net_device_t *net_current_device;
+void poll_net_device(void);
 
 // --- ARP ---
 bool resolve_arp(uint32_t ip, uint8_t mac_out[6]);

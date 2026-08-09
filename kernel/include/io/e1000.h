@@ -5,6 +5,7 @@
 
 #define E1000_VENDOR 0x8086
 #define E1000_DEVICE 0x100E
+#define E1000_MMIO_SIZE 0x20000
 
 // Register Offsets
 #define E1000_CTRL     0x0000

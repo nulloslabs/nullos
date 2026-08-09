@@ -148,5 +148,6 @@ void init_rtl8139(pci_device_t *dev) {
 
     memcpy(rtl8139_net_device.mac, rtl8139.mac, 6);
     rtl8139_net_device.send = send_rtl8139;
+    rtl8139_net_device.poll = poll_rtl8139;
     register_net_device(&rtl8139_net_device);
 }

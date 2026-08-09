@@ -5,6 +5,7 @@
 #include <main/sched.h>
 #include <io/ptys.h>
 #include <io/sockets.h>
+#include <io/unix_sockets.h>
 #include <mm/mm.h>
 
 flock_obj_t global_flocks[128];
@@ -72,8 +73,10 @@ int free_fd(fd_table_t *table, int fd) {
         int idx = pty_slave_path_idx(table->entries[fd].path);
         if (idx >= 0)
             release_pty_slave(idx);
-    } else if (table->entries[fd].type == FD_PIPE || table->entries[fd].type == FD_SOCKET) {
+    } else if (table->entries[fd].type == FD_PIPE) {
         release_unix_handle((unix_handle_t *)table->entries[fd].handle);
+    } else if (table->entries[fd].type == FD_SOCKET) {
+        release_socket((socket_t *)table->entries[fd].handle);
     } else if ((table->entries[fd].type == FD_FILE || table->entries[fd].type == FD_TMPFS) && table->entries[fd].handle != NULL) {
         release_flock_obj((flock_obj_t *)table->entries[fd].handle);
     } else if (table->entries[fd].type == FD_EPOLL) {
@@ -113,7 +116,10 @@ void retain_fd_entry(fd_entry_t *entry) {
         int idx = pty_slave_path_idx(entry->path);
         if (idx >= 0)
             retain_pty_slave(idx);
-    } else if (entry->type == FD_PIPE || entry->type == FD_SOCKET) { retain_unix_handle((unix_handle_t *)entry->handle); 
+    } else if (entry->type == FD_PIPE) {
+        retain_unix_handle((unix_handle_t *)entry->handle);
+    } else if (entry->type == FD_SOCKET) {
+        retain_socket((socket_t *)entry->handle);
     } else if ((entry->type == FD_FILE || entry->type == FD_TMPFS) && entry->handle != NULL) { retain_flock_obj((flock_obj_t *)entry->handle); } }
 
 void init_fd_table(fd_table_t *table) {

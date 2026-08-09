@@ -17,6 +17,7 @@
 #include <linux/sched.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/mman.h>
 #include <sys/fb.h>
 #include <sys/stat.h>
@@ -56,6 +57,7 @@
 #include <io/ptys.h>
 #include <io/hpet.h>
 #include <io/sockets.h>
+#include <io/unix_sockets.h>
 #include <io/serial.h>
 #include <io/procfs.h>
 #include <io/tmpfs.h>
@@ -1462,6 +1464,25 @@ static int do_epoll_wait(syscall_frame_t *frame, int64_t timeout_us, uint64_t si
     }
 }
 
+static int timeval_to_us(const struct timeval *tv, uint64_t *out) {
+    if (tv->tv_sec < 0 || tv->tv_usec < 0 || tv->tv_usec >= 1000000) return -EINVAL;
+    if ((uint64_t)tv->tv_sec > (UINT64_MAX - (uint64_t)tv->tv_usec) / 1000000ULL) return -EINVAL;
+    *out = (uint64_t)tv->tv_sec * 1000000ULL + (uint64_t)tv->tv_usec;
+    return 0;
+}
+
+static void fill_real_itimer(task_t *task, struct itimerval *value) {
+    uint64_t now = time_get_realtime_us();
+    uint64_t remaining = 0;
+    if (task->real_timer_deadline_us > now) remaining = task->real_timer_deadline_us - now;
+
+    memset(value, 0, sizeof(*value));
+    value->it_value.tv_sec = (time_t)(remaining / 1000000ULL);
+    value->it_value.tv_usec = (suseconds_t)(remaining % 1000000ULL);
+    value->it_interval.tv_sec = (time_t)(task->real_timer_interval_us / 1000000ULL);
+    value->it_interval.tv_usec = (suseconds_t)(task->real_timer_interval_us % 1000000ULL);
+}
+
 int copy_from_user(void *kdest, const void *usrc, size_t size) {
     if (!usrc) return -EFAULT;
     if ((uint64_t)usrc >= USER_ADDR_MAX || size > USER_ADDR_MAX - (uint64_t)usrc) return -EFAULT;
@@ -1910,11 +1931,28 @@ void sys_read(syscall_frame_t *frame) {
         return;
     }
 
-    if (entry->type == FD_PIPE || entry->type == FD_SOCKET) {
+    if (entry->type == FD_PIPE) {
         if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
         uint8_t *kbuf = malloc(count);
         if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
         int64_t got = read_unix_handle((unix_handle_t *)entry->handle, kbuf, count, entry->flags);
+        if (got >= 0) {
+            write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, got);
+        }
+        free(kbuf);
+        frame->rax = (uint64_t)got;
+        return;
+    }
+
+    if (entry->type == FD_SOCKET) {
+        if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
+        uint8_t *kbuf = malloc(count);
+        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
+        socket_t *sock = (socket_t *)entry->handle;
+        int64_t got = -EBADF;
+        if (sock && sock->ops && sock->ops->read) {
+            got = sock->ops->read(sock, kbuf, count, entry->flags);
+        }
         if (got >= 0) {
             write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, got);
         }
@@ -2033,12 +2071,27 @@ void sys_write(syscall_frame_t *frame) {
         return;
     }
 
-    if (entry->type == FD_PIPE || entry->type == FD_SOCKET) {
+    if (entry->type == FD_PIPE) {
         if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
         uint8_t *kbuf = malloc(count);
         if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
         read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count);
         int64_t w = write_unix_handle((unix_handle_t *)entry->handle, kbuf, count, entry->flags);
+        free(kbuf);
+        frame->rax = (uint64_t)w;
+        return;
+    }
+
+    if (entry->type == FD_SOCKET) {
+        if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
+        uint8_t *kbuf = malloc(count);
+        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
+        read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count);
+        socket_t *sock = (socket_t *)entry->handle;
+        int64_t w = -EBADF;
+        if (sock && sock->ops && sock->ops->write) {
+            w = sock->ops->write(sock, kbuf, count, entry->flags);
+        }
         free(kbuf);
         frame->rax = (uint64_t)w;
         return;
@@ -3716,6 +3769,63 @@ void sys_nanosleep(syscall_frame_t *frame) {
     frame->rax = 0;
 }
 
+void sys_getitimer(syscall_frame_t *frame) {
+    int which = (int)frame->rdi;
+    struct itimerval *user_value = (struct itimerval *)frame->rsi;
+    struct itimerval value;
+
+    if (which != ITIMER_REAL) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_value || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_value, sizeof(value))) {
+        frame->rax = (uint64_t)-EFAULT;
+        return;
+    }
+
+    update_interval_timers();
+    fill_real_itimer(current_task_ptr, &value);
+    copy_to_user(user_value, &value, sizeof(value));
+    frame->rax = 0;
+}
+
+void sys_setitimer(syscall_frame_t *frame) {
+    int which = (int)frame->rdi;
+    const struct itimerval *user_new = (const struct itimerval *)frame->rsi;
+    struct itimerval *user_old = (struct itimerval *)frame->rdx;
+    struct itimerval new_value;
+    struct itimerval old_value;
+    uint64_t value_us;
+    uint64_t interval_us;
+    uint64_t deadline_us = 0;
+
+    if (which != ITIMER_REAL) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_new || copy_from_user(&new_value, user_new, sizeof(new_value)) < 0) {
+        frame->rax = (uint64_t)-EFAULT;
+        return;
+    }
+    if (user_old && !user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_old, sizeof(old_value))) {
+        frame->rax = (uint64_t)-EFAULT;
+        return;
+    }
+    if (timeval_to_us(&new_value.it_value, &value_us) < 0 ||
+        timeval_to_us(&new_value.it_interval, &interval_us) < 0) {
+        frame->rax = (uint64_t)-EINVAL;
+        return;
+    }
+
+    update_interval_timers();
+    fill_real_itimer(current_task_ptr, &old_value);
+
+    if (value_us != 0) {
+        uint64_t now = time_get_realtime_us();
+        if (value_us > UINT64_MAX - now) { frame->rax = (uint64_t)-EINVAL; return; }
+        deadline_us = now + value_us;
+    }
+    current_task_ptr->real_timer_interval_us = interval_us;
+    current_task_ptr->real_timer_deadline_us = deadline_us;
+
+    if (user_old) copy_to_user(user_old, &old_value, sizeof(old_value));
+    frame->rax = 0;
+}
+
 void sys_getpid(syscall_frame_t *frame) {
     frame->rax = (uint64_t)current_task_ptr->pid;
 }
@@ -3790,13 +3900,23 @@ void sys_socket(syscall_frame_t *frame) {
     int domain = (int)frame->rdi;
     int type = (int)frame->rsi;
     int protocol = (int)frame->rdx;
-    unix_handle_t *h = NULL;
-    int r = create_unix_socket(domain, type, protocol, &h);
-    if (r < 0) { frame->rax = (uint64_t)r; return; }
+    int socket_flags = type & (SOCK_NONBLOCK | SOCK_CLOEXEC);
+    int base_type = type & SOCK_TYPE_MASK;
+    socket_t *sock = NULL;
 
-    int fd = alloc_fd_handle(&current_task_ptr->fd_table, "socket", FD_SOCKET, O_RDWR, h);
+    if (type & ~(SOCK_TYPE_MASK | SOCK_NONBLOCK | SOCK_CLOEXEC)) {
+        frame->rax = (uint64_t)-EINVAL;
+        return;
+    }
+
+    int r = create_socket(domain, base_type, protocol, &sock);
+    if (r < 0) { frame->rax = (uint64_t)r; return; }
+    sock->flags = socket_flags & SOCK_NONBLOCK;
+
+    int fd = alloc_fd_handle(&current_task_ptr->fd_table, "socket", FD_SOCKET,
+                             O_RDWR | (socket_flags & SOCK_NONBLOCK), sock);
     if (fd < 0) {
-        release_unix_handle(h);
+        release_socket(sock);
         frame->rax = (uint64_t)fd;
         return;
     }
@@ -3811,27 +3931,30 @@ void sys_connect(syscall_frame_t *frame) {
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
     if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
     if (addrlen > 0 && !user_range_ok(current_task_ptr->ctx, (uint64_t)addr, addrlen)) { frame->rax = (uint64_t)-EFAULT; return; }
-    // Copy sockaddr to kernel buffer for safe access
-    sockaddr_un_t kaddr;
-    memset(&kaddr, 0, sizeof(kaddr));
+    uint8_t kaddr[128];
+    memset(kaddr, 0, sizeof(kaddr));
     uint32_t copy_len = (addrlen < sizeof(kaddr)) ? addrlen : sizeof(kaddr);
-    read_vmm(current_task_ptr->ctx, &kaddr, (uint64_t)addr, copy_len);
-    frame->rax = (uint64_t)connect_unix_socket((unix_handle_t *)entry->handle, &kaddr, copy_len);
+    read_vmm(current_task_ptr->ctx, kaddr, (uint64_t)addr, copy_len);
+    socket_t *sock = (socket_t *)entry->handle;
+    if (!sock || !sock->ops || !sock->ops->connect) { frame->rax = (uint64_t)-EINVAL; return; }
+    frame->rax = (uint64_t)sock->ops->connect(sock, kaddr, copy_len);
 }
 
 void sys_accept(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     fd_entry_t *entry = get_current_fd(fd);
-    unix_handle_t *accepted = NULL;
+    socket_t *accepted = NULL;
     int r;
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
     if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
+    socket_t *sock = (socket_t *)entry->handle;
+    if (!sock || !sock->ops || !sock->ops->accept) { frame->rax = (uint64_t)-EINVAL; return; }
 
-    r = accept_unix_socket((unix_handle_t *)entry->handle, &accepted);
+    r = sock->ops->accept(sock, &accepted);
     if (r < 0) { frame->rax = (uint64_t)r; return; }
     int newfd = alloc_fd_handle(&current_task_ptr->fd_table, "socket:accepted", FD_SOCKET, O_RDWR, accepted);
     if (newfd < 0) {
-        release_unix_handle(accepted);
+        release_socket(accepted);
         frame->rax = (uint64_t)newfd;
         return;
     }
@@ -3842,16 +3965,32 @@ void sys_sendto(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     const void *buf = (const void *)frame->rsi;
     size_t len = (size_t)frame->rdx;
+    int flags = (int)frame->r10;
+    const void *dest_addr = (const void *)frame->r8;
+    socklen_t addrlen = (socklen_t)frame->r9;
+
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
     if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
     if (len > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
     if (len > 0 && !user_range_ok(current_task_ptr->ctx, (uint64_t)buf, len)) { frame->rax = (uint64_t)-EFAULT; return; }
-    // Copy user data to kernel buffer before sending
+
+    uint8_t kaddr[128];
+    if (dest_addr && addrlen > 0) {
+        if (!user_range_ok(current_task_ptr->ctx, (uint64_t)dest_addr, addrlen)) { frame->rax = (uint64_t)-EFAULT; return; }
+        uint32_t copy_len = (addrlen < sizeof(kaddr)) ? addrlen : sizeof(kaddr);
+        read_vmm(current_task_ptr->ctx, kaddr, (uint64_t)dest_addr, copy_len);
+    }
+
     uint8_t *kbuf = malloc(len);
     if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
     read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, len);
-    int64_t w = write_unix_handle((unix_handle_t *)entry->handle, kbuf, len, entry->flags);
+
+    socket_t *sock = (socket_t *)entry->handle;
+    int64_t w = -EBADF;
+    if (sock && sock->ops && sock->ops->sendto) {
+        w = sock->ops->sendto(sock, kbuf, len, flags, (dest_addr && addrlen > 0) ? kaddr : NULL, addrlen);
+    }
     free(kbuf);
     frame->rax = (uint64_t)w;
 }
@@ -3860,20 +3999,160 @@ void sys_recvfrom(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     void *buf = (void *)frame->rsi;
     size_t len = (size_t)frame->rdx;
+    int flags = (int)frame->r10;
+    void *src_addr = (void *)frame->r8;
+    socklen_t *addrlen_ptr = (socklen_t *)frame->r9;
+
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
     if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
     if (len > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
     if (len > 0 && !user_write_range_ok(current_task_ptr->ctx, (uint64_t)buf, len)) { frame->rax = (uint64_t)-EFAULT; return; }
-    // Read into kernel buffer first, then copy to user
+
+    uint8_t kaddr[128];
+    socklen_t kaddrlen = sizeof(kaddr);
     uint8_t *kbuf = malloc(len);
     if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
-    int64_t got = read_unix_handle((unix_handle_t *)entry->handle, kbuf, len, entry->flags);
+
+    socket_t *sock = (socket_t *)entry->handle;
+    int64_t got = -EBADF;
+    if (sock && sock->ops && sock->ops->recvfrom) {
+        got = sock->ops->recvfrom(sock, kbuf, len, flags, kaddr, &kaddrlen);
+    }
     if (got > 0) {
         write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, (size_t)got);
+        if (src_addr && addrlen_ptr && user_write_range_ok(current_task_ptr->ctx, (uint64_t)src_addr, kaddrlen)) {
+            write_vmm(current_task_ptr->ctx, (uint64_t)src_addr, kaddr, kaddrlen);
+            write_vmm(current_task_ptr->ctx, (uint64_t)addrlen_ptr, &kaddrlen, sizeof(socklen_t));
+        }
     }
     free(kbuf);
     frame->rax = (uint64_t)got;
+}
+
+void sys_sendmsg(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    const struct msghdr *user_msg = (const struct msghdr *)frame->rsi;
+    int flags = (int)frame->rdx;
+    struct msghdr msg;
+    struct iovec *iov = NULL;
+    uint8_t *buf = NULL;
+    uint8_t name[128];
+    size_t total = 0;
+    int64_t result = -EBADF;
+
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
+    if (copy_from_user(&msg, user_msg, sizeof(msg)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (msg.msg_iovlen > MAX_IOV || msg.msg_namelen > sizeof(name)) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    if (msg.msg_iovlen) {
+        size_t iov_size = msg.msg_iovlen * sizeof(*iov);
+        iov = malloc(iov_size);
+        if (!iov) { frame->rax = (uint64_t)-ENOMEM; return; }
+        if (copy_from_user(iov, msg.msg_iov, iov_size) < 0) { result = -EFAULT; goto out; }
+        for (size_t i = 0; i < msg.msg_iovlen; i++) {
+            if (iov[i].iov_len > MAX_IO_COUNT - total ||
+                (iov[i].iov_len && !user_range_ok(current_task_ptr->ctx, (uint64_t)iov[i].iov_base, iov[i].iov_len))) {
+                result = -EFAULT;
+                goto out;
+            }
+            total += iov[i].iov_len;
+        }
+    }
+    if (msg.msg_name && msg.msg_namelen && copy_from_user(name, msg.msg_name, msg.msg_namelen) < 0) {
+        result = -EFAULT;
+        goto out;
+    }
+
+    buf = malloc(total ? total : 1);
+    if (!buf) { result = -ENOMEM; goto out; }
+    size_t offset = 0;
+    for (size_t i = 0; i < msg.msg_iovlen; i++) {
+        if (iov[i].iov_len && copy_from_user(buf + offset, iov[i].iov_base, iov[i].iov_len) < 0) {
+            result = -EFAULT;
+            goto out;
+        }
+        offset += iov[i].iov_len;
+    }
+
+    socket_t *sock = (socket_t *)entry->handle;
+    if (sock && sock->ops && sock->ops->sendto) {
+        result = sock->ops->sendto(sock, buf, total, flags,
+                                   msg.msg_name ? name : NULL, msg.msg_namelen);
+    }
+
+out:
+    if (buf) free(buf);
+    if (iov) free(iov);
+    frame->rax = (uint64_t)result;
+}
+
+void sys_recvmsg(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    struct msghdr *user_msg = (struct msghdr *)frame->rsi;
+    int flags = (int)frame->rdx;
+    struct msghdr msg;
+    struct iovec *iov = NULL;
+    uint8_t *buf = NULL;
+    uint8_t name[128];
+    socklen_t name_len;
+    size_t total = 0;
+    int64_t result = -EBADF;
+
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
+    if (copy_from_user(&msg, user_msg, sizeof(msg)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (msg.msg_iovlen > MAX_IOV || msg.msg_namelen > sizeof(name)) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    if (msg.msg_iovlen) {
+        size_t iov_size = msg.msg_iovlen * sizeof(*iov);
+        iov = malloc(iov_size);
+        if (!iov) { frame->rax = (uint64_t)-ENOMEM; return; }
+        if (copy_from_user(iov, msg.msg_iov, iov_size) < 0) { result = -EFAULT; goto out; }
+        for (size_t i = 0; i < msg.msg_iovlen; i++) {
+            if (iov[i].iov_len > MAX_IO_COUNT - total ||
+                (iov[i].iov_len && !user_write_range_ok(current_task_ptr->ctx, (uint64_t)iov[i].iov_base, iov[i].iov_len))) {
+                result = -EFAULT;
+                goto out;
+            }
+            total += iov[i].iov_len;
+        }
+    }
+
+    buf = malloc(total ? total : 1);
+    if (!buf) { result = -ENOMEM; goto out; }
+    name_len = msg.msg_name ? msg.msg_namelen : 0;
+    socket_t *sock = (socket_t *)entry->handle;
+    if (sock && sock->ops && sock->ops->recvfrom) {
+        result = sock->ops->recvfrom(sock, buf, total, flags,
+                                     msg.msg_name ? name : NULL,
+                                     msg.msg_name ? &name_len : NULL);
+    }
+    if (result < 0) goto out;
+
+    size_t remaining = (size_t)result;
+    size_t offset = 0;
+    for (size_t i = 0; i < msg.msg_iovlen && remaining; i++) {
+        size_t copy_len = iov[i].iov_len < remaining ? iov[i].iov_len : remaining;
+        if (copy_to_user(iov[i].iov_base, buf + offset, copy_len) < 0) { result = -EFAULT; goto out; }
+        offset += copy_len;
+        remaining -= copy_len;
+    }
+    if (msg.msg_name && name_len) {
+        if (copy_to_user(msg.msg_name, name, name_len) < 0) { result = -EFAULT; goto out; }
+    }
+    msg.msg_namelen = name_len;
+    msg.msg_controllen = 0;
+    msg.msg_flags = 0;
+    if (copy_to_user(user_msg, &msg, sizeof(msg)) < 0) result = -EFAULT;
+
+out:
+    if (buf) free(buf);
+    if (iov) free(iov);
+    frame->rax = (uint64_t)result;
 }
 
 void sys_shutdown(syscall_frame_t *frame) {
@@ -3882,7 +4161,9 @@ void sys_shutdown(syscall_frame_t *frame) {
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
     if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
-    frame->rax = (uint64_t)shutdown_unix_socket((unix_handle_t *)entry->handle, how);
+    socket_t *sock = (socket_t *)entry->handle;
+    if (!sock || !sock->ops || !sock->ops->shutdown) { frame->rax = (uint64_t)-EINVAL; return; }
+    frame->rax = (uint64_t)sock->ops->shutdown(sock, how);
 }
 
 void sys_bind(syscall_frame_t *frame) {
@@ -3893,12 +4174,13 @@ void sys_bind(syscall_frame_t *frame) {
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
     if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
     if (addrlen > 0 && !user_range_ok(current_task_ptr->ctx, (uint64_t)addr, addrlen)) { frame->rax = (uint64_t)-EFAULT; return; }
-    // Copy sockaddr to kernel buffer for safe access
-    sockaddr_un_t kaddr;
-    memset(&kaddr, 0, sizeof(kaddr));
+    uint8_t kaddr[128];
+    memset(kaddr, 0, sizeof(kaddr));
     uint32_t copy_len = (addrlen < sizeof(kaddr)) ? addrlen : sizeof(kaddr);
-    read_vmm(current_task_ptr->ctx, &kaddr, (uint64_t)addr, copy_len);
-    frame->rax = (uint64_t)bind_unix_socket((unix_handle_t *)entry->handle, &kaddr, copy_len);
+    read_vmm(current_task_ptr->ctx, kaddr, (uint64_t)addr, copy_len);
+    socket_t *sock = (socket_t *)entry->handle;
+    if (!sock || !sock->ops || !sock->ops->bind) { frame->rax = (uint64_t)-EINVAL; return; }
+    frame->rax = (uint64_t)sock->ops->bind(sock, kaddr, copy_len);
 }
 
 void sys_listen(syscall_frame_t *frame) {
@@ -3907,7 +4189,71 @@ void sys_listen(syscall_frame_t *frame) {
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
     if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
-    frame->rax = (uint64_t)listen_unix_socket((unix_handle_t *)entry->handle, backlog);
+    socket_t *sock = (socket_t *)entry->handle;
+    if (!sock || !sock->ops || !sock->ops->listen) { frame->rax = (uint64_t)-EINVAL; return; }
+    frame->rax = (uint64_t)sock->ops->listen(sock, backlog);
+}
+
+void sys_getsockname(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    void *user_addr = (void *)frame->rsi;
+    socklen_t *user_addrlen = (socklen_t *)frame->rdx;
+    uint8_t addr[128];
+    socklen_t addrlen;
+
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
+    if (!user_addr || !user_addrlen || copy_from_user(&addrlen, user_addrlen, sizeof(addrlen)) < 0) {
+        frame->rax = (uint64_t)-EFAULT;
+        return;
+    }
+    if (addrlen > sizeof(addr)) addrlen = sizeof(addr);
+    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_addr, addrlen) ||
+        !user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_addrlen, sizeof(addrlen))) {
+        frame->rax = (uint64_t)-EFAULT;
+        return;
+    }
+
+    socket_t *sock = (socket_t *)entry->handle;
+    if (!sock || !sock->ops || !sock->ops->getsockname) { frame->rax = (uint64_t)-EOPNOTSUPP; return; }
+    int result = sock->ops->getsockname(sock, addr, &addrlen);
+    if (result < 0) { frame->rax = (uint64_t)result; return; }
+
+    copy_to_user(user_addr, addr, addrlen);
+    copy_to_user(user_addrlen, &addrlen, sizeof(addrlen));
+    frame->rax = 0;
+}
+
+void sys_getpeername(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    void *user_addr = (void *)frame->rsi;
+    socklen_t *user_addrlen = (socklen_t *)frame->rdx;
+    uint8_t addr[128];
+    socklen_t addrlen;
+
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
+    if (!user_addr || !user_addrlen || copy_from_user(&addrlen, user_addrlen, sizeof(addrlen)) < 0) {
+        frame->rax = (uint64_t)-EFAULT;
+        return;
+    }
+    if (addrlen > sizeof(addr)) addrlen = sizeof(addr);
+    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_addr, addrlen) ||
+        !user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_addrlen, sizeof(addrlen))) {
+        frame->rax = (uint64_t)-EFAULT;
+        return;
+    }
+
+    socket_t *sock = (socket_t *)entry->handle;
+    if (!sock || !sock->ops || !sock->ops->getpeername) { frame->rax = (uint64_t)-EOPNOTSUPP; return; }
+    int result = sock->ops->getpeername(sock, addr, &addrlen);
+    if (result < 0) { frame->rax = (uint64_t)result; return; }
+
+    copy_to_user(user_addr, addr, addrlen);
+    copy_to_user(user_addrlen, &addrlen, sizeof(addrlen));
+    frame->rax = 0;
 }
 
 void sys_socketpair(syscall_frame_t *frame) {
@@ -3915,27 +4261,27 @@ void sys_socketpair(syscall_frame_t *frame) {
     int type = (int)frame->rsi;
     int protocol = (int)frame->rdx;
     int *sv = (int *)frame->r10;
-    unix_handle_t *a = NULL;
-    unix_handle_t *b = NULL;
+    socket_t *a = NULL;
+    socket_t *b = NULL;
     int fds[2];
     int r;
 
     if (!sv) { frame->rax = (uint64_t)-EINVAL; return; }
     if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)sv, sizeof(int) * 2)) { frame->rax = (uint64_t)-EFAULT; return; }
-    r = create_unix_socketpair(domain, type, protocol, &a, &b);
+    r = create_socketpair(domain, type, protocol, &a, &b);
     if (r < 0) { frame->rax = (uint64_t)r; return; }
 
     fds[0] = alloc_fd_handle(&current_task_ptr->fd_table, "socketpair", FD_SOCKET, O_RDWR, a);
     if (fds[0] < 0) {
-        release_unix_handle(a);
-        release_unix_handle(b);
+        release_socket(a);
+        release_socket(b);
         frame->rax = (uint64_t)fds[0];
         return;
     }
     fds[1] = alloc_fd_handle(&current_task_ptr->fd_table, "socketpair", FD_SOCKET, O_RDWR, b);
     if (fds[1] < 0) {
         free_fd(&current_task_ptr->fd_table, fds[0]);
-        release_unix_handle(b);
+        release_socket(b);
         frame->rax = (uint64_t)fds[1];
         return;
     }

@@ -26,6 +26,8 @@
 #define __NR_dup 32
 #define __NR_dup2 33
 #define __NR_nanosleep 35
+#define __NR_getitimer 36
+#define __NR_setitimer 38
 #define __NR_getpid 39
 #define __NR_sendfile 40
 #define __NR_socket 41
@@ -33,9 +35,13 @@
 #define __NR_accept 43
 #define __NR_sendto 44
 #define __NR_recvfrom 45
+#define __NR_sendmsg 46
+#define __NR_recvmsg 47
 #define __NR_shutdown 48
 #define __NR_bind 49
 #define __NR_listen 50
+#define __NR_getsockname 51
+#define __NR_getpeername 52
 #define __NR_socketpair 53
 #define __NR_clone 56
 #define __NR_fork 57

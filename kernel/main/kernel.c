@@ -38,6 +38,7 @@
 #include <mm/mm.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
+#include <mm/oom.h>
 #include <syscalls/syscalls.h>
 // Lets never do that again.
 

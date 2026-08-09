@@ -79,6 +79,11 @@ initrd:
 			'' \
 			> main/etc/motd && \
 		printf 'nullos' > main/etc/hostname && \
+		printf '%s\n' \
+			'nameserver 10.0.2.3' \
+			'nameserver 1.1.1.1' \
+			'nameserver 1.0.0.1' \
+			> main/etc/resolv.conf && \
 		for p in $(PACKAGE_NAMES); do \
 			repo=$$(dirname $$p) && \
 			name=$$(basename $$p) && \

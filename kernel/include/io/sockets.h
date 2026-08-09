@@ -2,88 +2,78 @@
 
 #include <stdint.h>
 #include <stddef.h>
-
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/types.h>
 #include <main/spinlocks.h>
 
-#define UNIX_AF_UNIX 1
-#define UNIX_AF_LOCAL UNIX_AF_UNIX
-
-#define UNIX_SOCK_STREAM 1
-#define UNIX_SOCK_DGRAM 2
-
-#define UNIX_SHUT_RD 0
-#define UNIX_SHUT_WR 1
-#define UNIX_SHUT_RDWR 2
-
-#define UNIX_BUF_SIZE 4096
-#define UNIX_MAX_BINDINGS 32
-#define UNIX_MAX_PENDING 16
-#define O_NONBLOCK 0x0800
-
-typedef struct unix_channel {
-    spinlock_t lock;
-    int refs;
-    int readers;
-    int writers;
-    uint8_t buf[UNIX_BUF_SIZE];
-    size_t head;
-    size_t tail;
-    size_t len;
-} unix_channel_t;
-
-typedef enum {
-    UH_PIPE_READ,
-    UH_PIPE_WRITE,
-    UH_SOCKET,
-} unix_handle_kind_t;
-
-typedef struct unix_handle {
-    spinlock_t lock;
-    int refs;
-    unix_handle_kind_t kind;
-    int sock_type;
-    int bound;
-    int listening;
-    int rd_shutdown;
-    int wr_shutdown;
-    char path[108];
-    unix_channel_t *in;
-    unix_channel_t *out;
-    struct unix_handle *pending[UNIX_MAX_PENDING];
-    int pending_head;
-    int pending_tail;
-    int pending_len;
-} unix_handle_t;
+#define ETH_P_ALL 0x0003
+#define ETH_P_IP  0x0800
+#define ETH_P_ARP 0x0806
 
 typedef struct {
-    char path[108];
-    unix_handle_t *listener;
-} unix_binding_t;
-
-typedef struct {
-    uint16_t sa_family;
+    sa_family_t sa_family;
     char sa_data[14];
 } sockaddr_t;
 
 typedef struct {
-    uint16_t sun_family;
+    sa_family_t sun_family;
     char sun_path[108];
 } sockaddr_un_t;
 
-int create_unix_pipe(unix_handle_t **read_end, unix_handle_t **write_end);
-int create_unix_socket(int domain, int type, int protocol, unix_handle_t **out);
-int create_unix_socketpair(int domain, int type, int protocol, unix_handle_t **a, unix_handle_t **b);
+struct in_addr_sys {
+    uint32_t s_addr;
+};
 
-void retain_unix_handle(unix_handle_t *h);
-void release_unix_handle(unix_handle_t *h);
+typedef struct {
+    sa_family_t sin_family;
+    uint16_t sin_port;
+    struct in_addr_sys sin_addr;
+    char sin_zero[8];
+} sockaddr_in_t;
 
-int64_t read_unix_handle(unix_handle_t *h, void *buf, size_t count, uint32_t fd_flags);
-int64_t write_unix_handle(unix_handle_t *h, const void *buf, size_t count, uint32_t fd_flags);
+typedef struct {
+    uint16_t sll_family;
+    uint16_t sll_protocol;
+    int sll_ifindex;
+    uint16_t sll_hatype;
+    uint8_t sll_pkttype;
+    uint8_t sll_halen;
+    uint8_t sll_addr[8];
+} sockaddr_ll_t;
 
-int bind_unix_socket(unix_handle_t *h, const void *addr, uint32_t addrlen);
-int listen_unix_socket(unix_handle_t *h, int backlog);
-int accept_unix_socket(unix_handle_t *h, unix_handle_t **out);
-int connect_unix_socket(unix_handle_t *h, const void *addr, uint32_t addrlen);
-int shutdown_unix_socket(unix_handle_t *h, int how);
-int get_unix_socket_error(unix_handle_t *h);
-int get_unix_socket_type(unix_handle_t *h);
+typedef struct socket_obj socket_t;
+
+typedef struct socket_ops {
+    int     (*bind)       (socket_t *sock, const void *addr, socklen_t addrlen);
+    int     (*connect)    (socket_t *sock, const void *addr, socklen_t addrlen);
+    int     (*listen)     (socket_t *sock, int backlog);
+    int     (*accept)     (socket_t *sock, socket_t **out_sock);
+    int64_t (*sendto)     (socket_t *sock, const void *buf, size_t len, int flags, const void *dest_addr, socklen_t addrlen);
+    int64_t (*recvfrom)   (socket_t *sock, void *buf, size_t len, int flags, void *src_addr, socklen_t *addrlen);
+    int     (*getsockname)(socket_t *sock, void *addr, socklen_t *addrlen);
+    int     (*getpeername)(socket_t *sock, void *addr, socklen_t *addrlen);
+    int     (*getsockopt) (socket_t *sock, int level, int optname, void *optval, socklen_t *optlen);
+    int     (*setsockopt) (socket_t *sock, int level, int optname, const void *optval, socklen_t optlen);
+    int     (*shutdown)   (socket_t *sock, int how);
+    void    (*close)      (socket_t *sock);
+    int64_t (*read)       (socket_t *sock, void *buf, size_t count, uint32_t fd_flags);
+    int64_t (*write)      (socket_t *sock, const void *buf, size_t count, uint32_t fd_flags);
+} socket_ops_t;
+
+struct socket_obj {
+    spinlock_t lock;
+    int refcount;
+    int domain;
+    int type;
+    int protocol;
+    int flags;
+    const socket_ops_t *ops;
+    void *priv;
+};
+
+int create_socket(int domain, int type, int protocol, socket_t **out);
+int create_socketpair(int domain, int type, int protocol, socket_t **a, socket_t **b);
+void retain_socket(socket_t *s);
+void release_socket(socket_t *s);
