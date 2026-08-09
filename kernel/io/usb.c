@@ -6,6 +6,7 @@
 #include <io/hpet.h>
 #include <io/usb.h>
 #include <io/uhci.h>
+#include <io/ohci.h>
 #include <io/usb_keyboard.h>
 #include <io/ps2_keyboard.h>
 #include <mm/mm.h>
@@ -63,5 +64,6 @@ void poll_usb_hcds(void) {
     if (now && last_poll_us && now - last_poll_us < 4000) return;
     last_poll_us = now;
     poll_uhci_ports();
+    poll_ohci_ports();
     poll_usb_keyboard();
 }

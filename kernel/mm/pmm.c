@@ -27,16 +27,7 @@ void* pmalloc(void) {
             last_index = idx;
             uint64_t phys = idx * PAGE_SIZE;
             spin_unlock_irqrestore(&pmm_lock, flags);
-
-            // Zero the page via the HHDM so callers never observe stale data
-            // left over from a previous owner.  This is critical for user
-            // pages: this kernel lacks a destroy_vmm_context() path, so pages
-            // reaching the PMM via sys_munmap/exec can still hold old lock
-            // words, and pthread mutexes interpret a leftover 2 (lll
-            // "contended" state) as "another thread owns this", deadlocking
-            // single-threaded programs.
             memset((void*)(phys + hhdm_req.response->offset), 0, PAGE_SIZE);
-
             return (void*)phys; // Returns PHYSICAL address
         }
     }
@@ -47,6 +38,29 @@ void* pmalloc(void) {
     kill_oom();
     spin_lock(&sched_lock);
     return NULL; // OOM
+}
+
+void* pmalloc_dma32(void) {
+    uint64_t flags;
+    spin_lock_irqsave(&pmm_lock, &flags);
+
+    uint64_t dma32_pages = max_pages;
+    if (dma32_pages > (1ULL << 20)) dma32_pages = 1ULL << 20;
+    for (uint64_t idx = 0; idx < dma32_pages; idx++) {
+        if (!(bitmap[idx / 8] & (1 << (idx % 8)))) {
+            bitmap[idx / 8] |= (1 << (idx % 8));
+            ref_counts[idx] = 1;
+            free_pages--;
+            last_index = idx + 1;
+            uint64_t phys = idx * PAGE_SIZE;
+            spin_unlock_irqrestore(&pmm_lock, flags);
+            memset((void*)(phys + hhdm_req.response->offset), 0, PAGE_SIZE);
+            return (void*)phys;
+        }
+    }
+
+    spin_unlock_irqrestore(&pmm_lock, flags);
+    return NULL;
 }
 
 void* prealloc(uint64_t count) {

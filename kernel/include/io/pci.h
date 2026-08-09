@@ -24,6 +24,9 @@ extern int pci_device_count;
 
 uint32_t read_pci(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg);
 void write_pci(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg, uint32_t val);
+uint16_t read_pci_word(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg);
+void write_pci_word(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg,
+                    uint16_t val);
 uint16_t vendor_pci(uint8_t bus, uint8_t dev, uint8_t func);
 pci_device_t* find_pci(uint16_t vendor, uint16_t device);
 pci_device_t* find_pci_class(uint8_t class, uint8_t subclass, uint8_t progif);

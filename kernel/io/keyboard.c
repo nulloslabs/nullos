@@ -2,6 +2,8 @@
 #include <stddef.h>
 #include <main/halt.h>
 #include <io/keyboard.h>
+#include <io/ps2_keyboard.h>
+#include <io/usb_keyboard.h>
 
 uint8_t key_buffer[128] = {0};
 volatile uint32_t key_head = 0;
@@ -11,8 +13,27 @@ static bool shift_pressed = false;
 static bool caps_lock = false;
 static bool ctrl_pressed = false;
 static bool alt_pressed = false;
+static uint8_t lock_leds = 0;
 
 bool kbd_alt_pressed(void) { return alt_pressed; }
+
+uint8_t get_keyboard_led_state(void) { return lock_leds; }
+
+void handle_keyboard_lock_scancode(uint8_t sc) {
+    if (sc & 0x80) return;
+
+    if (sc == 0x3A) {
+        lock_leds ^= KBD_LED_CAPS_LOCK;
+        caps_lock = (lock_leds & KBD_LED_CAPS_LOCK) != 0;
+    } else if (sc == 0x45) {
+        lock_leds ^= KBD_LED_NUM_LOCK;
+    } else {
+        return;
+    }
+
+    set_ps2_keyboard_leds(lock_leds);
+    set_usb_keyboard_leds(lock_leds);
+}
 
 uint8_t get_scancode(void) {
     if (key_head == key_tail) return 0;
@@ -45,10 +66,8 @@ char scancode_to_ascii(uint8_t sc) {
         case 0x1C: return '\r'; // Enter
         case 0x0E: return '\x7F'; // Backspace
         case 0x39: return ' ';  // Space
-        case 0x3A:
-            // Caps Lock press - toggle caps
-            caps_lock = !caps_lock;
-            return 0;
+        case 0x3A: return 0;
+        case 0x45: return 0;
         case 0x2A: case 0x36:
             shift_pressed = true;
             return 0;

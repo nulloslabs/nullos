@@ -61,21 +61,20 @@ static void poll_ac97(void) {
             audio_size = 0;
             audio_offset = 0;
         }
-
-        // --- THE CRITICAL FIX ---
-        // 1. Tell the compiler/CPU to flush memory to RAM
         __asm__ volatile("mfence" ::: "memory");
-
-        // 2. Update LVI to be ahead of where we are, but not "behind" us.
-        // Set LVI to the index we just refilled.
         nabm_write8(NABM_PCM_OUT_LVI, last_index);
-        
-        // 3. Clear status
         nabm_write16(NABM_PCM_OUT_SR, 0x1C);
     }
     
     spin_unlock_irqrestore(&audio_lock, irq);
 }
+
+bool is_ac97_playing(void) {
+    // Check if the DMA Run bit is still set or if it's halted
+    uint8_t sr = nabm_read8(NABM_PCM_OUT_SR);
+    return !(sr & (1 << 0)); // DCH (DMA Controller Halted) bit
+}
+
 
 void play_ac97(void *buf, size_t size) {
     if (!ac97_ready || !buf || !size) return;
@@ -118,12 +117,6 @@ void set_ac97_volume(uint8_t left, uint8_t right) {
     // We mask to ensure bit 15 (Mute) stays 0.
     uint16_t vol = ((uint16_t)(63 - (left & 0x3F)) << 8) | (63 - (right & 0x3F));
     write_nam16(NAM_MASTER_VOL, vol);
-}
-
-bool is_ac97_playing(void) {
-    // Check if the DMA Run bit is still set or if it's halted
-    uint8_t sr = nabm_read8(NABM_PCM_OUT_SR);
-    return !(sr & (1 << 0)); // DCH (DMA Controller Halted) bit
 }
 
 void init_ac97(pci_device_t *dev) {

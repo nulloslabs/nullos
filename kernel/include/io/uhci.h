@@ -27,9 +27,9 @@
 #define UHCI_STS_USBINT    (1 << 0)
 #define UHCI_STS_USBERRINT (1 << 1)
 #define UHCI_STS_RESUME    (1 << 2)
-#define UHCI_STS_HCHALTED  (1 << 3)
+#define UHCI_STS_HCSYSERR  (1 << 3)
 #define UHCI_STS_HCPROCESS (1 << 4)
-#define UHCI_STS_HCSYSERR  (1 << 5)
+#define UHCI_STS_HCHALTED  (1 << 5)
 
 #define UHCI_PORT_CCS   (1 << 0)
 #define UHCI_PORT_CSC   (1 << 1)
@@ -45,12 +45,16 @@
 
 #define UHCI_TD_ACTIVE (1 << 23)
 #define UHCI_TD_LS     (1 << 26)
+#define UHCI_TD_IOC    (1 << 24)
+#define UHCI_TD_SPD    (1 << 29)
+#define UHCI_TD_ERROR_COUNT(n) (((n) & 3) << 27)
 #define UHCI_PID_SETUP 0x2D
 #define UHCI_PID_IN    0x69
 #define UHCI_PID_OUT   0xE1
 
 #define UHCI_TD_ACTLEN_MASK 0x7FF
-#define UHCI_TD_STATUS_ACTIVE (1 << 23)
+#define UHCI_TD_STATUS_ERROR_MASK (0x3F << 17)
+#define UHCI_TD_EXPECTED_LENGTH(n) ((((n) - 1) & 0x7FF) << 21)
 
 #define UHCI_FRAME_LIST_SIZE 1024
 
@@ -72,6 +76,7 @@ typedef struct {
     uint64_t frame_list_phys;
     uhci_qh_t *qh;
     uhci_qh_t *intr_qh;
+    uhci_td_t *term_td;
     usb_hcd_t hcd;
     int initialized;
     // ACPI validation
@@ -81,7 +86,10 @@ typedef struct {
     usb_device_t *pending_dev;
     uint8_t *pending_buf;
     uhci_td_t *pending_td;
+    uint8_t *pending_dma_buf;
+    uint64_t pending_dma_phys;
     uint16_t pending_len;
+    int keyboard_cursor;
 } uhci_controller_t;
 
 void init_uhci(pci_device_t *dev);

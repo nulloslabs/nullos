@@ -54,7 +54,7 @@ typedef struct {
 extern uint16_t nam_base;
 extern uint16_t nabm_base;
 
+bool is_ac97_playing(void);
 void set_ac97_volume(uint8_t left, uint8_t right);
 void play_ac97(void *buf, size_t size);
-bool is_ac97_playing(void);
 void init_ac97(pci_device_t *dev);

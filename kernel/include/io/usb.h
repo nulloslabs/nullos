@@ -27,6 +27,7 @@
 #define USB_REQ_GET_INTERFACE     0x0A
 #define USB_REQ_SET_INTERFACE     0x0B
 #define USB_REQ_SET_PROTOCOL      0x0B  // HID class-specific
+#define USB_REQ_SET_REPORT        0x09  // HID class-specific
 
 #define USB_DESC_DEVICE           1
 #define USB_DESC_CONFIGURATION    2
@@ -119,6 +120,7 @@ typedef struct usb_device {
     uint16_t product_id;
     uint8_t  port_id;        // Physical port identifier on the HCD
     uint8_t  interrupt_toggle; // DATA0/DATA1 for interrupt transfers
+    uint16_t interrupt_max_packet;
     void    *hcd_data;       // HCD-specific per-device data
     struct usb_device *next;
 } usb_device_t;

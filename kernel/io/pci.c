@@ -12,6 +12,7 @@
 #include <io/atapi.h>
 #include <io/usb.h>
 #include <io/uhci.h>
+#include <io/ohci.h>
 #include <io/terminal.h>
 
 static void (*msi_handlers[256])(void) = { 0 };
@@ -51,6 +52,21 @@ void write_pci(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg, uint32_t val
     outl(0xCF8, 0x80000000u | ((uint32_t)bus<<16) | ((uint32_t)dev<<11)
                              | ((uint32_t)func<<8) | (reg & 0xFC));
     outl(0xCFC, val);
+}
+
+uint16_t read_pci_word(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg) {
+    outl(0xCF8, 0x80000000u | ((uint32_t)bus << 16) |
+                             ((uint32_t)dev << 11) |
+                             ((uint32_t)func << 8) | (reg & 0xFC));
+    return inw(0xCFC + (reg & 2));
+}
+
+void write_pci_word(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg,
+                    uint16_t val) {
+    outl(0xCF8, 0x80000000u | ((uint32_t)bus << 16) |
+                             ((uint32_t)dev << 11) |
+                             ((uint32_t)func << 8) | (reg & 0xFC));
+    outw(0xCFC + (reg & 2), val);
 }
 
 uint16_t vendor_pci(uint8_t bus, uint8_t dev, uint8_t func) { return (uint16_t)(read_pci(bus, dev, func, 0) & 0xFFFF); }
@@ -226,6 +242,7 @@ void init_pci_drivers(void) {
         void (*init)(pci_device_t*);
     } known_usb_drivers[] = {
         {"uhci", USB_PROGIF_UHCI, init_uhci},
+        {"ohci", USB_PROGIF_OHCI, init_ohci},
     };
 
     for (int i = 0; i < (int)(sizeof(known_pci_drivers) / sizeof(known_pci_drivers[0])); i++) {
@@ -258,9 +275,7 @@ void init_pci_drivers(void) {
 
     for (int i = 0; i < (int)(sizeof(known_usb_drivers)/sizeof(known_usb_drivers[0])); i++) {
         for (int j = 0; j < pci_device_count; j++) {
-            if (pci_devices[j].class == USB_PCI_CLASS &&
-                pci_devices[j].subclass == USB_PCI_SUBCLASS &&
-                pci_devices[j].progif == known_usb_drivers[i].progif) { printf("pci: found %s usb controller\n", known_usb_drivers[i].name); known_usb_drivers[i].init(&pci_devices[j]); }
+            if (pci_devices[j].class == USB_PCI_CLASS && pci_devices[j].subclass == USB_PCI_SUBCLASS && pci_devices[j].progif == known_usb_drivers[i].progif) { printf("pci: found %s usb controller\n", known_usb_drivers[i].name); known_usb_drivers[i].init(&pci_devices[j]); }
         }
     }
 }

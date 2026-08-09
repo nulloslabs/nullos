@@ -8,7 +8,7 @@ A secure, fast and privacy-focused hobby OS.
 
 | Status | Feature |
 | :--- | :--- |
-| Done | UHCI USB support |
+| Done | OHCI and UHCI USB support |
 | Done | ACPI support |
 | Done | PCI support |
 | Done | Framebuffer, BGA, SVGA II support |
