@@ -1,12 +1,12 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <errno.h>
+#include <main/log.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
 #include <io/atapi.h>
 #include <io/ide.h>
 #include <io/io.h>
-#include <io/terminal.h>
 
 static ide_device_t atapi_devices[IDE_MAX_DEVICES];
 static uint64_t atapi_sectors[IDE_MAX_DEVICES];
@@ -169,6 +169,6 @@ void init_atapi(void) {
         found++;
     }
     spin_unlock_irqrestore(&ide_lock, flags);
-    if (found) printf("atapi: initialized atapi\n");
-    else printf("atapi: no atapi drive found\n");
+    if (found) log("atapi: initialized atapi\n");
+    else log("atapi: no atapi drive found\n");
 }

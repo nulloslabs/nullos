@@ -1,10 +1,11 @@
+#include <stdbool.h>
 #include <sys/utsname.h>
+#include <main/log.h>
 #include <main/utsname.h>
 #include <main/kernel.h>
 #include <main/hostname.h>
 #include <main/domainname.h>
 #include <main/string.h>
-#include <io/terminal.h>
 
 struct utsname utsname;
 
@@ -58,5 +59,5 @@ void cache_utsname(void) {
     strlcpy(utsname.version, __DATE__ " " __TIME__, sizeof(utsname.version));
     strlcpy(utsname.machine, "x86_64", sizeof(utsname.machine));
     strlcpy(utsname.domainname, "(none)", sizeof(utsname.domainname)); // Same thing as nodename, hardcode (none)
-    printf("utsname: cached utsname\n");
+    log("utsname: cached utsname\n");
 }

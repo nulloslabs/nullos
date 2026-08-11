@@ -1,8 +1,9 @@
+#include <stdbool.h>
+#include <main/log.h>
 #include <main/sse.h>
 #include <main/string.h>
 #include <main/machine_info.h>
 #include <main/panic.h>
-#include <io/terminal.h>
 
 static void save_fpu_xsave(void *area) {
     __asm__ volatile ("xsave64 (%0)"
@@ -103,5 +104,5 @@ void init_sse_for_cpu(void) {
 
 void init_sse(void) {
     init_sse_for_cpu();
-    printf("sse: enabled sse\n");
+    log("sse: enabled sse\n");
 }

@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <errno.h>
+#include <main/log.h>
 #include <main/limine_req.h>
 #include <main/spinlocks.h>
 #include <io/io.h>
@@ -164,7 +165,7 @@ int set_svga_ii_resolution(uint64_t xres, uint64_t yres, uint64_t xres_virtual, 
         write_svga_ii_register(SVGA_II_REG_HEIGHT, old_yres);
         write_svga_ii_register(SVGA_II_REG_BITS_PER_PIXEL, old_bpp);
         write_svga_ii_register(SVGA_II_REG_ENABLE, old_enable);
-        printf("svga ii: adapter rejected framebuffer mode\n");
+        log("svga ii: adapter rejected framebuffer mode\n");
         return -EINVAL;
     }
 
@@ -194,14 +195,14 @@ void init_svga_ii(pci_device_t *dev) {
     set_pci_d0(dev);
     uint32_t io_bar = read_pci(dev->bus, dev->dev, dev->func, 0x10);
     if (!(io_bar & 0x1) || (io_bar & 0xFFFFFFFCu) > UINT16_MAX - SVGA_II_VALUE_PORT) {
-        printf("svga ii: invalid register bar\n");
+        log("svga ii: invalid register bar\n");
         return;
     }
 
     uint32_t phys_vram;
     uint32_t phys_fifo;
     if (!get_svga_ii_memory_bar(dev, 0x14, &phys_vram) || !get_svga_ii_memory_bar(dev, 0x18, &phys_fifo)) {
-        printf("svga ii: invalid memory bars\n");
+        log("svga ii: invalid memory bars\n");
         return;
     }
 
@@ -212,14 +213,14 @@ void init_svga_ii(pci_device_t *dev) {
     write_svga_ii_register(SVGA_II_REG_ID, SVGA_II_ID_2);
     if (read_svga_ii_register(SVGA_II_REG_ID) != SVGA_II_ID_2) {
         svga_ii_io_base = 0;
-        printf("svga ii: version 2 is unsupported\n");
+        log("svga ii: version 2 is unsupported\n");
         return;
     }
 
     svga_ii_vram_size = read_svga_ii_register(SVGA_II_REG_VRAM_SIZE);
     svga_ii_fifo_size = read_svga_ii_register(SVGA_II_REG_MEM_SIZE);
     if (svga_ii_vram_size < PAGE_SIZE || svga_ii_fifo_size < PAGE_SIZE) {
-        printf("svga ii: invalid memory size\n");
+        log("svga ii: invalid memory size\n");
         return;
     }
 
@@ -228,12 +229,12 @@ void init_svga_ii(pci_device_t *dev) {
     if (!svga_ii_vram || !svga_ii_fifo) {
         svga_ii_vram = NULL;
         svga_ii_fifo = NULL;
-        printf("svga ii: unable to map device memory\n");
+        log("svga ii: unable to map device memory\n");
         return;
     }
 
     if (!initialize_svga_ii_fifo()) {
-        printf("svga ii: unable to initialize fifo\n");
+        log("svga ii: unable to initialize fifo\n");
         return;
     }
 
@@ -246,5 +247,5 @@ void init_svga_ii(pci_device_t *dev) {
     }
 
     current_fb_driver = FB_SVGA_II;
-    printf("svga ii: initialized svga ii\n");
+    log("svga ii: initialized svga ii\n");
 }

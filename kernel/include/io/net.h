@@ -1,16 +1,17 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <stddef.h>
 
 // --- IP address helper ---
 #define MAKE_IP(a, b, c, d) \
     ((uint32_t)(a) | ((uint32_t)(b) << 8) | ((uint32_t)(c) << 16) | ((uint32_t)(d) << 24))
 
-// QEMU user-mode network defaults
-#define NET_GATEWAY_IP  MAKE_IP(10, 0, 2, 2)
-#define NET_DNS_IP      MAKE_IP(10, 0, 2, 3)
-#define NET_MY_IP       MAKE_IP(10, 0, 2, 15)
+extern uint32_t net_local_ip;
+extern uint32_t net_gateway_ip;
+extern uint32_t net_dns_ip;
+extern uint32_t net_subnet_mask;
 
 // Ethertypes
 #define ETHERTYPE_ARP   0x0806

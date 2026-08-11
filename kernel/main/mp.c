@@ -1,3 +1,5 @@
+#include <stdbool.h>
+#include <main/log.h>
 #include <main/mp.h>
 #include <main/idt.h>
 #include <main/gdt.h>
@@ -8,7 +10,6 @@
 #include <main/sse.h>
 #include <io/apic.h>
 #include <io/ioapic.h>
-#include <io/terminal.h>
 #include <mm/mm.h>
 #include <mm/vmm.h>
 #include <syscalls/syscalls.h>
@@ -96,7 +97,7 @@ void init_mp(void) {
         cpus[0].current_task = 0;
         cpus[0].active = 1;
         map_cpu_index(0, 0);
-        printf("mp: no apic, running single cpu\n");
+        log("mp: no apic, running single cpu\n");
         return;
     }
 
@@ -145,12 +146,12 @@ void init_mp(void) {
     for (volatile int timeout = 0; timeout < 100000000 && ap_ready_count < expected; timeout++) __asm__ volatile("pause");
 
     if (ap_ready_count < expected) {
-        printf("mp: warning: only %d/%d aps came online\n", ap_ready_count, expected);
+        log("mp: warning: only %d/%d aps came online\n", ap_ready_count, expected);
     } else {
         if (ap_ready_count > 0) {
-            printf("mp: all %d aps online\n", ap_ready_count);
+            log("mp: all %d aps online\n", ap_ready_count);
         } else {
-            printf("mp: no aps available\n");
+            log("mp: no aps available\n");
         }
     }
 }

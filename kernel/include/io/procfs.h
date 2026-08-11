@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <sys/stat.h>
 
@@ -23,6 +24,14 @@ typedef enum {
     PROC_FILE_MOUNTS,
     PROC_FILE_AUXV,
     PROC_FILE_CPUINFO,
+    PROC_FILE_MEMINFO,
+    PROC_FILE_UPTIME,
+    PROC_FILE_ROOT_STAT,
+    PROC_FILE_LOADAVG,
+    PROC_FILE_STAT,
+    PROC_FILE_STATUS,
+    PROC_FILE_CMDLINE,
+    PROC_FILE_COMM,
     PROC_LINK_SELF,
     PROC_LINK_ROOT_MOUNTS,
     PROC_LINK_EXE,

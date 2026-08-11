@@ -12,24 +12,35 @@ include config.mk
 all: initrd
 
 initrd:
-	@current_names="$$(for p in $(PACKAGE_NAMES); do basename $$p; done)"; \
+	@command -v pacman >/dev/null 2>&1 || { echo "error: pacman is required to resolve Arch package dependencies" >&2; exit 1; }; \
+	resolver_db="$$(mktemp -d)" || exit 1; \
+	mkdir -p "$$resolver_db/sync"; \
+	cp /var/lib/pacman/sync/*.db "$$resolver_db/sync/" 2>/dev/null || { echo "error: no pacman sync databases found; run 'sudo pacman -Sy' first" >&2; rm -rf -- "$$resolver_db"; exit 1; }; \
+	resolved_packages="$$(pacman --dbpath "$$resolver_db" --noconfirm -Sp --print-format '%r/%n' $(PACKAGE_NAMES))" || { rm -rf -- "$$resolver_db"; exit 1; }; \
+	rm -rf -- "$$resolver_db"; \
+	resolved_packages="$$(printf '%s\n' "$$resolved_packages" | sed '/^core\/filesystem$$/d; /^core\/linux-api-headers$$/d')"; \
+	current_names="$$(for p in $$resolved_packages; do basename $$p; done)"; \
 	cached_names="$$(ls packages/*.pkg.tar.zst 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.pkg\.tar\.zst$$//')"; \
 	missing="$$(for n in $$current_names; do echo "$$cached_names" | grep -qxF "$$n" || echo missing_$$n; done)"; \
 	extra="$$(for n in $$cached_names; do echo "$$current_names" | grep -qxF "$$n" || echo extra_$$n; done)"; \
+	invalid="$$(for f in packages/*.pkg.tar.zst; do [ ! -f $$f ] || zstd -tq $$f || echo invalid_$$f; done)"; \
 	if [ -n "$$extra" ]; then \
 		for n in $$cached_names; do \
 			echo "$$current_names" | grep -qxF "$$n" || { \
 				if [ -f packages/$$n.pkg.tar.zst ] && [ -d main ]; then \
-					tar --zstd -tf packages/$$n.pkg.tar.zst 2>/dev/null | grep -v '^\.' | while read f; do rm -rf "main/$$f" 2>/dev/null; done; \
+					tar --zstd -tf packages/$$n.pkg.tar.zst 2>/dev/null | grep -v '^\.' | while read f; do \
+						if [ -f "main/$$f" ] || [ -L "main/$$f" ]; then rm -f "main/$$f"; fi; \
+					done; \
 				fi; \
 				rm -f packages/$$n.pkg.tar.zst; \
 			}; \
 		done; \
 	fi; \
-	if [ ! -f $(OUTFILE) ] || [ ! -d main ] || [ Makefile -nt $(OUTFILE) ] || [ config.mk -nt $(OUTFILE) ] || [ -n "$$missing" ] || [ -n "$$extra" ] || [ -n "$$(find main -newer $(OUTFILE) 2>/dev/null | head -1)" ]; then \
+	if [ ! -f $(OUTFILE) ] || ! gzip -t $(OUTFILE) 2>/dev/null || [ ! -d main ] || [ Makefile -nt $(OUTFILE) ] || [ config.mk -nt $(OUTFILE) ] || [ -n "$$missing" ] || [ -n "$$extra" ] || [ -n "$$invalid" ] || [ -n "$$(find main -newer $(OUTFILE) 2>/dev/null | head -1)" ]; then \
 		mkdir -p main packages && \
-		mkdir -p main/home main/root main/dev main/proc main/etc main/var main/usr main/tmp main/run && \
-		mkdir -p main/etc/init.d main/usr/bin main/usr/sbin main/usr/lib main/usr/include && \
+		mkdir -p main/home main/root main/dev main/proc main/etc main/usr main/mnt main/var main/tmp main/run && \
+		mkdir -p main/etc/init.d main/usr/bin main/usr/sbin main/usr/lib main/usr/include main/usr/share && \
+		mkdir -p main/usr/share/udhcpc && \
 		mkdir -p main/var/db main/var/cache main/var/log main/var/lib main/var/tmp && \
 		chmod 1777 main/tmp main/var/tmp && \
 		chmod 755 main/run && \
@@ -58,8 +69,35 @@ initrd:
 			'mount -t tmpfs tmpfs /tmp' \
 			'mount -t tmpfs run /run' \
 			'hostname -F /etc/hostname' \
+			'udhcpc -i eth0 -q -n' \
 			> main/etc/init.d/rcS && \
 		chmod +x main/etc/init.d/rcS && \
+		printf '%s\n' \
+			'#!/bin/busybox sh' \
+			'' \
+			'case "$$1" in' \
+			'    deconfig)' \
+			'        ifconfig "$$interface" 0.0.0.0' \
+			'        ;;' \
+			'    bound|renew)' \
+			'        ifconfig "$$interface" "$$ip"' \
+			'        [ -n "$$subnet" ] && ifconfig "$$interface" netmask "$$subnet"' \
+			'        ifconfig "$$interface" up' \
+			'        route del default dev "$$interface" 2>/dev/null' \
+			'        for gateway_address in $$router; do' \
+			'            route add default gw "$$gateway_address" dev "$$interface"' \
+			'            break' \
+			'        done' \
+			'        : > /etc/resolv.conf' \
+			'        for dns_address in $$dns; do' \
+			'            echo "nameserver $$dns_address" >> /etc/resolv.conf' \
+			'        done' \
+			'        ;;' \
+			'esac' \
+			'' \
+			'exit 0' \
+			> main/usr/share/udhcpc/default.script && \
+		chmod +x main/usr/share/udhcpc/default.script && \
 		printf '%s\n' \
 			'export PS1="\\w \\$$ "' \
 			'export PATH=/usr/sbin:/usr/bin:/sbin:/bin' \
@@ -84,19 +122,30 @@ initrd:
 			'nameserver 1.1.1.1' \
 			'nameserver 1.0.0.1' \
 			> main/etc/resolv.conf && \
-		for p in $(PACKAGE_NAMES); do \
+		printf '%s\n' \
+			'[[ -f ~/.bashrc ]] && . ~/.bashrc' \
+			> main/root/.bash_profile && \
+		printf '%s\n' \
+			'[[ $$- != *i* ]] && return' \
+			'alias ls='\''ls --color=auto'\''' \
+			> main/root/.bashrc && \
+		for p in $$resolved_packages; do \
 			repo=$$(dirname $$p) && \
 			name=$$(basename $$p) && \
-			[ -f packages/$$name.pkg.tar.zst ] || \
-			(curl -fsL -o packages/$$name.pkg.tar.zst https://archlinux.org/packages/$$repo/x86_64/$$name/download/ || \
-			 curl -fsL -o packages/$$name.pkg.tar.zst https://archlinux.org/packages/$$repo/any/$$name/download/) && \
-			zstd -dc packages/$$name.pkg.tar.zst | tar -xf - -C main; \
+			package_file=packages/$$name.pkg.tar.zst && \
+			package_tmp=packages/$$name.pkg.tar.zst.part && \
+			{ [ ! -f $$package_file ] || zstd -tq $$package_file || rm -f $$package_file; } && \
+			{ [ -f $$package_file ] || { rm -f $$package_tmp && \
+			(curl -fsL -o $$package_tmp https://archlinux.org/packages/$$repo/x86_64/$$name/download/ || \
+			 curl -fsL -o $$package_tmp https://archlinux.org/packages/$$repo/any/$$name/download/) && \
+			zstd -tq $$package_tmp && mv $$package_tmp $$package_file; }; } && \
+			tar --zstd -xf $$package_file -C main || exit 1; \
 		done && \
-		find main -type f -name ".*" -delete && \
+		find main -maxdepth 1 -type f -regextype posix-extended -regex 'main/\.[A-Z]+' -delete && \
 		(cd main && ln -sf /bin/busybox sbin/init && ln -sf sbin/init init) && \
 		rm -f main/linuxrc && \
 		printf "  %-7s %s\n" "CPIO" "$(SUBDIR)/$(OUTFILE)" && \
-		(cd main && find . -print0 | $(CPIO) $(CPIOFLAGS) 2>/dev/null) | gzip -9 > $(OUTFILE); \
+		(cd main && find . -print0 | $(CPIO) $(CPIOFLAGS) 2>/dev/null) | gzip -9 > $(OUTFILE) && gzip -t $(OUTFILE); \
 	else \
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/$(OUTFILE) is already up to date"; \
 	fi

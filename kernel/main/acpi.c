@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <ctype.h>
+#include <main/log.h>
 #include <main/acpi.h>
 #include <main/limine_req.h>
 #include <main/spinlocks.h>
@@ -14,7 +15,6 @@
 #include <io/ioapic.h>
 #include <io/pci.h>
 #include <io/pic.h>
-#include <io/terminal.h>
 #include <mm/mm.h>
 #include <mm/vmm.h>
 #include <uacpi/uacpi.h>
@@ -24,7 +24,9 @@
 
 static uacpi_irq_t *acpi_irq;
 static spinlock_t pci_config_lock = SPINLOCK_INIT;
+static spinlock_t acpi_log_lock = SPINLOCK_INIT;
 static uint64_t early_table_buffer[512];
+static char acpi_log_buffer[1024];
 static uacpi_bool early_tables_ready;
 
 static uacpi_u64 monotonic_ms(void) {
@@ -69,8 +71,16 @@ void uacpi_kernel_unmap(void *addr, uacpi_size len) {
 void uacpi_kernel_log(uacpi_log_level level, const uacpi_char *message) {
     (void)level;
     // I like lowercase logs :P
-    printf("acpi: ");
-    for (; *message; message++) putchar(tolower((unsigned char)*message));
+    uint64_t flags;
+    spin_lock_irqsave(&acpi_log_lock, &flags);
+    size_t length = 0;
+    while (message[length] && length + 1 < sizeof(acpi_log_buffer)) {
+        acpi_log_buffer[length] = tolower((unsigned char)message[length]);
+        length++;
+    }
+    acpi_log_buffer[length] = '\0';
+    log("acpi: %s", acpi_log_buffer);
+    spin_unlock_irqrestore(&acpi_log_lock, flags);
 }
 
 void *uacpi_kernel_alloc(uacpi_size size) {
@@ -370,11 +380,11 @@ uacpi_status uacpi_kernel_wait_for_work_completion(void) {
 void init_acpi_tables(void) {
     uacpi_status status = uacpi_setup_early_table_access(early_table_buffer, sizeof(early_table_buffer));
     if (uacpi_unlikely_error(status)) {
-        printf("uacpi: early table initialization failed: %s\n", uacpi_status_to_string(status));
+        log("uacpi: early table initialization failed: %s\n", uacpi_status_to_string(status));
         return;
     }
     early_tables_ready = UACPI_TRUE;
-    printf("acpi: initialized acpi tables\n");
+    log("acpi: initialized acpi tables\n");
 }
 
 void init_acpi_namespace(void) {
@@ -382,23 +392,23 @@ void init_acpi_namespace(void) {
     if (!early_tables_ready) return;
     uacpi_status status = uacpi_initialize(0);
     if (uacpi_unlikely_error(status)) {
-        printf("acpi: initialization failed: %s\n", uacpi_status_to_string(status));
+        log("acpi: initialization failed: %s\n", uacpi_status_to_string(status));
         return;
     }
     status = uacpi_namespace_load();
     if (uacpi_unlikely_error(status)) {
-        printf("acpi: namespace load failed: %s\n", uacpi_status_to_string(status));
+        log("acpi: namespace load failed: %s\n", uacpi_status_to_string(status));
         return;
     }
     status = init_ec();
-    if (status != UACPI_STATUS_OK && status != UACPI_STATUS_NOT_FOUND) printf("uacpi: ec initialization failed: %s\n", uacpi_status_to_string(status));
+    if (status != UACPI_STATUS_OK && status != UACPI_STATUS_NOT_FOUND) log("uacpi: ec initialization failed: %s\n", uacpi_status_to_string(status));
     uacpi_interrupt_model model = current_apic_mode == APIC_NONE ? UACPI_INTERRUPT_MODEL_PIC : UACPI_INTERRUPT_MODEL_IOAPIC;
     status = uacpi_set_interrupt_model(model);
-    if (uacpi_unlikely_error(status)) printf("uacpi: interrupt model selection failed: %s\n", uacpi_status_to_string(status));
+    if (uacpi_unlikely_error(status)) log("uacpi: interrupt model selection failed: %s\n", uacpi_status_to_string(status));
     status = uacpi_namespace_initialize();
     if (uacpi_unlikely_error(status)) {
-        printf("acpi: namespace initialization failed: %s\n", uacpi_status_to_string(status));
+        log("acpi: namespace initialization failed: %s\n", uacpi_status_to_string(status));
         return;
     }
-    printf("acpi: initialized acpi namespace\n");
+    log("acpi: initialized acpi namespace\n");
 }

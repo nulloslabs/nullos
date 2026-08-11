@@ -1,6 +1,6 @@
 #include <stdint.h>
+#include <main/log.h>
 #include <io/hpet.h>
-#include <io/terminal.h>
 #include <mm/vmm.h>
 #include <uacpi/acpi.h>
 #include <uacpi/tables.h>
@@ -65,5 +65,5 @@ void init_hpet(void) {
         return;
     }
     *config |= 1;
-    printf("hpet: initialized hpet\n");
+    log("hpet: initialized hpet\n");
 }

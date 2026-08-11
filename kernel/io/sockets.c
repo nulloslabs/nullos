@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <errno.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
@@ -76,4 +77,9 @@ void release_socket(socket_t *s) {
         }
         free(s);
     }
+}
+
+bool is_socket_readable(socket_t *s) {
+    if (!s || !s->ops || !s->ops->is_readable) return false;
+    return s->ops->is_readable(s);
 }

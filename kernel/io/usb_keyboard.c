@@ -1,12 +1,13 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include <stddef.h>
+#include <main/log.h>
 #include <main/string.h>
 #include <io/usb_keyboard.h>
 #include <io/usb.h>
 #include <io/keyboard.h>
 #include <io/hpet.h>
 #include <io/ttys.h>
-#include <io/terminal.h>
 #include <mm/mm.h>
 static const uint8_t hid_to_scancode[256] = {
     [0x00] = 0x00,  // Reserved (no event)
@@ -446,7 +447,7 @@ void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
 
     usb_device_t *dev = usb_allocate_device();
     if (!dev) {
-        printf("usb keyboard: failed to allocate device slot\n");
+        log("usb keyboard: failed to allocate device slot\n");
         return;
     }
 
@@ -454,7 +455,7 @@ void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
     uint8_t *rbuf  = malloc(8);
     uint8_t *rbuf2 = malloc(8);
     if (!rbuf || !rbuf2) {
-        printf("usb keyboard: failed to allocate report buffers for port %d\n", port_id);
+        log("usb keyboard: failed to allocate report buffers for port %d\n", port_id);
         if (rbuf)  free(rbuf);
         if (rbuf2) free(rbuf2);
         unregister_usb_device(dev);
@@ -465,7 +466,7 @@ void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
 
     usb_dma_scratch_t dma = {0};
     if (usb_alloc_dma_scratch(&dma) < 0) {
-        printf("usb keyboard: failed to allocate dma scratch for port %d\n", port_id);
+        log("usb keyboard: failed to allocate dma scratch for port %d\n", port_id);
         free(rbuf);
         free(rbuf2);
         unregister_usb_device(dev);
@@ -478,7 +479,7 @@ void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
 
     int new_address = usb_allocate_address(0);
     if (new_address < 0) {
-        printf("usb keyboard: no free device addresses left for port %d\n", port_id);
+        log("usb keyboard: no free device addresses left for port %d\n", port_id);
         goto fail_probe;
     }
 
@@ -583,7 +584,7 @@ void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
     setup->wIndex        = 0;
     setup->wLength       = 0;
     if (hcd->control_transfer(hcd, dev, setup, NULL, 0) < 0) {
-        printf("usb keyboard: port %d: set_configuration failed\n", port_id);
+        log("usb keyboard: port %d: set_configuration failed\n", port_id);
         goto fail_probe_with_addr;
     }
 
@@ -594,13 +595,13 @@ void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
     setup->wIndex        = (uint16_t)interface_number;
     setup->wLength       = 0;
     if (hcd->control_transfer(hcd, dev, setup, NULL, 0) < 0) {
-        printf("usb keyboard: port %d: set_protocol failed\n", port_id);
+        log("usb keyboard: port %d: set_protocol failed\n", port_id);
         goto fail_probe_with_addr;
     }
 
     // ---- Confirmed and configured boot keyboard — commit resources ----
     if (kbd_total >= kbd_max_total && kbd_list_grow() < 0) {
-        printf("usb keyboard: port %d: kbd_list grow failed, dropping keyboard\n", port_id);
+        log("usb keyboard: port %d: kbd_list grow failed, dropping keyboard\n", port_id);
         goto fail_probe_with_addr;
     }
 

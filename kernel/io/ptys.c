@@ -1,12 +1,13 @@
+#include <stdbool.h>
 #include <errno.h>
 #include <signal.h>
+#include <main/log.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
 #include <main/sched.h>
 #include <io/devtmpfs.h>
 #include <io/ptys.h>
 #include <io/ttys.h>
-#include <io/terminal.h>
 pty_t ptys[NUM_PTYS];
 spinlock_t pty_lock = SPINLOCK_INIT;
 
@@ -16,43 +17,19 @@ int pty_signal_pgrp(int pty_idx, int sig) {
     int delivered = 0;
     if (!p || p->fg_pgrp == 0) {
         if (current_task_ptr) {
-            uint64_t handler = current_task_ptr->sigactions[sig * 4];
-            if (handler != 1) {
-                current_task_ptr->pending_signals |= (1ULL << sig);
-                delivered = 1;
-            }
+            deliver_sig_to_task(current_task, sig);
+            delivered = 1;
         }
         return delivered;
     }
     pid_t fpgrp = p->fg_pgrp;
     int target_ctty = 100 + pty_idx;
     for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].state == TASK_DEAD) continue;
-        if (tasks[i].ctty_idx != target_ctty) continue;
-        if (tasks[i].pgid != fpgrp) continue;
-        uint64_t handler = tasks[i].sigactions[sig * 4];
-        if (handler == 1) continue;
+        if (tasks[i]->state == TASK_DEAD) continue;
+        if (tasks[i]->ctty_idx != target_ctty) continue;
+        if (tasks[i]->pgid != fpgrp) continue;
         delivered++;
-        if (sig == SIGTSTP || sig == SIGSTOP) {
-            if (handler == 0) {
-                if (tasks[i].state == TASK_RUNNING || tasks[i].state == TASK_READY) {
-                    tasks[i].state = TASK_STOPPED;
-                    tasks[i].stopped_by_signal = 1;
-                    tasks[i].stop_reported = 0;
-                    for (int j = 0; j < MAX_TASKS; j++) {
-                        if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
-                            tasks[j].pending_signals |= (1ULL << SIGCHLD);
-                            break;
-                        }
-                    }
-                }
-            } else {
-                tasks[i].pending_signals |= (1ULL << sig);
-            }
-        } else {
-            tasks[i].pending_signals |= (1ULL << sig);
-            if (tasks[i].state == TASK_STOPPED) tasks[i].state = TASK_READY;
-        }
+        deliver_sig_to_task(i, sig);
     }
     return delivered;
 }
@@ -295,5 +272,5 @@ void init_ptys(void) {
         ptys[i].master_refs = 0;
         ptys[i].slave_refs = 0;
     }
-    printf("ptys: initialized ptys\n");
+    log("ptys: initialized ptys\n");
 }

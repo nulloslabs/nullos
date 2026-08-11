@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <io/pci.h>
 
 #define E1000_VENDOR 0x8086

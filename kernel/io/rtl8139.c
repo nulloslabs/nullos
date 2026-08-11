@@ -1,10 +1,11 @@
 #include <stdint.h>
+#include <stdbool.h>
+#include <main/log.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
 #include <io/rtl8139.h>
 #include <io/io.h>
 #include <io/net.h>
-#include <io/terminal.h>
 #include <mm/mm.h>
 #include <mm/vmm.h>
 rtl8139_t rtl8139 = {0};
@@ -141,7 +142,7 @@ void init_rtl8139(pci_device_t *dev) {
 
     pci_request_irq(dev, poll_rtl8139);
 
-    printf("rtl8139: initialized rtl8139\n");
+    log("rtl8139: initialized rtl8139\n");
 
     rtl8139.tx_slot = 0;
     rtl8139_ready = true;

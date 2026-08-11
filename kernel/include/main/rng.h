@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 
 void add_entropy_bytes(const void *buf, size_t len);

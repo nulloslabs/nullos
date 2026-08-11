@@ -1,6 +1,8 @@
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <signal.h>
+#include <main/log.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
 #include <main/sched.h>
@@ -18,97 +20,35 @@ static int keyboard_pty = -1;
 static bool extended_pending = false;
 
 void deliver_sig_to_task(int i, int sig) {
-    if (sig == SIGKILL) {
-        // SIGKILL cannot be ignored or caught
-        if (tasks[i].pid == current_task_ptr->pid) {
-            exit_task(128 + sig);
-        }
-        tasks[i].term_sig = sig;
-        tasks[i].state = TASK_ZOMBIE;
-        for (int j = 1; j < MAX_TASKS; j++) {
-            if (tasks[j].state != TASK_DEAD && tasks[j].ppid == tasks[i].pid) {
-                if (tasks[j].state == TASK_ZOMBIE) tasks[j].state = TASK_DEAD;
-                else tasks[j].ppid = 1;
+    uint64_t handler = tasks[i]->sigactions[sig * 4];
+    bool unblockable = sig == SIGKILL || sig == SIGSTOP;
+    bool blocked = !unblockable && (tasks[i]->blocked_signals & (1ULL << (sig - 1)));
+    bool ignored = handler == (uint64_t)SIG_IGN || (handler == (uint64_t)SIG_DFL && (sig == SIGCHLD || sig == SIGCONT || sig == SIGURG || sig == SIGWINCH));
+
+    if (sig == SIGCONT) {
+        bool was_stopped = tasks[i]->state == TASK_STOPPED && tasks[i]->stopped_by_signal;
+        if (tasks[i]->state == TASK_STOPPED) tasks[i]->state = TASK_READY;
+        tasks[i]->stopped_by_signal = 0;
+        tasks[i]->stop_reported = 0;
+        tasks[i]->pending_signals &= ~((1ULL << SIGSTOP) |
+                                      (1ULL << SIGTSTP) |
+                                      (1ULL << SIGTTIN) |
+                                      (1ULL << SIGTTOU));
+        if (was_stopped) {
+            for (int j = 0; j < MAX_TASKS; j++) {
+                if (tasks[j]->state != TASK_DEAD && tasks[j]->pid == tasks[i]->ppid) {
+                    tasks[j]->pending_signals |= (1ULL << SIGCHLD);
+                    break;
+                }
             }
         }
-        for (int j = 0; j < FD_MAX; j++) {
-            if (tasks[i].fd_table.entries[j].open) free_fd(&tasks[i].fd_table, j);
-        }
-        // Notify parent
-        for (int j = 0; j < MAX_TASKS; j++) {
-            if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
-                tasks[j].pending_signals |= (1ULL << SIGCHLD);
-                if (tasks[j].state == TASK_STOPPED) tasks[j].state = TASK_READY;
-                break;
-            }
-        }
+        if (!ignored) tasks[i]->pending_signals |= (1ULL << sig);
         return;
     }
-    switch (sig) {
-        case SIGSTOP:
-            // SIGSTOP: cannot be caught, blocked, or ignored. Always stops.
-            if (tasks[i].state == TASK_RUNNING || tasks[i].state == TASK_READY) {
-                tasks[i].state = TASK_STOPPED;
-                tasks[i].stopped_by_signal = 1;
-                tasks[i].stop_reported = 0;
-                // Notify parent so waitpid(WUNTRACED) wakes up
-                for (int j = 0; j < MAX_TASKS; j++) {
-                    if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
-                        tasks[j].pending_signals |= (1ULL << SIGCHLD);
-                        break;
-                    }
-                }
-            }
-            break;
-        case SIGTSTP:
-        case SIGTTIN:
-        case SIGTTOU: {
-            uint64_t handler = tasks[i].sigactions[sig * 4];
-            if (handler == (uint64_t)SIG_IGN) {
-                break;  // ignored: drop the signal
-            }
-            if (handler == (uint64_t)SIG_DFL) {
-                // Default action: stop the task right now.
-                if (tasks[i].state == TASK_RUNNING || tasks[i].state == TASK_READY) {
-                    tasks[i].state = TASK_STOPPED;
-                    tasks[i].stopped_by_signal = 1;
-                    tasks[i].stop_reported = 0;
-                    for (int j = 0; j < MAX_TASKS; j++) {
-                        if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
-                            tasks[j].pending_signals |= (1ULL << SIGCHLD);
-                            break;
-                        }
-                    }
-                }
-            } else {
-                // Custom handler installed: defer to check_signals() so it
-                // builds the signal trampoline frame and traps to user mode.
-                tasks[i].pending_signals |= (1ULL << sig);
-                if (tasks[i].state == TASK_STOPPED)
-                    tasks[i].state = TASK_READY;
-            }
-            break;
-        }
-        case SIGCONT:
-            if (tasks[i].state == TASK_STOPPED) {
-                tasks[i].state = TASK_READY;
-                tasks[i].stop_reported = 0;
-                // Notify parent of the continue event
-                for (int j = 0; j < MAX_TASKS; j++) {
-                    if (tasks[j].state != TASK_DEAD && tasks[j].pid == tasks[i].ppid) {
-                        tasks[j].pending_signals |= (1ULL << SIGCHLD);
-                        break;
-                    }
-                }
-            }
-            tasks[i].pending_signals &= ~((1ULL << SIGSTOP) | (1ULL << SIGTSTP));
-            break;
-        default:
-            tasks[i].pending_signals |= (1ULL << sig);
-            if (tasks[i].state == TASK_STOPPED)
-                tasks[i].state = TASK_READY;
-            break;
-    }
+
+    if (!ignored) tasks[i]->pending_signals |= (1ULL << sig);
+
+    if (tasks[i]->state == TASK_STOPPED && (sig == SIGKILL || (!tasks[i]->stopped_by_signal && !blocked && !ignored))) tasks[i]->state = TASK_READY;
 }
 
 int get_tty_ring_count(tty_ring_t *r) { return (int)((r->head - r->tail + TTY_BUF_SIZE) % TTY_BUF_SIZE); }
@@ -310,9 +250,8 @@ int tty_signal_pgrp(int tty_idx, int sig) {
         // Mode 1: foreground process group only (see big comment above).
         // Filter purely on pgid; do NOT filter on ctty_idx.
         for (int i = 0; i < MAX_TASKS; i++) {
-            if (tasks[i].state == TASK_DEAD) continue;
-            if (tasks[i].pgid != fpgrp) continue;
-            if (tasks[i].sigactions[sig * 4] == (uint64_t)SIG_IGN) continue;
+            if (tasks[i]->state == TASK_DEAD) continue;
+            if (tasks[i]->pgid != fpgrp) continue;
             deliver_sig_to_task(i, sig);
             delivered++;
         }
@@ -323,9 +262,8 @@ int tty_signal_pgrp(int tty_idx, int sig) {
     // this controlling tty. Replaces the old incorrect
     // "signal current_task_ptr" fallback.
     for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].state == TASK_DEAD) continue;
-        if (tasks[i].ctty_idx != tty_idx) continue;
-        if (tasks[i].sigactions[sig * 4] == (uint64_t)SIG_IGN) continue;
+        if (tasks[i]->state == TASK_DEAD) continue;
+        if (tasks[i]->ctty_idx != tty_idx) continue;
         deliver_sig_to_task(i, sig);
         delivered++;
     }
@@ -372,5 +310,5 @@ void init_ttys(void) {
         ttys[i].termios.c_cc[VEOF]   = 0x04;
         ttys[i].termios.c_cc[VSUSP]  = 0x1A;
     }
-    printf("ttys: initialized ttys\n");
+    log("ttys: initialized ttys\n");
 }

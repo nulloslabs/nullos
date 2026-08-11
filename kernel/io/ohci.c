@@ -1,10 +1,11 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include <stddef.h>
+#include <main/log.h>
 #include <main/string.h>
 #include <io/hpet.h>
 #include <io/ohci.h>
 #include <io/pci.h>
-#include <io/terminal.h>
 #include <io/usb.h>
 #include <io/usb_keyboard.h>
 #include <mm/mm.h>
@@ -334,7 +335,7 @@ static bool take_ohci_ownership(ohci_controller_t *ctrl) {
             sleep(10);
         }
         if (!released) {
-            printf("ohci: firmware ownership request timed out\n");
+            log("ohci: firmware ownership request timed out\n");
             return false;
         }
         control = read_ohci_register(ctrl, OHCI_CONTROL);
@@ -453,12 +454,12 @@ static void recover_ohci_controller(ohci_controller_t *ctrl) {
     ctrl->control_busy = false;
     ctrl->initialized = false;
     if (!start_ohci_controller(ctrl)) {
-        printf("ohci: controller recovery failed\n");
+        log("ohci: controller recovery failed\n");
         write_ohci_register(ctrl, OHCI_CONTROL, OHCI_USB_RESET);
         return;
     }
     ctrl->initialized = true;
-    printf("ohci: controller recovered\n");
+    log("ohci: controller recovered\n");
     scan_ohci_ports(ctrl);
 }
 
@@ -473,7 +474,7 @@ void poll_ohci_ports(void) {
 
         uint32_t interrupts = read_ohci_register(ctrl, OHCI_INTERRUPT_STATUS);
         if (interrupts & OHCI_INTERRUPT_UE) {
-            printf("ohci: unrecoverable controller error\n");
+            log("ohci: unrecoverable controller error\n");
             recover_ohci_controller(ctrl);
             continue;
         }
@@ -513,18 +514,18 @@ void init_ohci(pci_device_t *dev) {
 
     uint32_t bar_low = read_pci(dev->bus, dev->dev, dev->func, 0x10);
     if (bar_low == UINT32_MAX || (bar_low & 1u)) {
-        printf("ohci: BAR0 is not a memory BAR\n");
+        log("ohci: BAR0 is not a memory BAR\n");
         return;
     }
     uint32_t bar_type = (bar_low >> 1) & 3u;
     if (bar_type != 0 && bar_type != 2) {
-        printf("ohci: unsupported BAR0 type\n");
+        log("ohci: unsupported BAR0 type\n");
         return;
     }
     uint64_t mmio_phys = bar_low & 0xFFFFFFF0u;
     if (bar_type == 2) mmio_phys |= (uint64_t)read_pci(dev->bus, dev->dev, dev->func, 0x14) << 32;
     if (!mmio_phys) {
-        printf("ohci: invalid BAR0 address\n");
+        log("ohci: invalid BAR0 address\n");
         return;
     }
 
@@ -537,7 +538,7 @@ void init_ohci(pci_device_t *dev) {
     uint8_t mmio_pages = (uint8_t)((page_offset + 0x100 + PAGE_SIZE - 1) / PAGE_SIZE);
     void *mapping = vmap_mmio(page_phys, mmio_pages);
     if (!mapping) {
-        printf("ohci: failed to map BAR0\n");
+        log("ohci: failed to map BAR0\n");
         return;
     }
 
@@ -552,7 +553,7 @@ void init_ohci(pci_device_t *dev) {
     write_pci_word(dev->bus, dev->dev, dev->func, 0x04, pci_command | (1u << 1) | (1u << 2));
     uint8_t revision = (uint8_t)read_ohci_register(ctrl, OHCI_REVISION);
     if ((revision & 0xF0u) != 0x10u) {
-        printf("ohci: unsupported revision 0x%x\n", revision);
+        log("ohci: unsupported revision 0x%x\n", revision);
         release_ohci_resources(ctrl);
         memset(ctrl, 0, sizeof(*ctrl));
         return;
@@ -566,19 +567,19 @@ void init_ohci(pci_device_t *dev) {
     uint32_t descriptor_a = read_ohci_register(ctrl, OHCI_RH_DESCRIPTOR_A);
     ctrl->num_ports = (uint8_t)(descriptor_a & OHCI_RH_A_NDP);
     if (ctrl->num_ports == 0 || ctrl->num_ports > OHCI_MAX_PORTS) {
-        printf("ohci: invalid root hub port count %u\n", ctrl->num_ports);
+        log("ohci: invalid root hub port count %u\n", ctrl->num_ports);
         release_ohci_resources(ctrl);
         memset(ctrl, 0, sizeof(*ctrl));
         return;
     }
     if (!allocate_ohci_resources(ctrl)) {
-        printf("ohci: failed to allocate DMA32 schedule memory\n");
+        log("ohci: failed to allocate DMA32 schedule memory\n");
         release_ohci_resources(ctrl);
         memset(ctrl, 0, sizeof(*ctrl));
         return;
     }
     if (!start_ohci_controller(ctrl)) {
-        printf("ohci: failed to start controller\n");
+        log("ohci: failed to start controller\n");
         release_ohci_resources(ctrl);
         memset(ctrl, 0, sizeof(*ctrl));
         return;
@@ -591,7 +592,7 @@ void init_ohci(pci_device_t *dev) {
     ctrl->hcd.hcd_data = ctrl;
     ctrl->initialized = true;
     register_usb_hcd(&ctrl->hcd);
-    printf("ohci: initialized ohci\n");
+    log("ohci: initialized ohci\n");
     ohci_count++;
     scan_ohci_ports(ctrl);
 }

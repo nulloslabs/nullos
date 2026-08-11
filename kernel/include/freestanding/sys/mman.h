@@ -10,4 +10,6 @@
 #define MAP_ANONYMOUS 0x20
 #define MAP_ANON      MAP_ANONYMOUS
 #define MAP_FIXED     0x10
+#define MAP_32BIT     0x40
+#define MAP_FIXED_NOREPLACE 0x100000
 #define MAP_FAILED    ((void *)-1)

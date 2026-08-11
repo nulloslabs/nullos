@@ -1,10 +1,11 @@
+#include <stdbool.h>
+#include <main/log.h>
 #include <main/string.h>
 #include <main/limine_req.h>
 #include <main/spinlocks.h>
 #include <main/machine_info.h>
 #include <main/msr.h>
 #include <main/panic.h>
-#include <io/terminal.h>
 #include <mm/vmm.h>
 #include <mm/pmm.h>
 #include <mm/mm.h>
@@ -12,6 +13,7 @@
 vmm_context_t kernel_context;
 static uint64_t vmalloc_cursor = 0xffffc00000000000;
 static uint64_t vuser_cursor = USER_MMAP_BASE;
+static uint64_t vuser32_cursor = USER_MMAP32_BASE;
 static spinlock_t vmm_lock = SPINLOCK_INIT;
 
 static uint64_t* get_vmm_next_level(uint64_t* current_level, uint64_t index, bool allocate, uint64_t flags) {
@@ -563,7 +565,7 @@ void vunmap_mmio(void* addr, size_t num_pages) {
 }
 
 void* vmap_user_at(vmm_context_t* ctx, uint64_t virt, size_t size, uint64_t flags) {
-    if (size == 0) return NULL;
+    if (!ctx || size == 0 || virt >= USER_VIRTUAL_LIMIT || size > USER_VIRTUAL_LIMIT - virt) return NULL;
     uint64_t num_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
     uint64_t curr_addr = virt & ~0xFFFULL;
 
@@ -572,11 +574,17 @@ void* vmap_user_at(vmm_context_t* ctx, uint64_t virt, size_t size, uint64_t flag
         if (phys != 0) {
             // Page is already physically backed (e.g. MAP_FIXED over existing):
             // just update its flags in-place.
-            map_vmm(ctx, curr_addr, phys, flags | VMM_PRESENT | VMM_USER);
+            if (!map_vmm(ctx, curr_addr, phys, flags | VMM_PRESENT | VMM_USER)) {
+                for (uint64_t j = 0; j < i; j++) unmap_vmm(ctx, (virt & ~0xFFFULL) + j * PAGE_SIZE);
+                return NULL;
+            }
         } else {
             // Not yet backed: reserve for demand paging.
             // The physical page is allocated lazily on first access (#PF).
-            reserve_vmm(ctx, curr_addr, flags | VMM_USER);
+            if (!reserve_vmm(ctx, curr_addr, flags | VMM_USER)) {
+                for (uint64_t j = 0; j < i; j++) unmap_vmm(ctx, (virt & ~0xFFFULL) + j * PAGE_SIZE);
+                return NULL;
+            }
         }
         curr_addr += PAGE_SIZE;
     }
@@ -584,7 +592,7 @@ void* vmap_user_at(vmm_context_t* ctx, uint64_t virt, size_t size, uint64_t flag
 }
 
 void* vmap_user_range(vmm_context_t* ctx, size_t size, uint64_t flags) {
-    if (size == 0) return NULL;
+    if (!ctx || size == 0 || size > SIZE_MAX - (PAGE_SIZE - 1)) return NULL;
 
     uint64_t num_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
     uint64_t map_size = num_pages * PAGE_SIZE;
@@ -593,10 +601,45 @@ void* vmap_user_range(vmm_context_t* ctx, size_t size, uint64_t flags) {
     spin_lock_irqsave(&vmm_lock, &flags_irq);
 
     uint64_t start_addr = vuser_cursor;
+    if (start_addr >= USER_VIRTUAL_LIMIT || map_size > USER_VIRTUAL_LIMIT - start_addr) {
+        spin_unlock_irqrestore(&vmm_lock, flags_irq);
+        return NULL;
+    }
     vuser_cursor += map_size;
 
     spin_unlock_irqrestore(&vmm_lock, flags_irq);
 
+    return vmap_user_at(ctx, start_addr, map_size, flags);
+}
+
+void* vmap_user_range_32(vmm_context_t* ctx, size_t size, uint64_t flags) {
+    if (!ctx || size == 0 || size > SIZE_MAX - (PAGE_SIZE - 1)) return NULL;
+    uint64_t num_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint64_t map_size = num_pages * PAGE_SIZE;
+    uint64_t flags_irq;
+    spin_lock_irqsave(&vmm_lock, &flags_irq);
+    uint64_t start_addr = vuser32_cursor;
+    uint64_t end_addr;
+    for (;;) {
+        end_addr = start_addr + map_size;
+        if (end_addr < start_addr || end_addr > 0x80000000ULL) {
+            spin_unlock_irqrestore(&vmm_lock, flags_irq);
+            return NULL;
+        }
+        bool occupied = false;
+        for (uint64_t page = start_addr; page < end_addr; page += PAGE_SIZE) {
+            uint64_t pte = get_vmm_pte(ctx, page);
+            if (pte & (VMM_PRESENT | VMM_DEMAND)) { occupied = true; break; }
+        }
+        if (!occupied) break;
+        start_addr = end_addr;
+    }
+    if (end_addr > 0x80000000ULL) {
+        spin_unlock_irqrestore(&vmm_lock, flags_irq);
+        return NULL;
+    }
+    vuser32_cursor = end_addr;
+    spin_unlock_irqrestore(&vmm_lock, flags_irq);
     return vmap_user_at(ctx, start_addr, map_size, flags);
 }
 
@@ -659,5 +702,5 @@ void init_vmm(void) {
         get_vmm_next_level(kernel_context.pml4, i, true, VMM_WRITABLE);
     }
 
-    printf("vmm: initialized vmm\n");
+    log("vmm: initialized vmm\n");
 }

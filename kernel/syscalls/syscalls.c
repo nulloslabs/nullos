@@ -1,8 +1,8 @@
 #include <errno.h>
 #include <asm/unistd.h>
+#include <main/log.h>
 #include <main/sched.h>
 #include <main/msr.h>
-#include <io/terminal.h>
 #include <io/ttys.h>
 #include <syscalls/syscalls.h>
 #include <syscalls/syscall_impls.h>
@@ -52,6 +52,8 @@ const syscall_fn_t syscall_table[] = {
     [__NR_getsockname]     = sys_getsockname,
     [__NR_getpeername]     = sys_getpeername,
     [__NR_socketpair]      = sys_socketpair,
+    [__NR_setsockopt]      = sys_setsockopt,
+    [__NR_getsockopt]      = sys_getsockopt,
     [__NR_clone]           = sys_clone,
     [__NR_fork]            = sys_fork,
     [__NR_vfork]           = sys_vfork,
@@ -69,6 +71,7 @@ const syscall_fn_t syscall_table[] = {
     [__NR_getdents]        = sys_getdents,
     [__NR_getcwd]          = sys_getcwd,
     [__NR_chdir]           = sys_chdir,
+    [__NR_fchdir]          = sys_fchdir,
     [__NR_rename]          = sys_rename,
     [__NR_mkdir]           = sys_mkdir,
     [__NR_rmdir]           = sys_rmdir,
@@ -82,10 +85,13 @@ const syscall_fn_t syscall_table[] = {
     [__NR_fchown]          = sys_fchown,
     [__NR_lchown]          = sys_lchown,
     [__NR_umask]           = sys_umask,
+    [__NR_time]            = sys_time,
     [__NR_gettimeofday]    = sys_gettimeofday,
     [__NR_getrlimit]       = sys_getrlimit,
     [__NR_getrusage]       = sys_getrusage,
+    [__NR_sysinfo]         = sys_sysinfo,
     [__NR_times]           = sys_times,
+    [__NR_syslog]          = sys_syslog,
     [__NR_getuid]          = sys_getuid,
     [__NR_getgid]          = sys_getgid,
     [__NR_setuid]          = sys_setuid,
@@ -103,6 +109,8 @@ const syscall_fn_t syscall_table[] = {
     [__NR_setresgid]       = sys_setresgid,
     [__NR_getresgid]       = sys_getresgid,
     [__NR_getpgid]         = sys_getpgid,
+    [__NR_setfsuid]        = sys_setfsuid,
+    [__NR_setfsgid]        = sys_setfsgid,
     [__NR_getsid]          = sys_getsid,
     [__NR_utime]           = sys_utime,
     [__NR_prctl]           = sys_prctl,
@@ -123,6 +131,8 @@ const syscall_fn_t syscall_table[] = {
     [__NR_getdents64]      = sys_getdents64,
     [__NR_set_tid_address] = sys_set_tid_address,
     [__NR_clock_gettime]   = sys_clock_gettime,
+    [__NR_clock_getres]    = sys_clock_getres,
+    [__NR_clock_nanosleep] = sys_clock_nanosleep,
     [__NR_exit_group]      = sys_exit_group,
     [__NR_epoll_wait]      = sys_epoll_wait,
     [__NR_epoll_ctl]       = sys_epoll_ctl,
@@ -134,6 +144,7 @@ const syscall_fn_t syscall_table[] = {
     [__NR_symlinkat]       = sys_symlinkat,
     [__NR_readlinkat]      = sys_readlinkat,
     [__NR_fchmodat]        = sys_fchmodat,
+    [__NR_faccessat]       = sys_faccessat,
     [__NR_pselect6]        = sys_pselect6,
     [__NR_set_robust_list] = sys_set_robust_list,
     [__NR_get_robust_list] = sys_get_robust_list,
@@ -141,12 +152,11 @@ const syscall_fn_t syscall_table[] = {
     [__NR_epoll_pwait]     = sys_epoll_pwait,
     [__NR_epoll_create1]   = sys_epoll_create1,
     [__NR_pipe2]           = sys_pipe2,
-    [__NR_getsockopt]      = sys_getsockopt,
-    [__NR_setsockopt]      = sys_setsockopt,
     [__NR_prlimit64]       = sys_prlimit64,
     [__NR_getrandom]       = sys_getrandom,
     [__NR_statx]           = sys_statx,
     [__NR_rseq]            = sys_rseq,
+    [__NR_faccessat2]      = sys_faccessat2,
     [__NR_epoll_pwait2]    = sys_epoll_pwait2,
 };
 
@@ -155,10 +165,10 @@ extern void syscall_entry(void);
 void dispatch_syscall(syscall_frame_t *frame) {
     current_task_ptr->orig_rax = frame->rax;
 
-    uint64_t saved_rcx = frame->rcx;
+    uint64_t saved_rip = frame->rip;
     check_signals(frame);
-    if (frame->rcx != saved_rcx) return;
 
+    if (frame->rip != saved_rip) return;
     if (frame->rax < (sizeof(syscall_table) / sizeof(syscall_table[0])) && syscall_table[frame->rax]) {
         syscall_table[frame->rax](frame);
     } else {
@@ -180,5 +190,5 @@ void init_syscalls_for_cpu(void) {
 
 void init_syscalls(void) {
     init_syscalls_for_cpu();
-    printf("syscalls: initialized syscalls\n");
+    log("syscalls: initialized syscalls\n");
 }

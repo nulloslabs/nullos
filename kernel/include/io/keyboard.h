@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 
 // Shared scancode ring buffer (filled by PS/2 ISR and USB keyboard driver)
 extern uint8_t key_buffer[128];

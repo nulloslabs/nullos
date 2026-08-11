@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <main/string.h>
 #include <mm/vma.h>
 

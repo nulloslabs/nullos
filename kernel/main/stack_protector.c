@@ -1,8 +1,8 @@
 #include <stdint.h>
+#include <main/log.h>
 #include <main/panic.h>
 #include <main/rng.h>
 #include <main/stack_protector.h>
-#include <io/terminal.h>
 
 uintptr_t __stack_chk_guard = 0x6c6e726b6c6c756eULL;
 
@@ -17,6 +17,6 @@ __attribute__((no_stack_protector)) void init_stack_protector(void) {
     // If we dont have bytes from get_random_bytes(), use "nullkrnl" as guard
     if (guard == 0) guard = 0x6e756c6c6f734747ULL;
     __stack_chk_guard = guard;
-    printf("stack protector: initialized stack protector\n");
+    log("stack protector: initialized stack protector\n");
 }
 

@@ -1,6 +1,8 @@
+#include <stdbool.h>
 #include <netinet/in.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
+#include <io/dhcp.h>
 #include <io/net.h>
 #include <io/sockets.h>
 #include <io/net_sockets.h>
@@ -41,6 +43,10 @@ static spinlock_t net_lock = SPINLOCK_INIT;
 static uint16_t ip_id_counter = 1;
 
 net_device_t *net_current_device = NULL;
+uint32_t net_local_ip = 0;
+uint32_t net_gateway_ip = 0;
+uint32_t net_dns_ip = 0;
+uint32_t net_subnet_mask = 0;
 
 static bool parse_ipv4_packet(const uint8_t *frame, uint16_t len, uint8_t protocol, const ipv4_hdr_t **ip_out, uint16_t *header_len_out, uint16_t *total_len_out) {
     if (!frame || len < 14 + sizeof(ipv4_hdr_t)) return false;
@@ -74,11 +80,18 @@ void poll_net_device(void) {
     if (dev && dev->poll) dev->poll();
 }
 
-static bool send_ip_packet(uint32_t dest_ip, uint8_t proto,
-                           const void *payload, uint16_t payload_len) {
+static bool send_ip_packet(uint32_t dest_ip, uint8_t proto, const void *payload, uint16_t payload_len) {
     if ((!payload && payload_len) || payload_len > NET_MAX_FRAME_SIZE - 14 - 20) return false;
-    uint8_t gw_mac[6];
-    if (!resolve_arp(NET_GATEWAY_IP, gw_mac)) return false;
+    if (!net_current_device) return false;
+
+    uint8_t dest_mac[6];
+    if (dest_ip == UINT32_MAX) {
+        memset(dest_mac, 0xFF, sizeof(dest_mac));
+    } else {
+        if (!net_local_ip || !net_subnet_mask) return false;
+        uint32_t next_hop = (dest_ip & net_subnet_mask) == (net_local_ip & net_subnet_mask) ? dest_ip : net_gateway_ip;
+        if (!next_hop || !resolve_arp(next_hop, dest_mac)) return false;
+    }
 
     // Build frame on stack: eth(14) + ip(20) + payload
     uint16_t total = 14 + 20 + payload_len;
@@ -86,8 +99,7 @@ static bool send_ip_packet(uint32_t dest_ip, uint8_t proto,
     memset(frame, 0, total);
 
     // Ethernet
-    memcpy(frame + 0, gw_mac, 6);
-    if (!net_current_device) return false;
+    memcpy(frame + 0, dest_mac, 6);
     memcpy(frame + 6, net_current_device->mac, 6);
     uint16_t et = htons(ETHERTYPE_IPV4);
     memcpy(frame + 12, &et, 2);
@@ -99,7 +111,7 @@ static bool send_ip_packet(uint32_t dest_ip, uint8_t proto,
     ip->id        = htons(ip_id_counter++);
     ip->ttl       = 64;
     ip->protocol  = proto;
-    ip->src       = NET_MY_IP;
+    ip->src       = net_local_ip;
     ip->dst       = dest_ip;
     ip->checksum  = calculate_net_checksum(ip, 20);
 
@@ -125,7 +137,7 @@ static void send_arp_request(uint32_t target_ip) {
     frame.arp.plen   = 4;
     frame.arp.oper   = htons(1);
     memcpy(frame.arp.sha, net_current_device->mac, 6);
-    frame.arp.spa    = NET_MY_IP;
+    frame.arp.spa    = net_local_ip;
     memset(frame.arp.tha, 0, 6);
     frame.arp.tpa    = target_ip;
     net_current_device->send(&frame, sizeof(arp_frame_t));
@@ -190,9 +202,6 @@ void handle_icmp_packet(const uint8_t *frame, uint16_t len) {
 }
 
 bool ping_icmp(uint32_t dest_ip) {
-    uint8_t gw_mac[6];
-    if (!resolve_arp(NET_GATEWAY_IP, gw_mac)) return false;
-
     icmp_ping_seq++;
     icmp_got_reply = false;
 
@@ -234,7 +243,7 @@ bool send_udp_packet(uint32_t dest_ip, uint16_t src_port, uint16_t dst_port,
     udp->dst_port  = htons(dst_port);
     udp->length    = htons(udp_len);
     memcpy(buf + sizeof(udp_hdr_t), data, data_len);
-    udp->checksum  = calculate_transport_checksum(NET_MY_IP, dest_ip, IP_PROTO_UDP, buf, udp_len);
+    udp->checksum  = calculate_transport_checksum(net_local_ip, dest_ip, IP_PROTO_UDP, buf, udp_len);
 
     return send_ip_packet(dest_ip, IP_PROTO_UDP, buf, udp_len);
 }
@@ -257,6 +266,7 @@ void handle_udp_packet(const uint8_t *frame, uint16_t len) {
     spin_unlock_irqrestore(&net_lock, irq);
 
     net_udp_tap_rx(ip->src, ntohs(udp->src_port), ntohs(udp->dst_port), payload, data_len);
+    handle_dhcp_packet(ntohs(udp->src_port), ntohs(udp->dst_port), payload, data_len);
     if (cb) cb(ip->src, ntohs(udp->src_port), ntohs(udp->dst_port), payload, data_len);
 }
 
@@ -359,7 +369,7 @@ uint32_t resolve_dns(const char *hostname) {
     dns_resolved_ip = 0;
     udp_callback    = handle_dns_udp;
 
-    if (!send_udp_packet(NET_DNS_IP, DNS_SRC_PORT, DNS_PORT, buf, (uint16_t)off)) { udp_callback = NULL; return 0; }
+    if (!net_dns_ip || !send_udp_packet(net_dns_ip, DNS_SRC_PORT, DNS_PORT, buf, (uint16_t)off)) { udp_callback = NULL; return 0; }
 
     for (int i = 0; i < 3000; i++) {
         poll_net_device();
@@ -414,7 +424,7 @@ static bool send_tcp_segment(tcp_socket_t *sock, uint8_t flags,
     if (data && data_len)
         memcpy(buf + TCP_HDR_LEN, data, data_len);
 
-    tcp->checksum = calculate_transport_checksum(NET_MY_IP, sock->remote_ip,
+    tcp->checksum = calculate_transport_checksum(net_local_ip, sock->remote_ip,
                                                  IP_PROTO_TCP, buf, tcp_len);
     return send_ip_packet(sock->remote_ip, IP_PROTO_TCP, buf, tcp_len);
 }

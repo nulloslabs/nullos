@@ -1,10 +1,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <errno.h>
+#include <main/log.h>
 #include <main/spinlocks.h>
 #include <io/ide.h>
 #include <io/io.h>
-#include <io/terminal.h>
 #include <mm/vmm.h>
 
 static uint16_t ide_channels[2][3];
@@ -210,6 +210,6 @@ bool init_ide(pci_device_t *dev) {
     ide_func = dev->func;
     ide_ready = true;
     detect_ide_devices();
-    printf("ide: initialized ide controller\n");
+    log("ide: initialized ide controller\n");
     return true;
 }

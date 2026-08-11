@@ -1,5 +1,7 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include <errno.h>
+#include <sys/epoll.h>
 #include <main/fd.h>
 #include <main/string.h>
 #include <main/sched.h>
@@ -80,7 +82,8 @@ int free_fd(fd_table_t *table, int fd) {
     } else if ((table->entries[fd].type == FD_FILE || table->entries[fd].type == FD_TMPFS) && table->entries[fd].handle != NULL) {
         release_flock_obj((flock_obj_t *)table->entries[fd].handle);
     } else if (table->entries[fd].type == FD_EPOLL) {
-        free(table->entries[fd].handle);
+        epoll_instance_t *epi = (epoll_instance_t *)table->entries[fd].handle;
+        if (epi && --epi->refcount == 0) free(epi);
     }
     table->entries[fd].open   = false;
     table->entries[fd].type   = FD_NONE;
@@ -120,6 +123,9 @@ void retain_fd_entry(fd_entry_t *entry) {
         retain_unix_handle((unix_handle_t *)entry->handle);
     } else if (entry->type == FD_SOCKET) {
         retain_socket((socket_t *)entry->handle);
+    } else if (entry->type == FD_EPOLL) {
+        epoll_instance_t *epi = (epoll_instance_t *)entry->handle;
+        if (epi) epi->refcount++;
     } else if ((entry->type == FD_FILE || entry->type == FD_TMPFS) && entry->handle != NULL) { retain_flock_obj((flock_obj_t *)entry->handle); } }
 
 void init_fd_table(fd_table_t *table) {

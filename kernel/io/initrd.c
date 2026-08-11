@@ -1,16 +1,18 @@
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <errno.h>
 #include <dirent.h>
+#include <main/log.h>
 #include <main/panic.h>
 #include <main/string.h>
 #include <main/gzip.h>
 #include <main/sched.h>
+#include <main/timekeeping.h>
 #include <main/limine_req.h>
 #include <io/initrd.h>
-#include <io/terminal.h>
 #include <mm/mm.h>
 #include <mm/pmm.h>
 #include <limine.h>
@@ -127,19 +129,22 @@ static void swap_entries(struct initrd_archive_entry *a, struct initrd_archive_e
     struct initrd_archive_entry t = *a; *a = *b; *b = t;
 }
 
-static void quicksort_archive_entries(struct initrd_archive_entry *arr, int low, int high) {
-    if (low < high) {
-        int i = low - 1;
-        for (int j = low; j < high; j++) {
-            if (compare_archive_names(arr[j].path, arr[high].path) < 0) {
-                i++;
-                swap_entries(&arr[i], &arr[j]);
-            }
-        }
-        swap_entries(&arr[i + 1], &arr[high]);
-        int pi = i + 1;
-        quicksort_archive_entries(arr, low, pi - 1);
-        quicksort_archive_entries(arr, pi + 1, high);
+static void sift_archive_entries(struct initrd_archive_entry *entries, int root, int count) {
+    while (true) {
+        int child = root * 2 + 1;
+        if (child >= count) return;
+        if (child + 1 < count && compare_archive_names(entries[child].path, entries[child + 1].path) < 0) child++;
+        if (compare_archive_names(entries[root].path, entries[child].path) >= 0) return;
+        swap_entries(&entries[root], &entries[child]);
+        root = child;
+    }
+}
+
+static void sort_archive_entries(struct initrd_archive_entry *entries, int count) {
+    for (int root = count / 2; root-- > 0;) sift_archive_entries(entries, root, count);
+    for (int end = count - 1; end > 0; end--) {
+        swap_entries(&entries[0], &entries[end]);
+        sift_archive_entries(entries, 0, end);
     }
 }
 
@@ -262,7 +267,33 @@ static void resolve_path_symlinks_ex(const char *in_abs, char *out_abs, size_t o
     out_abs[out_size - 1] = '\0';
 }
 
-static void add_modified_file(const char *path, void *data, size_t size, size_t capacity, uint32_t mode, uid_t uid, gid_t gid) {
+typedef enum {
+    INITRD_TIME_CREATE,
+    INITRD_TIME_CONTENT,
+    INITRD_TIME_CHANGE,
+} initrd_time_change_t;
+
+static void set_modified_times(modified_file_t *file, int archive_idx, bool new_entry, initrd_time_change_t change) {
+    struct timespec now = time_get_realtime_ts();
+    if (new_entry) {
+        if (archive_idx >= 0 && !archive_tombstone_get(file->path)) {
+            file->atime = archive_entries[archive_idx].atime;
+            file->btime = archive_entries[archive_idx].btime;
+            file->mtime = archive_entries[archive_idx].mtime;
+            file->ctime = archive_entries[archive_idx].ctime;
+        } else {
+            file->atime = now;
+            file->btime = now;
+            file->mtime = now;
+            file->ctime = now;
+        }
+    }
+    if (change == INITRD_TIME_CREATE) file->atime = file->btime = file->mtime = file->ctime = now;
+    if (change == INITRD_TIME_CONTENT) file->mtime = file->ctime = now;
+    if (change == INITRD_TIME_CHANGE) file->ctime = now;
+}
+
+static void add_modified_file(const char *path, void *data, size_t size, size_t capacity, uint32_t mode, uid_t uid, gid_t gid, initrd_time_change_t change) {
     for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
         if (modified_files[i].is_active && strcmp(modified_files[i].path, path) == 0) {
             if (modified_files[i].data) free(modified_files[i].data);
@@ -273,6 +304,7 @@ static void add_modified_file(const char *path, void *data, size_t size, size_t 
             modified_files[i].uid = uid;
             modified_files[i].gid = gid;
             modified_files[i].is_tombstone = false;
+            set_modified_times(&modified_files[i], -1, false, change);
             // Recreating a previously-deleted tar-backed path must clear the
             // tombstone, otherwise the new overlay entry would never be seen
             // (callers consult the tombstone bitmap directly via
@@ -301,10 +333,32 @@ static void add_modified_file(const char *path, void *data, size_t size, size_t 
             modified_files[i].uid = uid;
             modified_files[i].gid = gid;
             modified_files[i].is_tombstone = false;
+            set_modified_times(&modified_files[i], archive_idx, true, change);
             archive_tombstone_clear(path);
             return;
         }
     }
+}
+
+static void touch_parent_times(const char *norm_path) {
+    char parent[256];
+    strncpy(parent, norm_path, sizeof(parent) - 1);
+    parent[sizeof(parent) - 1] = '\0';
+    size_t len = strlen(parent);
+    while (len > 2 && parent[len - 1] == '/') parent[--len] = '\0';
+    char *slash = strrchr(parent, '/');
+    if (!slash) return;
+    if (slash == parent + 1) slash[1] = '\0';
+    else *slash = '\0';
+
+    struct timespec now = time_get_realtime_ts();
+    modified_file_t *overlay = NULL;
+    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+        if (modified_files[i].is_active && strcmp(modified_files[i].path, parent) == 0) { overlay = &modified_files[i]; break; }
+    }
+    if (overlay) { overlay->mtime = overlay->ctime = now; return; }
+    int idx = archive_entry_idx(parent);
+    if (idx >= 0) archive_entries[idx].mtime = archive_entries[idx].ctime = now;
 }
 
 // Drop a tombstone: mark the sorted archive entry for `norm_path` (already in
@@ -372,7 +426,7 @@ initrd_file_t read_initrd(const char *path) {
     strncpy(current_path, path, sizeof(current_path) - 1);
     current_path[sizeof(current_path) - 1] = '\0';
 
-    initrd_file_t result = { .inode = 0, .data = NULL, .size = 0, .mode = 0, .uid = 0, .gid = 0 };
+    initrd_file_t result = {0};
 
     for (int depth = 0; depth < 8; depth++) {
         char norm[256];
@@ -396,6 +450,11 @@ initrd_file_t read_initrd(const char *path) {
                 result.mode = modified_files[i].mode;
                 result.uid = modified_files[i].uid;
                 result.gid = modified_files[i].gid;
+                modified_files[i].atime = time_get_realtime_ts();
+                result.atime = modified_files[i].atime;
+                result.btime = modified_files[i].btime;
+                result.mtime = modified_files[i].mtime;
+                result.ctime = modified_files[i].ctime;
                 return result;
             }
         }
@@ -419,6 +478,11 @@ initrd_file_t read_initrd(const char *path) {
             result.mode = entry->mode;
             result.uid = entry->uid;
             result.gid = entry->gid;
+            entry->atime = time_get_realtime_ts();
+            result.atime = entry->atime;
+            result.btime = entry->btime;
+            result.mtime = entry->mtime;
+            result.ctime = entry->ctime;
             return result;
         }
         if (!found_link) break;
@@ -443,6 +507,10 @@ static initrd_file_t stat_initrd_ex(const char *path, bool follow_final) {
                 .mode = modified_files[i].mode,
                 .uid  = modified_files[i].uid,
                 .gid  = modified_files[i].gid,
+                .atime = modified_files[i].atime,
+                .btime = modified_files[i].btime,
+                .mtime = modified_files[i].mtime,
+                .ctime = modified_files[i].ctime,
             };
             return result;
         }
@@ -464,6 +532,10 @@ static initrd_file_t stat_initrd_ex(const char *path, bool follow_final) {
             .mode = entry->mode,
             .uid = entry->uid,
             .gid = entry->gid,
+            .atime = entry->atime,
+            .btime = entry->btime,
+            .mtime = entry->mtime,
+            .ctime = entry->ctime,
         };
         return result;
     }
@@ -488,6 +560,7 @@ initrd_file_t stat_initrd_nofollow(const char *path) {
 int write_initrd(const char *path, const void *data, uint64_t size, uint32_t mode, uid_t uid, gid_t gid) {
     char norm[256];
     get_norm_path(path, norm, sizeof(norm));
+    bool existed = stat_initrd(path).mode != 0;
 
     void *copy = NULL;
     if (size > 0) {
@@ -496,7 +569,8 @@ int write_initrd(const char *path, const void *data, uint64_t size, uint32_t mod
         memcpy(copy, data, (size_t)size);
     }
 
-    add_modified_file(norm, copy, (size_t)size, (size_t)size, mode, uid, gid);
+    add_modified_file(norm, copy, (size_t)size, (size_t)size, mode, uid, gid, INITRD_TIME_CONTENT);
+    if (!existed) touch_parent_times(norm);
     return 0;
 }
 
@@ -565,6 +639,7 @@ int write_initrd_partial(const char *path, const void *data, uint64_t off, uint6
         ent->mode = mode ? mode : (ent->mode ? ent->mode : 0100644);
         ent->uid  = uid;
         ent->gid  = gid;
+        ent->mtime = ent->ctime = time_get_realtime_ts();
         return 0;
     }
 
@@ -587,7 +662,8 @@ int write_initrd_partial(const char *path, const void *data, uint64_t off, uint6
     memcpy((uint8_t *)buf + off, data, (size_t)count);
 
     uint32_t final_mode = mode ? mode : (cur.mode ? cur.mode : 0100644);
-    add_modified_file(norm, buf, (size_t)need, (size_t)alloc, final_mode, uid, gid);
+    add_modified_file(norm, buf, (size_t)need, (size_t)alloc, final_mode, uid, gid, INITRD_TIME_CONTENT);
+    if (!cur.mode) touch_parent_times(norm);
     return 0;
 }
 
@@ -602,7 +678,8 @@ int mkdir_initrd(const char *path, mode_t mode, uid_t uid, gid_t gid) {
     initrd_file_t existing = read_initrd(path);
     if (existing.data || existing.mode) return -EEXIST;
 
-    add_modified_file(norm, NULL, 0, 0, mode | 0040000, uid, gid);
+    add_modified_file(norm, NULL, 0, 0, mode | 0040000, uid, gid, INITRD_TIME_CREATE);
+    touch_parent_times(norm);
     return 0;
 }
 
@@ -623,6 +700,7 @@ int delete_initrd(const char *path) {
             // If an archive original also exists below it, leave a tombstone so it
             // doesn't resurface. Otherwise there's nothing to shadow.
             if (archive_has_entry(norm)) add_tombstone(norm);
+            touch_parent_times(norm);
             return 0;
         }
     }
@@ -631,6 +709,7 @@ int delete_initrd(const char *path) {
     // the original is hidden from read/stat/getdents from now on.
     if (archive_has_entry(norm)) {
         add_tombstone(norm);
+        touch_parent_times(norm);
         return 0;
     }
 
@@ -708,12 +787,14 @@ int rmdir_initrd(const char *path) {
             if (modified_files[i].data) free(modified_files[i].data);
             modified_files[i].is_active = false;
             if (archive_has_entry(norm)) add_tombstone(norm);
+            touch_parent_times(norm);
             return 0;
         }
     }
 
     if (archive_has_entry(norm)) {
         add_tombstone(norm);
+        touch_parent_times(norm);
         return 0;
     }
 
@@ -733,7 +814,8 @@ int symlink_initrd(const char *target, const char *path, uid_t uid, gid_t gid) {
     if (!copy) return -ENOMEM;
     strcpy(copy, target);
 
-    add_modified_file(norm, copy, len, len + 1, 0xA000 | 0777, uid, gid);
+    add_modified_file(norm, copy, len, len + 1, 0xA000 | 0777, uid, gid, INITRD_TIME_CREATE);
+    touch_parent_times(norm);
     return 0;
 }
 
@@ -750,6 +832,7 @@ int chmod_initrd(const char *path, mode_t mode) {
         if (modified_files[i].is_active && strcmp(modified_files[i].path, norm) == 0) {
             mode_t type_bits = (modified_files[i].mode & 0xF000);
             modified_files[i].mode = (mode & 0777) | type_bits;
+            modified_files[i].ctime = time_get_realtime_ts();
             return 0;
         }
     }
@@ -771,7 +854,7 @@ int chmod_initrd(const char *path, mode_t mode) {
         memcpy(data_copy, file.data, file.size);
     }
 
-    add_modified_file(norm, data_copy, file.size, file.size, new_mode, file.uid, file.gid);
+    add_modified_file(norm, data_copy, file.size, file.size, new_mode, file.uid, file.gid, INITRD_TIME_CHANGE);
     return 0;
 }
 
@@ -783,6 +866,7 @@ int chown_initrd(const char *path, uid_t uid, gid_t gid, bool follow) {
         if (modified_files[i].is_active && strcmp(modified_files[i].path, norm) == 0) {
             if (uid != (uid_t)-1) modified_files[i].uid = uid;
             if (gid != (gid_t)-1) modified_files[i].gid = gid;
+            modified_files[i].ctime = time_get_realtime_ts();
             return 0;
         }
     }
@@ -801,7 +885,27 @@ int chown_initrd(const char *path, uid_t uid, gid_t gid, bool follow) {
 
     uid_t new_uid = uid == (uid_t)-1 ? file.uid : uid;
     gid_t new_gid = gid == (gid_t)-1 ? file.gid : gid;
-    add_modified_file(norm, data_copy, file.size, alloc_size, file.mode, new_uid, new_gid);
+    add_modified_file(norm, data_copy, file.size, alloc_size, file.mode, new_uid, new_gid, INITRD_TIME_CHANGE);
+    return 0;
+}
+
+int set_initrd_times(const char *path, struct timespec atime, bool set_atime, struct timespec mtime, bool set_mtime, bool follow) {
+    char norm[256];
+    get_norm_path_ex(path, norm, sizeof(norm), follow);
+
+    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+        if (!modified_files[i].is_active || strcmp(modified_files[i].path, norm) != 0) continue;
+        if (set_atime) modified_files[i].atime = atime;
+        if (set_mtime) modified_files[i].mtime = mtime;
+        if (set_atime || set_mtime) modified_files[i].ctime = time_get_realtime_ts();
+        return 0;
+    }
+
+    int idx = archive_entry_idx(norm);
+    if (idx < 0 || archive_tombstone_get(norm)) return -ENOENT;
+    if (set_atime) archive_entries[idx].atime = atime;
+    if (set_mtime) archive_entries[idx].mtime = mtime;
+    if (set_atime || set_mtime) archive_entries[idx].ctime = time_get_realtime_ts();
     return 0;
 }
 
@@ -851,6 +955,16 @@ int get_initrd_entry(int index, directory_entry_t *entry) {
 
 int next_initrd_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size,
                       uint8_t *child_type, ino_t *child_ino) {
+    char normalized_dir[256];
+    get_norm_path(dir_norm, normalized_dir, sizeof(normalized_dir));
+    struct timespec now = time_get_realtime_ts();
+    modified_file_t *overlay_dir = find_overlay_entry(normalized_dir);
+    if (overlay_dir) overlay_dir->atime = now;
+    else {
+        int dir_idx = archive_entry_idx(normalized_dir);
+        if (dir_idx >= 0) archive_entries[dir_idx].atime = now;
+    }
+
     char prefix[258];
     strncpy(prefix, dir_norm, sizeof(prefix) - 2);
     prefix[sizeof(prefix) - 2] = '\0';
@@ -1000,8 +1114,9 @@ void init_initrd(void) {
 
         ptr = decompressed;
         for (int i = 0; i < count; i++) {
-            uint32_t namesize, filesize;
+            uint32_t namesize, filesize, mtime;
             parse_cpio_hex(ptr + 94, &namesize); parse_cpio_hex(ptr + 54, &filesize);
+            parse_cpio_hex(ptr + 46, &mtime);
             uint8_t *name = ptr + 110;
             uint8_t *data = align_cpio(name + namesize, end);
             struct initrd_archive_entry *entry = &archive_entries[i];
@@ -1016,6 +1131,10 @@ void init_initrd(void) {
             parse_cpio_hex(ptr + 70, &entry->devminor);
             entry->data = data;
             entry->size = filesize;
+            entry->atime.tv_sec = mtime;
+            entry->btime.tv_sec = mtime;
+            entry->mtime.tv_sec = mtime;
+            entry->ctime.tv_sec = mtime;
             if ((entry->mode & 0xF000) == 0xA000) {
                 size_t target_size = filesize < sizeof(entry->link_target) - 1 ? filesize : sizeof(entry->link_target) - 1;
                 memcpy(entry->link_target, data, target_size);
@@ -1043,7 +1162,7 @@ void init_initrd(void) {
         }
 
         archive_entry_count = count;
-        quicksort_archive_entries(archive_entries, 0, archive_entry_count - 1);
+        sort_archive_entries(archive_entries, archive_entry_count);
         archive_tombstone_bits = malloc((size_t)archive_entry_count);
         if (archive_tombstone_bits) memset(archive_tombstone_bits, 0, (size_t)archive_entry_count);
         initrd_decompressed = decompressed;
@@ -1058,5 +1177,5 @@ void init_initrd(void) {
     } else {
         panic("no module found");
     }
-    printf("initrd: initialized initrd\n");
+    log("initrd: initialized initrd\n");
 }

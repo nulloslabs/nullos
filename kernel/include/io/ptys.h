@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <termios.h>
 #include <sys/types.h>
 #include <io/ttys.h>

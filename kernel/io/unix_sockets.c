@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <errno.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
@@ -543,6 +544,13 @@ static int64_t unix_op_write(socket_t *sock, const void *buf, size_t count, uint
     return write_unix_handle((unix_handle_t *)sock->priv, buf, count, fd_flags);
 }
 
+static bool unix_op_is_readable(socket_t *sock) {
+    if (!sock || !sock->priv) return false;
+    unix_handle_t *h = (unix_handle_t *)sock->priv;
+    if (h->listening) return h->pending_len != 0;
+    return h->in && (h->in->len != 0 || h->in->writers == 0);
+}
+
 static const socket_ops_t unix_socket_ops = {
     .bind        = unix_op_bind,
     .connect     = unix_op_connect,
@@ -558,6 +566,7 @@ static const socket_ops_t unix_socket_ops = {
     .close       = unix_op_close,
     .read        = unix_op_read,
     .write       = unix_op_write,
+    .is_readable = unix_op_is_readable,
 };
 
 socket_t *create_unix_socket_obj(unix_handle_t *h) {

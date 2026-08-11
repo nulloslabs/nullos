@@ -1,6 +1,6 @@
 #include <stdint.h>
+#include <main/log.h>
 #include <main/madt.h>
-#include <io/terminal.h>
 #include <uacpi/acpi.h>
 #include <uacpi/tables.h>
 
@@ -21,5 +21,5 @@ void parse_madt(void) {
         entry = (struct acpi_entry_hdr *)((uint8_t *)entry + entry->length);
     }
     uacpi_table_unref(&table);
-    printf("madt: parsed madt\n");
+    log("madt: parsed madt\n");
 }

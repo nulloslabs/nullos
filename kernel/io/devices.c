@@ -1,4 +1,6 @@
+#include <stdbool.h>
 #include <errno.h>
+#include <main/log.h>
 #include <main/string.h>
 #include <main/limine_req.h>
 #include <main/panic.h>
@@ -319,7 +321,7 @@ void init_devices(void) {
                 if (!pata_device_size(i, &size)) continue;
                 if (!make_ide_disk_name(name, sizeof(name), "hd", i)) continue;
                 if (register_block_device_idx(name, read_pata_device, write_pata_device, i, size) < 0) {
-                    printf("devices: unable to register %s\n", name);
+                    log("devices: unable to register %s\n", name);
                 }
             }
         }
@@ -329,11 +331,11 @@ void init_devices(void) {
                 if (!atapi_device_size(i, &size)) continue;
                 if (!make_ide_numbered_name(name, sizeof(name), "sr", i)) continue;
                 if (register_block_device_idx(name, read_atapi_device, write_atapi_device, i, size) < 0) {
-                    printf("devices: unable to register %s\n", name);
+                    log("devices: unable to register %s\n", name);
                 }
             }
         }
     }
 
-    printf("devices: initialized devices\n");
+    log("devices: initialized devices\n");
 }

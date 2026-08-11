@@ -32,6 +32,7 @@
 #define SO_LINGER 13
 #define SO_ERROR 4
 #define SO_TYPE 3
+#define SO_BINDTODEVICE 25
 
 #define MSG_OOB       0x01
 #define MSG_PEEK      0x02

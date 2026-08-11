@@ -1,7 +1,9 @@
+#include <stdbool.h>
 #include <errno.h>
+#include <main/log.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
-#include <io/terminal.h>
+#include <main/timekeeping.h>
 #include <io/tmpfs.h>
 #include <mm/mm.h>
 
@@ -31,6 +33,11 @@ static int alloc_inode(void) {
 
 static void free_inode(int idx) {
     if (idx < 0 || idx >= TMPFS_MAX_INODES) return;
+    if (tmpfs_inodes[idx].type == TMPFS_DIR) {
+        for (int i = 0; i < tmpfs_inodes[idx].child_count; i++) {
+            if (tmpfs_inodes[idx].children[i].name) free(tmpfs_inodes[idx].children[i].name);
+        }
+    }
     if (tmpfs_inodes[idx].type == TMPFS_REG && tmpfs_inodes[idx].data) {
         free(tmpfs_inodes[idx].data);
     }
@@ -104,6 +111,11 @@ int create_tmpfs_root(const char *mount_path) {
     tmpfs_inodes[inode].gid       = 0;
     tmpfs_inodes[inode].parent    = -1;
     tmpfs_inodes[inode].mount_idx = slot;
+    struct timespec now = time_get_realtime_ts();
+    tmpfs_inodes[inode].atime = now;
+    tmpfs_inodes[inode].btime = now;
+    tmpfs_inodes[inode].mtime = now;
+    tmpfs_inodes[inode].ctime = now;
     strncpy(tmpfs_inodes[inode].name, "/", TMPFS_MAX_NAME - 1);
 
     strncpy(tmpfs_mounts[slot].path, mount_path, sizeof(tmpfs_mounts[slot].path) - 1);
@@ -193,10 +205,10 @@ static int walk_rel(int start_dir, const char *rel, bool follow_final) {
 
         int child = -1;
         for (int i = 0; i < tmpfs_inodes[cur].child_count; i++) {
-            int ci = tmpfs_inodes[cur].children[i];
+            int ci = tmpfs_inodes[cur].children[i].inode;
             if (ci < 0) continue;
             if (tmpfs_inodes[ci].active &&
-                strncmp(tmpfs_inodes[ci].name, comp, TMPFS_MAX_NAME) == 0) {
+                strncmp(tmpfs_inodes[cur].children[i].name, comp, TMPFS_MAX_NAME) == 0) {
                 child = ci; break;
             }
         }
@@ -287,13 +299,14 @@ static int read_tmpfs_dirent(int dir_inode, int index, char *name, size_t name_s
         spin_unlock_irqrestore(&tmpfs_lock, irq);
         return 0;   // end
     }
-    int ci = d->children[index];
+    int ci = d->children[index].inode;
     if (ci < 0 || !tmpfs_inodes[ci].active) {
         spin_unlock_irqrestore(&tmpfs_lock, irq);
         return 0;
     }
     tmpfs_inode_t *c = &tmpfs_inodes[ci];
-    strncpy(name, c->name, name_size - 1);
+    d->atime = time_get_realtime_ts();
+    strncpy(name, d->children[index].name, name_size - 1);
     name[name_size - 1] = '\0';
     if (type_out) {
         switch (c->type) {
@@ -309,32 +322,50 @@ static int read_tmpfs_dirent(int dir_inode, int index, char *name, size_t name_s
     return 1;
 }
 
-static int add_child(int parent, int child) {
+static int add_child(int parent, int child, const char *name) {
     tmpfs_inode_t *p = &tmpfs_inodes[parent];
     if (p->child_count >= TMPFS_MAX_CHILDREN) return -ENOSPC;
-    p->children[p->child_count++] = child;
+    char *name_copy = malloc(TMPFS_MAX_NAME);
+    if (!name_copy) return -ENOMEM;
+    strncpy(name_copy, name, TMPFS_MAX_NAME - 1);
+    name_copy[TMPFS_MAX_NAME - 1] = '\0';
+    p->children[p->child_count].inode = child;
+    p->children[p->child_count].name = name_copy;
+    p->child_count++;
+    p->mtime = p->ctime = time_get_realtime_ts();
     return 0;
 }
 
-static int remove_child(int parent, int child) {
+static int remove_child(int parent, int child, const char *name) {
     tmpfs_inode_t *p = &tmpfs_inodes[parent];
     for (int i = 0; i < p->child_count; i++) {
-        if (p->children[i] == child) {
-            p->children[i] = p->children[p->child_count - 1];
+        if (p->children[i].inode == child && (!name || strcmp(p->children[i].name, name) == 0)) {
+            free(p->children[i].name);
+            if (i != p->child_count - 1) p->children[i] = p->children[p->child_count - 1];
             p->child_count--;
+            p->mtime = p->ctime = time_get_realtime_ts();
             return 0;
         }
     }
     return -ENOENT;
 }
 
+static bool inode_has_directory_link(int inode) {
+    for (int i = 0; i < TMPFS_MAX_INODES; i++) {
+        if (!tmpfs_inodes[i].active || tmpfs_inodes[i].type != TMPFS_DIR) continue;
+        for (int j = 0; j < tmpfs_inodes[i].child_count; j++) {
+            if (tmpfs_inodes[i].children[j].inode == inode) return true;
+        }
+    }
+    return false;
+}
+
 static int find_in_dir(int dir, const char *name) {
     tmpfs_inode_t *d = &tmpfs_inodes[dir];
     for (int i = 0; i < d->child_count; i++) {
-        int ci = d->children[i];
+        int ci = d->children[i].inode;
         if (ci < 0) continue;
-        if (tmpfs_inodes[ci].active &&
-            strncmp(tmpfs_inodes[ci].name, name, TMPFS_MAX_NAME) == 0) {
+        if (tmpfs_inodes[ci].active && strncmp(d->children[i].name, name, TMPFS_MAX_NAME) == 0) {
             return ci;
         }
     }
@@ -367,6 +398,11 @@ static int create_entry_locked(const char *abs_path, tmpfs_type_t type,
     tmpfs_inodes[inode].gid       = gid;
     tmpfs_inodes[inode].parent    = parent;
     tmpfs_inodes[inode].mount_idx = mslot;
+    struct timespec now = time_get_realtime_ts();
+    tmpfs_inodes[inode].atime = now;
+    tmpfs_inodes[inode].btime = now;
+    tmpfs_inodes[inode].mtime = now;
+    tmpfs_inodes[inode].ctime = now;
     strncpy(tmpfs_inodes[inode].name, last, TMPFS_MAX_NAME - 1);
     tmpfs_inodes[inode].name[TMPFS_MAX_NAME - 1] = '\0';
 
@@ -375,7 +411,7 @@ static int create_entry_locked(const char *abs_path, tmpfs_type_t type,
         tmpfs_inodes[inode].target[TMPFS_LINK_MAX - 1] = '\0';
     }
 
-    int r = add_child(parent, inode);
+    int r = add_child(parent, inode, last);
     if (r < 0) { free_inode(inode); return r; }
 
     return inode;
@@ -410,10 +446,12 @@ static int remove_tmpfs(const char *abs_path) {
     if (tmpfs_inodes[inode].type == TMPFS_DIR) {
         spin_unlock_irqrestore(&tmpfs_lock, irq); return -EISDIR;
     }
-    int parent = tmpfs_inodes[inode].parent;
+    char last[TMPFS_MAX_NAME];
+    int parent = resolve_parent_locked(abs_path, last, sizeof(last));
     if (parent < 0) { spin_unlock_irqrestore(&tmpfs_lock, irq); return -EBUSY; } // mount root
-    remove_child(parent, inode);
-    free_inode(inode);
+    tmpfs_inodes[inode].ctime = time_get_realtime_ts();
+    remove_child(parent, inode, last);
+    if (!inode_has_directory_link(inode)) free_inode(inode);
     spin_unlock_irqrestore(&tmpfs_lock, irq);
     return 0;
 }
@@ -430,9 +468,10 @@ int rmdir_tmpfs(const char *abs_path) {
     if (tmpfs_inodes[inode].child_count > 0) {
         spin_unlock_irqrestore(&tmpfs_lock, irq); return -ENOTEMPTY;
     }
-    int parent = tmpfs_inodes[inode].parent;
+    char last[TMPFS_MAX_NAME];
+    int parent = resolve_parent_locked(abs_path, last, sizeof(last));
     if (parent < 0) { spin_unlock_irqrestore(&tmpfs_lock, irq); return -EBUSY; }
-    remove_child(parent, inode);
+    remove_child(parent, inode, last);
     free_inode(inode);
     spin_unlock_irqrestore(&tmpfs_lock, irq);
     return 0;
@@ -455,12 +494,15 @@ int rename_tmpfs(const char *old_abs, const char *new_abs) {
         spin_unlock_irqrestore(&tmpfs_lock, irq); return -EEXIST;
     }
 
-    int old_parent = tmpfs_inodes[src].parent;
-    if (old_parent >= 0) remove_child(old_parent, src);
+    char old_last[TMPFS_MAX_NAME];
+    int old_parent = resolve_parent_locked(old_abs, old_last, sizeof(old_last));
+    if (old_parent < 0) { spin_unlock_irqrestore(&tmpfs_lock, irq); return old_parent; }
+    remove_child(old_parent, src, old_last);
     tmpfs_inodes[src].parent = new_parent;
     strncpy(tmpfs_inodes[src].name, last, TMPFS_MAX_NAME - 1);
     tmpfs_inodes[src].name[TMPFS_MAX_NAME - 1] = '\0';
-    add_child(new_parent, src);
+    add_child(new_parent, src, last);
+    tmpfs_inodes[src].ctime = time_get_realtime_ts();
 
     spin_unlock_irqrestore(&tmpfs_lock, irq);
     return 0;
@@ -488,7 +530,8 @@ int link_tmpfs(const char *old_abs, const char *new_abs) {
     // (free_inode runs when the LAST reference is removed; we don't track
     // that precisely here, so we simply don't free on unlink if other refs
     // exist — tracked via a quick scan.)
-    add_child(new_parent, src);
+    add_child(new_parent, src, last);
+    tmpfs_inodes[src].ctime = time_get_realtime_ts();
     spin_unlock_irqrestore(&tmpfs_lock, irq);
     return 0;
 }
@@ -501,6 +544,7 @@ int chmod_tmpfs(const char *abs_path, mode_t mode) {
 
     // preserve type bits, replace permission bits
     tmpfs_inodes[inode].mode = (tmpfs_inodes[inode].mode & ~07777) | (mode & 07777);
+    tmpfs_inodes[inode].ctime = time_get_realtime_ts();
     spin_unlock_irqrestore(&tmpfs_lock, irq);
     return 0;
 }
@@ -512,6 +556,19 @@ int chown_tmpfs(const char *abs_path, uid_t uid, gid_t gid, bool follow) {
     if (inode < 0) { spin_unlock_irqrestore(&tmpfs_lock, irq); return inode; }
     if (uid != (uid_t)-1) tmpfs_inodes[inode].uid = uid;
     if (gid != (gid_t)-1) tmpfs_inodes[inode].gid = gid;
+    tmpfs_inodes[inode].ctime = time_get_realtime_ts();
+    spin_unlock_irqrestore(&tmpfs_lock, irq);
+    return 0;
+}
+
+int set_tmpfs_times(const char *path, struct timespec atime, bool set_atime, struct timespec mtime, bool set_mtime, bool follow) {
+    uint64_t irq;
+    spin_lock_irqsave(&tmpfs_lock, &irq);
+    int inode = resolve_locked(path, follow);
+    if (inode < 0) { spin_unlock_irqrestore(&tmpfs_lock, irq); return inode; }
+    if (set_atime) tmpfs_inodes[inode].atime = atime;
+    if (set_mtime) tmpfs_inodes[inode].mtime = mtime;
+    if (set_atime || set_mtime) tmpfs_inodes[inode].ctime = time_get_realtime_ts();
     spin_unlock_irqrestore(&tmpfs_lock, irq);
     return 0;
 }
@@ -537,6 +594,7 @@ static int truncate_tmpfs_inode_locked(int inode, uint64_t size) {
         if (n->size < size) memset(n->data + n->size, 0, size - n->size);
         n->size = size;
     }
+    n->mtime = n->ctime = time_get_realtime_ts();
     return 0;
 }
 
@@ -563,6 +621,7 @@ static int64_t write_tmpfs_inode_locked(int inode, const void *buf, uint64_t cou
     }
     memcpy(n->data + offset, buf, count);
     if (need > n->size) n->size = need;
+    n->mtime = n->ctime = time_get_realtime_ts();
     return (int64_t)count;
 }
 
@@ -581,6 +640,7 @@ int read_tmpfs_link(const char *path, char *out, size_t out_size) {
     size_t len = strlen(tmpfs_inodes[inode].target);
     if (out_size <= len) { spin_unlock_irqrestore(&tmpfs_lock, irq); return -ERANGE; }
     strcpy(out, tmpfs_inodes[inode].target);
+    tmpfs_inodes[inode].atime = time_get_realtime_ts();
     spin_unlock_irqrestore(&tmpfs_lock, irq);
     return (int)len;
 }
@@ -595,6 +655,10 @@ static tmpfs_file_t make_tmpfs_file(int inode_idx, tmpfs_inode_t *n) {
     r.mode = n->mode;
     r.uid  = n->uid;
     r.gid  = n->gid;
+    r.atime = n->atime;
+    r.btime = n->btime;
+    r.mtime = n->mtime;
+    r.ctime = n->ctime;
     if (n->type == TMPFS_REG) {
         r.data = n->data;
         r.size = n->size;
@@ -614,13 +678,20 @@ tmpfs_file_t read_tmpfs(const char *path) {
     spin_lock_irqsave(&tmpfs_lock, &irq);
     int inode = resolve_locked(path, true);
     if (inode < 0) { spin_unlock_irqrestore(&tmpfs_lock, irq); return result; }
+    tmpfs_inodes[inode].atime = time_get_realtime_ts();
     result = make_tmpfs_file(inode, &tmpfs_inodes[inode]);
     spin_unlock_irqrestore(&tmpfs_lock, irq);
     return result;
 }
 
 tmpfs_file_t stat_tmpfs(const char *path) {
-    return read_tmpfs(path);
+    tmpfs_file_t result = {0};
+    uint64_t irq;
+    spin_lock_irqsave(&tmpfs_lock, &irq);
+    int inode = resolve_locked(path, true);
+    if (inode >= 0) result = make_tmpfs_file(inode, &tmpfs_inodes[inode]);
+    spin_unlock_irqrestore(&tmpfs_lock, irq);
+    return result;
 }
 
 tmpfs_file_t stat_tmpfs_nofollow(const char *path) {
@@ -689,6 +760,7 @@ int next_tmpfs_child(int *index, const char *dir_norm, char *child_name, size_t 
     uint64_t irq;
     spin_lock_irqsave(&tmpfs_lock, &irq);
     int dir_inode = resolve_locked(dir_norm, true);
+    if (dir_inode >= 0) tmpfs_inodes[dir_inode].atime = time_get_realtime_ts();
     spin_unlock_irqrestore(&tmpfs_lock, irq);
     if (dir_inode < 0) return 1;
     uint64_t ino = 0;
@@ -701,7 +773,7 @@ void init_tmpfs(void) {
     memset(tmpfs_inodes, 0, sizeof(tmpfs_inodes));
     memset(tmpfs_mounts, 0, sizeof(tmpfs_mounts));
     next_ino = 1;
-    printf("tmpfs: initialized tmpfs\n");
+    log("tmpfs: initialized tmpfs\n");
 }
 
 // ---------------------------------------------------------------------------

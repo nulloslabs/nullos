@@ -1,10 +1,11 @@
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
+#include <main/log.h>
 #include <main/string.h>
 #include <main/panic.h>
 #include <main/limine_req.h>
 #include <main/spinlocks.h>
-#include <io/terminal.h>
 #include <mm/mm.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
@@ -244,5 +245,5 @@ void init_mm(void) {
         panic("unable to allocate initial kernel heap pages");
     }
 
-    printf("mm: initialized mm\n");
+    log("mm: initialized mm\n");
 }

@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include <io/terminal.h>
+#include <main/log.h>
 #include <io/io.h>
 #include <io/pit.h>
 
@@ -15,5 +15,5 @@ void init_pit(void) {
     outb(0x43, 0x36);
     outb(0x40, (uint8_t)(divisor & 0xFF));
     outb(0x40, (uint8_t)((divisor >> 8) & 0xFF));
-    printf("pit: initialized pit\n");
+    log("pit: initialized pit\n");
 }

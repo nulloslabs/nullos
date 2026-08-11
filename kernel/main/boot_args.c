@@ -1,12 +1,9 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include <main/boot_args.h>
 #include <main/limine_req.h>
 #include <main/string.h>
 #include <main/strings.h>
-#include <io/terminal.h>
-#include <io/serial.h>
-
-static const char *args = NULL;
 
 const char *get_boot_args(void) {
     if (cmdline_req.response == NULL || cmdline_req.response->executable_file == NULL) return NULL;
@@ -16,23 +13,31 @@ const char *get_boot_args(void) {
     return NULL;
 }
 
+bool has_boot_arg(const char *key) {
+    const char *args = get_boot_args();
+    if (!key || !*key || !args) return false;
+
+    size_t key_len = strlen(key);
+    const char *s = args;
+    while (*s) {
+        while (*s == ' ') s++;
+        if (strncmp(s, key, key_len) == 0 && (s[key_len] == '\0' || s[key_len] == ' ')) return true;
+        while (*s && *s != ' ') s++;
+    }
+    return false;
+}
+
 const char *get_arg_value(const char *key) {
+    const char *args = get_boot_args();
     if (!key || !args) return NULL;
 
     size_t key_len = strlen(key);
     const char *s = args;
     while (*s) {
-        // Check if the key matches AND is either at start or after a space
-        if ((s == args || *(s - 1) == ' ') && strncmp(s, key, key_len) == 0 && s[key_len] == '=') return s + key_len + 1; // Return the value after the '='
-        // Move to the next space to check the next argument
+        if ((s == args || *(s - 1) == ' ') && strncmp(s, key, key_len) == 0 && s[key_len] == '=') return s + key_len + 1;
         s = strchr(s, ' ');
-        if (s) s++; // Skip the space itself
+        if (!s) return NULL;
+        s++;
     }
     return NULL;
-}
-
-void parse_boot_args(void) {
-    args = get_boot_args();
-    // NOTE: If we need anything, we can just put if checks here, right now it dosen't really parse anything...xD
-    printf("boot args: parsed boot args\n");
 }

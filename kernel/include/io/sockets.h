@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -60,6 +61,7 @@ typedef struct socket_ops {
     void    (*close)      (socket_t *sock);
     int64_t (*read)       (socket_t *sock, void *buf, size_t count, uint32_t fd_flags);
     int64_t (*write)      (socket_t *sock, const void *buf, size_t count, uint32_t fd_flags);
+    bool    (*is_readable)(socket_t *sock);
 } socket_ops_t;
 
 struct socket_obj {
@@ -77,3 +79,4 @@ int create_socket(int domain, int type, int protocol, socket_t **out);
 int create_socketpair(int domain, int type, int protocol, socket_t **a, socket_t **b);
 void retain_socket(socket_t *s);
 void release_socket(socket_t *s);
+bool is_socket_readable(socket_t *s);

@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <errno.h>
 #include <netinet/in.h>
 #include <main/string.h>
@@ -259,6 +260,14 @@ static int64_t inet_op_write(socket_t *sock, const void *buf, size_t count, uint
     return inet_op_sendto(sock, buf, count, 0, NULL, 0);
 }
 
+static bool inet_op_is_readable(socket_t *sock) {
+    if (!sock || !sock->priv) return false;
+    inet_socket_t *inet = (inet_socket_t *)sock->priv;
+    if (sock->type == SOCK_DGRAM) return inet->udp_count != 0;
+    if (sock->type == SOCK_STREAM && inet->tcp_sock) return inet->tcp_sock->rx_head != inet->tcp_sock->rx_tail || inet->tcp_sock->rx_fin;
+    return false;
+}
+
 void net_udp_tap_rx(uint32_t src_ip, uint16_t src_port, uint16_t dst_port, const uint8_t *payload, uint16_t len) {
     if (!payload || len == 0 || len > UDP_MAX_PAYLOAD) return;
     uint64_t flags;
@@ -300,6 +309,7 @@ static const socket_ops_t inet_socket_ops = {
     .close       = inet_op_close,
     .read        = inet_op_read,
     .write       = inet_op_write,
+    .is_readable = inet_op_is_readable,
 };
 
 int create_inet_socket_obj(int type, int protocol, socket_t **out) {

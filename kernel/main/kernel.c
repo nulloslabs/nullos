@@ -1,4 +1,5 @@
 // Look at this #include mess...
+#include <stdbool.h>
 #include <main/panic.h>
 #include <main/gdt.h>
 #include <main/idt.h>
@@ -22,6 +23,7 @@
 #include <io/fb.h>
 #include <io/initrd.h>
 #include <io/devices.h>
+#include <io/dhcp.h>
 #include <io/hpet.h>
 #include <io/rtc.h>
 // Almost...there...
@@ -51,7 +53,6 @@ __attribute__((noreturn)) void kmain(void) {
     init_default_font();
     show_cursor(true); // Show cursor as soon as possible
     if (!LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision)) panic("base revision not supported");
-    parse_boot_args();
     init_sse();
     init_gdt();
     init_idt();
@@ -59,6 +60,7 @@ __attribute__((noreturn)) void kmain(void) {
     init_pmm();
     init_vmm();
     init_mm();
+    init_terminal_backbuffer();
     init_initrd();
     init_tmpfs();
     init_ttys();
@@ -79,6 +81,7 @@ __attribute__((noreturn)) void kmain(void) {
     cache_machine_info();
     cache_utsname();
     init_pci_drivers();
+    configure_dhcp();
     init_devices();
     init_syscalls();
 

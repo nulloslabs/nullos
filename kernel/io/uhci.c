@@ -1,7 +1,8 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include <stddef.h>
+#include <main/log.h>
 #include <main/string.h>
-#include <io/terminal.h>
 #include <io/uhci.h>
 #include <io/usb.h>
 #include <io/pci.h>
@@ -291,7 +292,7 @@ void poll_uhci_ports(void) {
         uint16_t hc_status = inw(io_base + UHCI_USBSTS);
         if (hc_status & (UHCI_STS_HCSYSERR | UHCI_STS_HCPROCESS |
                          UHCI_STS_HCHALTED)) {
-            printf("uhci: controller stopped, status=0x%x\n", hc_status);
+            log("uhci: controller stopped, status=0x%x\n", hc_status);
             outw(io_base + UHCI_USBCMD, 0);
             ctrl->initialized = 0;
             continue;
@@ -461,13 +462,13 @@ void init_uhci(pci_device_t *dev) {
 
     uint32_t bar4 = read_pci(dev->bus, dev->dev, dev->func, 0x20);
     if (bar4 == 0xFFFFFFFF || !(bar4 & 1)) {
-        printf("uhci: BAR4 is not an I/O BAR\n");
+        log("uhci: BAR4 is not an I/O BAR\n");
         return;
     }
     uint32_t io_base = bar4 & ~0x1FU;
 
     if (io_base == 0 || io_base > 0xFFE0) {
-        printf("uhci: invalid io base 0x%x\n", io_base);
+        log("uhci: invalid io base 0x%x\n", io_base);
         return;
     }
 
@@ -506,7 +507,7 @@ void init_uhci(pci_device_t *dev) {
         sleep_us(100);
     }
     if (!reset_done) {
-        printf("uhci: host controller reset timed out\n");
+        log("uhci: host controller reset timed out\n");
         return;
     }
     outw(io_base + UHCI_USBINTR, 0);
@@ -514,7 +515,7 @@ void init_uhci(pci_device_t *dev) {
 
     void *frame_list_raw = pmalloc_dma32();
     if (!frame_list_raw) {
-        printf("uhci: failed to allocate DMA32 frame list\n");
+        log("uhci: failed to allocate DMA32 frame list\n");
         return;
     }
     ctrl->frame_list_phys = (uint64_t)frame_list_raw;
@@ -531,7 +532,7 @@ void init_uhci(pci_device_t *dev) {
 
     if (!ctrl->qh || !ctrl->intr_qh || !ctrl->term_td ||
         !ctrl->pending_td || !ctrl->pending_dma_buf) {
-        printf("uhci: failed to allocate DMA32 schedule memory\n");
+        log("uhci: failed to allocate DMA32 schedule memory\n");
         if (ctrl->pending_dma_buf) pfree((void *)ctrl->pending_dma_phys);
         if (ctrl->pending_td) pfree((void *)virt_to_phys(ctrl->pending_td));
         if (ctrl->term_td) pfree((void *)virt_to_phys(ctrl->term_td));
@@ -574,7 +575,7 @@ void init_uhci(pci_device_t *dev) {
     outw(io_base + UHCI_USBCMD, UHCI_CMD_RS | UHCI_CMD_CF | UHCI_CMD_MAXP);
     sleep(2);
     if (inw(io_base + UHCI_USBSTS) & UHCI_STS_HCHALTED) {
-        printf("uhci: controller failed to start, status=0x%x\n", inw(io_base + UHCI_USBSTS));
+        log("uhci: controller failed to start, status=0x%x\n", inw(io_base + UHCI_USBSTS));
         outw(io_base + UHCI_USBCMD, 0);
         pfree((void *)ctrl->pending_dma_phys);
         pfree((void *)virt_to_phys(ctrl->pending_td));
@@ -595,7 +596,7 @@ void init_uhci(pci_device_t *dev) {
     ctrl->pending_buf = NULL;
     ctrl->initialized = 1;
 
-    printf("uhci: initialized uhci\n");
+    log("uhci: initialized uhci\n");
     uhci_count++;
 
     // Initial port scan - detect already-connected devices

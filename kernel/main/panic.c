@@ -1,7 +1,9 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdarg.h>
 #include <signal.h>
+#include <main/log.h>
 #include <main/elf.h>
 #include <main/limine_req.h>
 #include <main/panic.h>
@@ -149,20 +151,23 @@ __attribute__((noreturn)) void dopanic(const char *func, const char *msg, ...) {
     uint64_t rsp;
     __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
 
-    printf("kernel panic: ");
-    vprintf(msg, args);
-    printf("\n");
-    printf("\nregisters:\n");
+    // I hate this.
+    control_log_console(SYSLOG_ACTION_CONSOLE_LEVEL, 7);
+
+    log("kernel panic: ");
+    vlog(msg, args);
+    log("\n");
+    log("\nregisters:\n");
     const char *symbol_name;
     uint64_t symbol_offset;
     if (are_kernel_symbols_available() &&
         kernel_symbol_for_rip(rip, &symbol_name, &symbol_offset)) {
-        printf("  rip: %p (%s+0x%lx)\n", rip, symbol_name, symbol_offset);
+        log("  rip: %p (%s+0x%lx)\n", (void *)(uintptr_t)rip, symbol_name, symbol_offset);
     } else {
         // Fallback, no exact start address
-        printf("  rip: %p (%s+0x?)\n", rip, func);
+        log("  rip: %p (%s+0x?)\n", (void *)(uintptr_t)rip, func);
     }
-    printf("  rsp: %p\n", rsp);
+    log("  rsp: %p\n", (void *)(uintptr_t)rsp);
 
     va_end(args);
     halt();
@@ -188,20 +193,18 @@ void exception_panic(exception_frame_t *frame) {
 
     // Check if the fault came from user mode (Ring 3)
     if ((frame->cs & 3) != 0) {
-        // Vector 14 = page fault: try demand-paging first.
-        // If handle_pf resolves it (returns 0), just return and the CPU retries the
-        // faulting instruction transparently.
-        if (frame->vector == 14 && handle_pf(frame->cr2, frame->error_code) == 0)
-            return;
+        if (frame->vector == 14) {
+            int page_status = handle_pf(frame->cr2, frame->error_code);
+            if (page_status == 0) return;
+        }
 
         int sig = exception_to_signal(frame->vector);
-
         current_task_ptr->pending_signals |= (1ULL << sig);
 
         syscall_frame_t signal_frame = {0};
         signal_frame.rax = frame->rax;
         signal_frame.rbx = frame->rbx;
-        signal_frame.rcx = frame->rip;
+        signal_frame.rcx = frame->rcx;
         signal_frame.rdx = frame->rdx;
         signal_frame.rsi = frame->rsi;
         signal_frame.rdi = frame->rdi;
@@ -210,17 +213,19 @@ void exception_panic(exception_frame_t *frame) {
         signal_frame.r8  = frame->r8;
         signal_frame.r9  = frame->r9;
         signal_frame.r10 = frame->r10;
-        signal_frame.r11 = frame->rflags;
+        signal_frame.r11 = frame->r11;
         signal_frame.r12 = frame->r12;
         signal_frame.r13 = frame->r13;
         signal_frame.r14 = frame->r14;
         signal_frame.r15 = frame->r15;
+        signal_frame.rip = frame->rip;
+        signal_frame.rflags = frame->rflags;
 
-        check_signals(&signal_frame);
+        check_signals_from_user_exception(&signal_frame);
 
         frame->rax = signal_frame.rax;
         frame->rbx = signal_frame.rbx;
-        frame->rip = signal_frame.rcx;
+        frame->rcx = signal_frame.rcx;
         frame->rdx = signal_frame.rdx;
         frame->rsi = signal_frame.rsi;
         frame->rdi = signal_frame.rdi;
@@ -229,28 +234,31 @@ void exception_panic(exception_frame_t *frame) {
         frame->r8  = signal_frame.r8;
         frame->r9  = signal_frame.r9;
         frame->r10 = signal_frame.r10;
-        frame->rflags = signal_frame.r11;
+        frame->r11 = signal_frame.r11;
         frame->r12 = signal_frame.r12;
         frame->r13 = signal_frame.r13;
         frame->r14 = signal_frame.r14;
         frame->r15 = signal_frame.r15;
+        frame->rip = signal_frame.rip;
+        frame->rflags = signal_frame.rflags;
         return;
     }
 
     // Kernel fault, panic as before
     cli();
-    printf("kernel panic: %s\n", reason);
-    printf("\nregisters:\n");
+    control_log_console(SYSLOG_ACTION_CONSOLE_LEVEL, 7);
+    log("kernel panic: %s\n", reason);
+    log("\nregisters:\n");
     const char *symbol_name;
     uint64_t symbol_offset;
     if (are_kernel_symbols_available() &&
         kernel_symbol_for_rip(frame->rip, &symbol_name, &symbol_offset)) {
-        printf("  rip: %p (%s+0x%lx)\n", frame->rip, symbol_name, symbol_offset);
+        log("  rip: %p (%s+0x%lx)\n", (void *)(uintptr_t)frame->rip, symbol_name, symbol_offset);
     } else {
         // Fallback, no debug info
-        printf("  rip: %p (?+0x?)\n", frame->rip);
+        log("  rip: %p (?+0x?)\n", (void *)(uintptr_t)frame->rip);
     }
-    printf("  rsp: %p\n", frame->rsp);
+    log("  rsp: %p\n", (void *)(uintptr_t)frame->rsp);
     halt();
     __builtin_unreachable();
 }

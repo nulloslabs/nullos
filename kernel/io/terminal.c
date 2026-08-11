@@ -1,7 +1,9 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <signal.h>
+#include <main/log.h>
 #include <main/string.h>
 #include <main/limine_req.h>
 #include <main/spinlocks.h>
@@ -111,37 +113,6 @@ static void copy_resized_cells(uint32_t *dst, uint64_t new_width, uint64_t new_h
         for (uint64_t glyph_row = 0; glyph_row < (uint64_t)current_font_h; glyph_row++) {
             memcpy(dst + (dst_y + glyph_row) * new_width, src + (src_y + glyph_row) * old_width, copy_width * sizeof(uint32_t));
         }
-    }
-}
-
-// Lazily heap-allocates back_buffer + alt_back_buffer once init_mm() has run.
-static void init_terminal_backbuffer(struct limine_framebuffer *fb) {
-    if (back_buffer_initialized) return;
-    if (hhdm_offset == 0) return;
-    if (!fb || fb->width == 0 || fb->height == 0) return;
-
-    back_buffer_width = fb->width;
-    back_buffer_height = fb->height;
-    back_buffer_pitch = fb->width * sizeof(uint32_t);
-
-    uint64_t required_size = back_buffer_pitch * fb->height;
-
-    uint32_t *bb = (uint32_t *)malloc(required_size);
-    uint32_t *abb = (uint32_t *)malloc(required_size);
-
-    if (bb && abb) {
-        back_buffer = bb;
-        alt_back_buffer = abb;
-        back_buffer_initialized = true;
-        back_buffer_available = true;
-        backbuffer_reload_from_fb(fb); // seed from current VRAM contents
-    } else {
-        free(bb);
-        free(abb);
-        back_buffer = NULL;
-        alt_back_buffer = NULL;
-        back_buffer_initialized = true;
-        back_buffer_available = false;
     }
 }
 
@@ -615,8 +586,6 @@ void sync_terminal(void) {
     uint64_t rflags;
     spin_lock_irqsave(&term_lock, &rflags);
 
-    if (!back_buffer_initialized) init_terminal_backbuffer(fb);
-
     uint32_t *old_back_buffer = NULL;
     uint32_t *old_alt_back_buffer = NULL;
     if (fb->width != back_buffer_width || fb->height != back_buffer_height) {
@@ -720,7 +689,6 @@ void show_cursor(bool visible) {
     if (cursor_visible == visible) return;
     if (!fb_req.response || fb_req.response->framebuffer_count < 1) return;
     struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
-    if (!back_buffer_initialized) init_terminal_backbuffer(fb);
 
     if (back_buffer_available) {
         uint64_t cw = current_font_w;
@@ -796,7 +764,6 @@ void scroll(void) {
     if (!fb_req.response || fb_req.response->framebuffer_count < 1) return;
     struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
     uint64_t line_height = current_font_h;
-    if (!back_buffer_initialized) init_terminal_backbuffer(fb);
 
     if (back_buffer_available) {
         scroll_region_both(1, bg_color);
@@ -830,7 +797,6 @@ void clrscr(void) {
         return;
     }
 
-    if (!back_buffer_initialized) init_terminal_backbuffer(fb);
     if (cursor_visible) show_cursor(false);
 
     // Clear screen - use back buffer if available, otherwise direct FB
@@ -912,8 +878,6 @@ static int putchar_unlocked(int c) {
 
     if (!fb_req.response || fb_req.response->framebuffer_count < 1) return EOF;
     struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
-
-    if (!back_buffer_initialized) init_terminal_backbuffer(fb);
 
     show_cursor(false);
 
@@ -1518,8 +1482,7 @@ int vprintf(const char *fmt, va_list args) {
         bool left_align = false;
         int width = 0;
         char pad_char = ' ';
-        bool is_long = false;
-        bool is_size = false;
+        int length_modifier = 0;
 
         // Left-align flag
         if (*p == '-') {
@@ -1536,21 +1499,21 @@ int vprintf(const char *fmt, va_list args) {
             width = width * 10 + (*p - '0');
             p++;
         }
-        // Long modifier
         if (*p == 'l') {
-            is_long = true;
+            length_modifier = 1;
             p++;
-            if (*p == 'l') p++;
-        }
-        // Size modifier (%z for size_t / ssize_t)
-        if (*p == 'z') {
-            is_size = true;
+            if (*p == 'l') {
+                length_modifier = 2;
+                p++;
+            }
+        } else if (*p == 'z') {
+            length_modifier = 3;
             p++;
         }
 
         switch (*p) {
             case 's': {
-                char *s = va_arg(args, char *);
+                const char *s = va_arg(args, const char *);
                 if (!s) s = "(null)";
                 int len = strlen(s);
                 if (!left_align)
@@ -1566,36 +1529,40 @@ int vprintf(const char *fmt, va_list args) {
             case 'i':
             case 'd':
             case 'u':
-            case 'b':
             case 'x': case 'X': {
-                uint64_t val;
-                if (is_long) {
-                    val = va_arg(args, uint64_t);
-                } else if (is_size) {
-                    val = (uint64_t)va_arg(args, size_t);
+                bool is_signed = *p == 'd' || *p == 'i';
+                bool is_neg = false;
+                uint64_t val = 0;
+                if (is_signed) {
+                    int64_t signed_val;
+                    if (length_modifier == 2) signed_val = va_arg(args, long long);
+                    else if (length_modifier == 1) signed_val = va_arg(args, long);
+                    else if (length_modifier == 3) signed_val = va_arg(args, ptrdiff_t);
+                    else signed_val = va_arg(args, int);
+                    is_neg = signed_val < 0;
+                    val = is_neg ? (uint64_t)(-(signed_val + 1)) + 1 : (uint64_t)signed_val;
                 } else {
-                    if (*p == 'd' || *p == 'i') val = (uint64_t)va_arg(args, int);
-                    else           val = (uint64_t)va_arg(args, unsigned int);
+                    if (length_modifier == 2) val = va_arg(args, unsigned long long);
+                    else if (length_modifier == 1) val = va_arg(args, unsigned long);
+                    else if (length_modifier == 3) val = va_arg(args, size_t);
+                    else val = va_arg(args, unsigned int);
                 }
-                bool is_neg = (*p == 'd' || *p == 'D' || *p == 'i') && (int64_t)val < 0;
-                if (is_neg) val = -(int64_t)val;
-                int base = (*p=='x'||*p=='X') ? 16 : (*p=='o'||*p=='O') ? 8 : (*p=='b') ? 2 : 10;
+                int base = (*p == 'x' || *p == 'X') ? 16 : *p == 'o' ? 8 : 10;
                 char buf[64];
                 int_to_str(val, buf, 64, base, (*p == 'X'));
                 int len = 0;
                 while (buf[len]) len++;
                 if (is_neg) len++; // account for '-'
-                if (!left_align)
-                    while (width > len) { PUTC(pad_char); width--; }
+                if (!left_align && pad_char == '0' && is_neg) { PUTC('-'); is_neg = false; }
+                if (!left_align) while (width > len) { PUTC(pad_char); width--; }
                 if (is_neg) PUTC('-');
                 char *ptr = buf;
                 while (*ptr) PUTC(*ptr++);
-                if (left_align)
-                    while (width > len) { PUTC(' '); width--; }
+                if (left_align) while (width > len) { PUTC(' '); width--; }
                 break;
             }
             case 'p': {
-                uint64_t x = va_arg(args, uint64_t);
+                uint64_t x = (uint64_t)(uintptr_t)va_arg(args, void *);
                 char buf[64];
                 int_to_str(x, buf, 64, 16, false);
                 PUTC('0'); PUTC('x');
@@ -1645,4 +1612,35 @@ int printf(const char *fmt, ...) {
     int ret = vprintf(fmt, args);
     va_end(args);
     return ret;
+}
+
+void init_terminal_backbuffer(void) {
+    if (hhdm_offset == 0) return;
+    if (!fb_req.response || fb_req.response->framebuffer_count < 1) return;
+    struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
+
+    back_buffer_width = fb->width;
+    back_buffer_height = fb->height;
+    back_buffer_pitch = fb->width * sizeof(uint32_t);
+
+    uint64_t required_size = back_buffer_pitch * fb->height;
+
+    uint32_t *bb = (uint32_t *)malloc(required_size);
+    uint32_t *abb = (uint32_t *)malloc(required_size);
+
+    if (bb && abb) {
+        back_buffer = bb;
+        alt_back_buffer = abb;
+        back_buffer_initialized = true;
+        back_buffer_available = true;
+        backbuffer_reload_from_fb(fb); // seed from current VRAM contents
+    } else {
+        free(bb);
+        free(abb);
+        back_buffer = NULL;
+        alt_back_buffer = NULL;
+        back_buffer_initialized = true;
+        back_buffer_available = false;
+    }
+    log("terminal: initialized terminal backbuffer\n");
 }

@@ -1,9 +1,10 @@
 #include <stdint.h>
+#include <stdbool.h>
+#include <main/log.h>
 #include <io/ps2_keyboard.h>
 #include <io/keyboard.h>
 #include <io/io.h>
 #include <io/ttys.h>
-#include <io/terminal.h>
 static uint8_t ps2_repeat_key = 0;
 static int ps2_repeat_timer = 0;
 static bool ps2_key_held[128] = { false };
@@ -88,11 +89,11 @@ void flush_ps2_keyboard_controller(void) {
     uint8_t status = inb(0x64);
     if (status == 0xFF) {
         ps2_controller_present = false;
-        printf("ps2 keyboard: no controller found\n");
+        log("ps2 keyboard: no controller found\n");
         return;
     }
 
     for (int i = 0; i < 256 && (inb(0x64) & 1); i++) inb(0x60);
     set_ps2_keyboard_leds(get_keyboard_led_state());
-    printf("ps2 keyboard: flushed ps2 keyboard controller\n");
+    log("ps2 keyboard: flushed ps2 keyboard controller\n");
 }

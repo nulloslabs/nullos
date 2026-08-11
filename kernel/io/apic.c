@@ -1,3 +1,5 @@
+#include <stdbool.h>
+#include <main/log.h>
 #include <main/string.h>
 #include <main/machine_info.h>
 #include <main/madt.h>
@@ -6,7 +8,6 @@
 #include <io/pic.h>
 #include <io/io.h>
 #include <io/ioapic.h>
-#include <io/terminal.h>
 #include <mm/vmm.h>
 enum apic_mode current_apic_mode = APIC_NONE;
 volatile uint8_t *lapic_base = NULL;
@@ -184,11 +185,11 @@ void init_apic_for_cpu(void) {
 void init_apic(void) {
     init_apic_for_cpu();
     if (current_apic_mode == APIC_X2APIC) {
-        printf("apic: initialized x2apic\n");
+        log("apic: initialized x2apic\n");
     } else if (current_apic_mode == APIC_XAPIC) {
-        printf("apic: initialized xapic\n");
+        log("apic: initialized xapic\n");
     } else {
-        printf("apic: no apic found, falling back to pic\n");
+        log("apic: no apic found, falling back to pic\n");
         return;
     }
 

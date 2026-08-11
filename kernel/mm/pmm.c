@@ -1,8 +1,9 @@
+#include <main/log.h>
+#include <main/panic.h>
 #include <main/string.h>
 #include <main/limine_req.h>
 #include <main/spinlocks.h>
 #include <main/sched.h>
-#include <io/terminal.h>
 #include <mm/pmm.h>
 #include <mm/oom.h>
 static uint8_t* bitmap = NULL;
@@ -32,6 +33,7 @@ void* pmalloc(void) {
         }
     }
     spin_unlock_irqrestore(&pmm_lock, flags);
+    if (!is_sched_ready()) panic("out of memory");
     // sched_lock is held by syscall_entry across the whole syscall;
     // kill_oom() needs to acquire it internally, so release it first.
     spin_unlock(&sched_lock);
@@ -89,6 +91,7 @@ void* prealloc(uint64_t count) {
         }
     }
     spin_unlock_irqrestore(&pmm_lock, flags);
+    if (!is_sched_ready()) panic("out of memory");
     spin_unlock(&sched_lock);
     kill_oom();
     spin_lock(&sched_lock);
@@ -181,32 +184,41 @@ void init_pmm(void) {
     free_pages = 0;
     uint64_t bitmap_size = (max_pages + 7) / 8;
     uint64_t refcount_size = max_pages;
+    uint64_t metadata_size = bitmap_size + refcount_size;
+    uint64_t metadata_length = (metadata_size + PAGE_SIZE - 1) & ~((uint64_t)PAGE_SIZE - 1);
 
     // find usable hole for bitmap
     for (size_t i = 0; i < memmap->entry_count; i++) {
         struct limine_memmap_entry* entry = memmap->entries[i];
-        if (entry->type == LIMINE_MEMMAP_USABLE && entry->length >= bitmap_size + refcount_size) {
+        uint64_t usable_start = (entry->base + PAGE_SIZE - 1) & ~((uint64_t)PAGE_SIZE - 1);
+        uint64_t usable_end = (entry->base + entry->length) & ~((uint64_t)PAGE_SIZE - 1);
+        if (entry->type == LIMINE_MEMMAP_USABLE && usable_end >= usable_start && usable_end - usable_start >= metadata_length) {
             // Place bitmap in virtual address space via HHDM
-            bitmap = (uint8_t*)(entry->base + hhdm_offset);
-            ref_counts = (uint8_t*)(entry->base + hhdm_offset + bitmap_size);
+            bitmap = (uint8_t*)(usable_start + hhdm_offset);
+            ref_counts = bitmap + bitmap_size;
             
             // initially mark everything reserved
             memset(bitmap, 0xFF, bitmap_size);
             memset(ref_counts, 1, refcount_size);
             
-            // shrink entry to protect bitmap memory
-            entry->base += bitmap_size + refcount_size;
-            entry->length -= bitmap_size + refcount_size;
+            // Reserve every page touched by the allocator metadata.
+            entry->base = usable_start + metadata_length;
+            entry->length = usable_end - entry->base;
             break;
         }
     }
+
+    if (!bitmap) panic("unable to reserve physical memory metadata");
 
     // mark usable regions as free
     for (size_t i = 0; i < memmap->entry_count; i++) {
         struct limine_memmap_entry* entry = memmap->entries[i];
         if (entry->type == LIMINE_MEMMAP_USABLE) {
-            for (uint64_t j = 0; j < entry->length; j += PAGE_SIZE) {
-                uint64_t page_idx = (entry->base + j) / PAGE_SIZE;
+            uint64_t usable_start = (entry->base + PAGE_SIZE - 1) & ~((uint64_t)PAGE_SIZE - 1);
+            uint64_t usable_end = (entry->base + entry->length) & ~((uint64_t)PAGE_SIZE - 1);
+            for (uint64_t address = usable_start; address < usable_end; address += PAGE_SIZE) {
+                uint64_t page_idx = address / PAGE_SIZE;
+                if (page_idx == 0) continue;
                 if (page_idx < max_pages && (bitmap[page_idx / 8] & (1 << (page_idx % 8)))) {
                     bitmap[page_idx / 8] &= ~(1 << (page_idx % 8));
                     ref_counts[page_idx] = 0;
@@ -216,5 +228,5 @@ void init_pmm(void) {
             }
         }
     }
-    printf("pmm: initialized pmm\n");
+    log("pmm: initialized pmm\n");
 }

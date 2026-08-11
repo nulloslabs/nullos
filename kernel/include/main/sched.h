@@ -2,6 +2,7 @@
 
 #ifndef __ASSEMBLY__
 #include <stdint.h>
+#include <stdbool.h>
 #include <signal.h>
 #include <ucontext.h>
 #include <linux/rseq.h>
@@ -13,10 +14,16 @@
 #include <syscalls/syscalls.h>
 #endif
 
-#define MAX_TASKS 64
+#define MAX_TASKS 1024
+#define PID_MAX 32768
 #define USER_STACK_SIZE (1 * 1024 * 1024)
 #define KERNEL_STACK_SIZE 32768
 #define TASK_STDIN_BUF_SIZE 256
+#define LOAD_FIXED_1 2048UL
+#define LOAD_EXP_1 1884UL
+#define LOAD_EXP_5 2014UL
+#define LOAD_EXP_15 2037UL
+#define LOAD_UPDATE_US 5000000ULL
 
 #define TASK_DEAD 0
 #define TASK_READY 1
@@ -42,8 +49,10 @@ typedef struct {
     uint64_t brk;
     uid_t uid;
     uid_t euid;
+    uid_t fsuid;
     gid_t gid;
     gid_t egid;
+    gid_t fsgid;
     fd_table_t fd_table;
     pid_t waiting_for;
     char cwd[256];
@@ -82,18 +91,31 @@ typedef struct {
     int stopped_by_signal;
 } task_t;
 
-extern task_t tasks[MAX_TASKS];
+extern task_t *tasks[MAX_TASKS];
 extern int current_task;
 extern task_t* current_task_ptr;
 extern spinlock_t sched_lock;
 
+bool is_sched_ready(void);
 pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_t initial_rsp);
 pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx);
 pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *child_ctx, uint64_t clone_flags, uint64_t new_stack, int *parent_tidptr, int *child_tidptr, uint64_t new_tls);
 void schedule(void);
 void exit_task(int status);
 const vma_table_t *task_vma_table(int pid_idx);
+task_t *task_by_pid(pid_t pid);
+int task_index_by_pid(pid_t pid);
+void release_task_slot(int task_idx);
 bool signal_pending(void);
 void update_interval_timers(void);
+uint64_t get_idle_time_us(void);
+uint64_t get_context_switch_count(void);
+uint64_t get_processes_created(void);
+uint64_t get_timer_interrupt_count(void);
+uint32_t get_runnable_task_count(void);
+pid_t get_last_created_pid(void);
+void record_timer_interrupt(void);
+uint16_t get_process_count(void);
+void get_load_averages(unsigned long loads[3]);
 void init_sched(void);
 #endif

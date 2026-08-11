@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include <cpuid.h>
 #include <dirent.h>
 #include <main/string.h>
@@ -6,8 +7,11 @@
 #include <main/fd.h>
 #include <main/mp.h>
 #include <main/machine_info.h>
+#include <main/timekeeping.h>
 #include <io/devtmpfs.h>
+#include <io/hpet.h>
 #include <io/procfs.h>
+#include <mm/pmm.h>
 #include <mm/vma.h>
 #include <syscalls/syscall_impls.h>
 
@@ -16,11 +20,19 @@ const proc_static_node_t proc_nodes[] = {
     { "/self",         PROC_NODE_SYMLINK, PROC_LINK_SELF        },
     { "/mounts",       PROC_NODE_SYMLINK, PROC_LINK_ROOT_MOUNTS },
     { "/cpuinfo",      PROC_NODE_FILE,    PROC_FILE_CPUINFO     },
+    { "/meminfo",      PROC_NODE_FILE,    PROC_FILE_MEMINFO     },
+    { "/uptime",       PROC_NODE_FILE,    PROC_FILE_UPTIME      },
+    { "/stat",         PROC_NODE_FILE,    PROC_FILE_ROOT_STAT   },
+    { "/loadavg",      PROC_NODE_FILE,    PROC_FILE_LOADAVG     },
     { "/<pid>",        PROC_NODE_DIR,     PROC_DIR_PID          },
     { "/<pid>/fd",     PROC_NODE_DIR,     PROC_DIR_FD           },
     { "/<pid>/maps",   PROC_NODE_FILE,    PROC_FILE_MAPS        },
     { "/<pid>/mounts", PROC_NODE_FILE,    PROC_FILE_MOUNTS      },
     { "/<pid>/auxv",   PROC_NODE_FILE,    PROC_FILE_AUXV        },
+    { "/<pid>/stat",   PROC_NODE_FILE,    PROC_FILE_STAT        },
+    { "/<pid>/status", PROC_NODE_FILE,    PROC_FILE_STATUS      },
+    { "/<pid>/cmdline",PROC_NODE_FILE,    PROC_FILE_CMDLINE     },
+    { "/<pid>/comm",   PROC_NODE_FILE,    PROC_FILE_COMM        },
     { "/<pid>/exe",    PROC_NODE_SYMLINK, PROC_LINK_EXE         },
     { "/<pid>/cwd",    PROC_NODE_SYMLINK, PROC_LINK_CWD         },
     { "/<pid>/fd/<n>", PROC_NODE_SYMLINK, PROC_LINK_FD          },
@@ -30,6 +42,10 @@ const dirent_static_t root_children[] = {
     { "self",    DT_LNK },
     { "mounts",  DT_LNK },
     { "cpuinfo", DT_REG },
+    { "meminfo", DT_REG },
+    { "uptime",  DT_REG },
+    { "stat",    DT_REG },
+    { "loadavg", DT_REG },
 };
 
 const dirent_static_t pid_children[] = {
@@ -37,6 +53,10 @@ const dirent_static_t pid_children[] = {
     { "maps",   DT_REG },
     { "mounts", DT_REG },
     { "auxv",   DT_REG },
+    { "stat",   DT_REG },
+    { "status", DT_REG },
+    { "cmdline",DT_REG },
+    { "comm",   DT_REG },
     { "exe",    DT_LNK },
     { "cwd",    DT_LNK },
 };
@@ -66,11 +86,9 @@ static const char *parse_num(const char *p, int *out) {
     return p;
 }
 
-static int task_index_by_pid(pid_t pid) {
+static int proc_task_index_by_pid(pid_t pid) {
     for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].state != TASK_DEAD && tasks[i].state != TASK_ZOMBIE &&
-            tasks[i].pid == pid)
-            return i;
+        if (tasks[i]->state != TASK_DEAD && tasks[i]->state != TASK_ZOMBIE && tasks[i]->pid == pid) return i;
     }
     return -1;
 }
@@ -78,7 +96,7 @@ static int task_index_by_pid(pid_t pid) {
 static int nth_open_fd(int pid_idx, int n) {
     int count = 0;
     for (int fd = 0; fd < FD_MAX; fd++) {
-        if (tasks[pid_idx].fd_table.entries[fd].open) {
+        if (tasks[pid_idx]->fd_table.entries[fd].open) {
             if (count == n) return fd;
             count++;
         }
@@ -98,7 +116,7 @@ static bool match_pattern(const char *pattern, const char *path, int self, int *
                 *pid_idx = self;
                 s += 4;
             } else if (after) {
-                *pid_idx = task_index_by_pid(raw_pid);
+                *pid_idx = proc_task_index_by_pid(raw_pid);
                 if (*pid_idx < 0) return false;
                 s = after;
             } else {
@@ -141,11 +159,11 @@ static void buf_append_hex(char *buf, size_t *pos, size_t cap, uint64_t v) {
 }
 
 static size_t build_auxv(int pid_idx, char *out) {
-    int words = tasks[pid_idx].auxv_blob_words;
+    int words = tasks[pid_idx]->auxv_blob_words;
     if (words <= 0) return 0;
     size_t size = (size_t)words * sizeof(uint64_t);
     if (size > PROCFS_MAX_CONTENT) size = PROCFS_MAX_CONTENT;
-    memcpy(out, tasks[pid_idx].auxv_blob, size);
+    memcpy(out, tasks[pid_idx]->auxv_blob, size);
     return size;
 }
 
@@ -193,6 +211,204 @@ static void buf_append_uint(char *buf, size_t *pos, size_t cap, uint32_t v) {
     for (int k = 0; k < n; k++) fwd[k] = tmp[n - 1 - k];
     fwd[n] = '\0';
     buf_append(buf, pos, cap, fwd);
+}
+
+static void buf_append_u64(char *buf, size_t *pos, size_t cap, uint64_t v) {
+    char tmp[32]; int n = 0;
+    if (v == 0) tmp[n++] = '0';
+    while (v > 0) { tmp[n++] = '0' + (v % 10); v /= 10; }
+    char fwd[32];
+    for (int k = 0; k < n; k++) fwd[k] = tmp[n - 1 - k];
+    fwd[n] = '\0';
+    buf_append(buf, pos, cap, fwd);
+}
+
+static void append_meminfo_kb(char *out, size_t *pos, const char *name, uint64_t bytes) {
+    buf_append(out, pos, PROCFS_MAX_CONTENT, name);
+    buf_append(out, pos, PROCFS_MAX_CONTENT, ": ");
+    buf_append_u64(out, pos, PROCFS_MAX_CONTENT, bytes / 1024ULL);
+    buf_append(out, pos, PROCFS_MAX_CONTENT, " kB\n");
+}
+
+static size_t build_meminfo(char *out) {
+    size_t pos = 0;
+    uint64_t total = get_total_pmm_memory();
+    uint64_t free = get_free_pmm_memory();
+    out[0] = '\0';
+    append_meminfo_kb(out, &pos, "MemTotal", total);
+    append_meminfo_kb(out, &pos, "MemFree", free);
+    append_meminfo_kb(out, &pos, "MemAvailable", free);
+    append_meminfo_kb(out, &pos, "Buffers", 0);
+    append_meminfo_kb(out, &pos, "Cached", 0);
+    append_meminfo_kb(out, &pos, "SwapTotal", 0);
+    append_meminfo_kb(out, &pos, "SwapFree", 0);
+    return pos;
+}
+
+static size_t build_uptime(char *out) {
+    uint64_t uptime = hpet_elapsed_us();
+    uint64_t idle = get_idle_time_us();
+    size_t pos = 0;
+    out[0] = '\0';
+    buf_append_u64(out, &pos, PROCFS_MAX_CONTENT, uptime / 1000000ULL);
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, ".");
+    uint64_t uptime_hundredths = (uptime / 10000ULL) % 100ULL;
+    if (uptime_hundredths < 10) buf_append(out, &pos, PROCFS_MAX_CONTENT, "0");
+    buf_append_u64(out, &pos, PROCFS_MAX_CONTENT, uptime_hundredths);
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, " ");
+    buf_append_u64(out, &pos, PROCFS_MAX_CONTENT, idle / 1000000ULL);
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, ".");
+    uint64_t idle_hundredths = (idle / 10000ULL) % 100ULL;
+    if (idle_hundredths < 10) buf_append(out, &pos, PROCFS_MAX_CONTENT, "0");
+    buf_append_u64(out, &pos, PROCFS_MAX_CONTENT, idle_hundredths);
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, "\n");
+    return pos;
+}
+
+static void append_cpu_stat(char *out, size_t *pos, const char *name, uint64_t user, uint64_t system, uint64_t idle) {
+    buf_append(out, pos, PROCFS_MAX_CONTENT, name);
+    buf_append(out, pos, PROCFS_MAX_CONTENT, "  ");
+    buf_append_u64(out, pos, PROCFS_MAX_CONTENT, user);
+    buf_append(out, pos, PROCFS_MAX_CONTENT, " 0 ");
+    buf_append_u64(out, pos, PROCFS_MAX_CONTENT, system);
+    buf_append(out, pos, PROCFS_MAX_CONTENT, " ");
+    buf_append_u64(out, pos, PROCFS_MAX_CONTENT, idle);
+    buf_append(out, pos, PROCFS_MAX_CONTENT, " 0 0 0 0 0 0\n");
+}
+
+static size_t build_root_stat(char *out) {
+    uint64_t uptime_us = hpet_elapsed_us();
+    uint64_t bsp_idle_us = get_idle_time_us();
+    if (bsp_idle_us > uptime_us) bsp_idle_us = uptime_us;
+    uint64_t bsp_user = (uptime_us - bsp_idle_us) / 10000ULL;
+    uint64_t bsp_idle = bsp_idle_us / 10000ULL;
+    uint64_t other_idle = cpu_count > 1 ? (uint64_t)(cpu_count - 1) * (uptime_us / 10000ULL) : 0;
+    uint64_t timer_interrupts = get_timer_interrupt_count();
+    uint64_t realtime = time_get_realtime_us();
+    uint64_t boot_time = realtime > uptime_us ? (realtime - uptime_us) / 1000000ULL : 0;
+    size_t pos = 0;
+    out[0] = '\0';
+
+    append_cpu_stat(out, &pos, "cpu", bsp_user, 0, bsp_idle + other_idle);
+    append_cpu_stat(out, &pos, "cpu0", bsp_user, 0, bsp_idle);
+    for (int i = 1; i < cpu_count; i++) {
+        char name[16] = "cpu";
+        fmt_int(i, name + 3, sizeof(name) - 3);
+        append_cpu_stat(out, &pos, name, 0, 0, uptime_us / 10000ULL);
+    }
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, "intr ");
+    buf_append_u64(out, &pos, PROCFS_MAX_CONTENT, timer_interrupts);
+    for (int i = 0; i < 32; i++) buf_append(out, &pos, PROCFS_MAX_CONTENT, " 0");
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, " ");
+    buf_append_u64(out, &pos, PROCFS_MAX_CONTENT, timer_interrupts);
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, "\nctxt ");
+    buf_append_u64(out, &pos, PROCFS_MAX_CONTENT, get_context_switch_count());
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, "\nbtime ");
+    buf_append_u64(out, &pos, PROCFS_MAX_CONTENT, boot_time);
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, "\nprocesses ");
+    buf_append_u64(out, &pos, PROCFS_MAX_CONTENT, get_processes_created());
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, "\nprocs_running ");
+    buf_append_u64(out, &pos, PROCFS_MAX_CONTENT, get_runnable_task_count());
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, "\nprocs_blocked 0\nsoftirq 0\n");
+    return pos;
+}
+
+static void append_loadavg(char *out, size_t *pos, unsigned long load) {
+    uint64_t hundredths = ((uint64_t)load * 100ULL + 32768ULL) / 65536ULL;
+    buf_append_u64(out, pos, PROCFS_MAX_CONTENT, hundredths / 100ULL);
+    buf_append(out, pos, PROCFS_MAX_CONTENT, ".");
+    if (hundredths % 100ULL < 10) buf_append(out, pos, PROCFS_MAX_CONTENT, "0");
+    buf_append_u64(out, pos, PROCFS_MAX_CONTENT, hundredths % 100ULL);
+}
+
+static size_t build_loadavg(char *out) {
+    unsigned long loads[3];
+    get_load_averages(loads);
+    uint64_t total = get_process_count();
+    if (total) total--;
+    size_t pos = 0;
+    out[0] = '\0';
+    append_loadavg(out, &pos, loads[0]);
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, " ");
+    append_loadavg(out, &pos, loads[1]);
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, " ");
+    append_loadavg(out, &pos, loads[2]);
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, " ");
+    buf_append_u64(out, &pos, PROCFS_MAX_CONTENT, get_runnable_task_count());
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, "/");
+    buf_append_u64(out, &pos, PROCFS_MAX_CONTENT, total);
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, " ");
+    buf_append_u64(out, &pos, PROCFS_MAX_CONTENT, get_last_created_pid());
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, "\n");
+    return pos;
+}
+
+static char get_task_state(const task_t *task) {
+    if (task->state == TASK_ZOMBIE) return 'Z';
+    if (task->state == TASK_STOPPED) return task->stopped_by_signal ? 'T' : 'S';
+    return 'R';
+}
+
+static int count_task_threads(int pid_idx) {
+    int count = 0;
+    for (int i = 0; i < MAX_TASKS; i++) if (tasks[i]->state != TASK_DEAD && tasks[i]->state != TASK_ZOMBIE && tasks[i]->ctx == tasks[pid_idx]->ctx) count++;
+    return count ? count : 1;
+}
+
+static void append_stat_value(char *out, size_t *pos, uint64_t value) {
+    buf_append(out, pos, PROCFS_MAX_CONTENT, " ");
+    buf_append_u64(out, pos, PROCFS_MAX_CONTENT, value);
+}
+
+static size_t build_stat(int pid_idx, char *out) {
+    const task_t *task = tasks[pid_idx];
+    size_t pos = 0; out[0] = '\0';
+    buf_append_uint(out, &pos, PROCFS_MAX_CONTENT, task->pid);
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, " (");
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, task->name[0] ? task->name : task->exe);
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, ") ");
+    char state[2] = { get_task_state(task), '\0' };
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, state);
+    append_stat_value(out, &pos, task->ppid);
+    append_stat_value(out, &pos, task->pgid);
+    append_stat_value(out, &pos, task->sid);
+    append_stat_value(out, &pos, 0);
+    append_stat_value(out, &pos, task->pgid);
+    for (int field = 9; field <= 17; field++) append_stat_value(out, &pos, 0);
+    append_stat_value(out, &pos, task->priority);
+    append_stat_value(out, &pos, 0);
+    append_stat_value(out, &pos, count_task_threads(pid_idx));
+    for (int field = 21; field <= 52; field++) append_stat_value(out, &pos, field == 47 ? task->brk_start : 0);
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, "\n");
+    return pos;
+}
+
+static size_t build_status(int pid_idx, char *out) {
+    const task_t *task = tasks[pid_idx];
+    size_t pos = 0; out[0] = '\0';
+    char state[2] = { get_task_state(task), '\0' };
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, "Name:\t"); buf_append(out, &pos, PROCFS_MAX_CONTENT, task->name[0] ? task->name : task->exe); buf_append(out, &pos, PROCFS_MAX_CONTENT, "\nState:\t"); buf_append(out, &pos, PROCFS_MAX_CONTENT, state); buf_append(out, &pos, PROCFS_MAX_CONTENT, "\nTgid:\t"); buf_append_uint(out, &pos, PROCFS_MAX_CONTENT, task->pid);
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, "\nPid:\t"); buf_append_uint(out, &pos, PROCFS_MAX_CONTENT, task->pid); buf_append(out, &pos, PROCFS_MAX_CONTENT, "\nPPid:\t"); buf_append_uint(out, &pos, PROCFS_MAX_CONTENT, task->ppid);
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, "\nUid:\t"); buf_append_uint(out, &pos, PROCFS_MAX_CONTENT, task->uid); buf_append(out, &pos, PROCFS_MAX_CONTENT, "\t"); buf_append_uint(out, &pos, PROCFS_MAX_CONTENT, task->euid); buf_append(out, &pos, PROCFS_MAX_CONTENT, "\t"); buf_append_uint(out, &pos, PROCFS_MAX_CONTENT, task->euid); buf_append(out, &pos, PROCFS_MAX_CONTENT, "\t"); buf_append_uint(out, &pos, PROCFS_MAX_CONTENT, task->fsuid);
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, "\nGid:\t"); buf_append_uint(out, &pos, PROCFS_MAX_CONTENT, task->gid); buf_append(out, &pos, PROCFS_MAX_CONTENT, "\t"); buf_append_uint(out, &pos, PROCFS_MAX_CONTENT, task->egid); buf_append(out, &pos, PROCFS_MAX_CONTENT, "\t"); buf_append_uint(out, &pos, PROCFS_MAX_CONTENT, task->egid); buf_append(out, &pos, PROCFS_MAX_CONTENT, "\t"); buf_append_uint(out, &pos, PROCFS_MAX_CONTENT, task->fsgid);
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, "\nThreads:\t"); buf_append_uint(out, &pos, PROCFS_MAX_CONTENT, count_task_threads(pid_idx)); buf_append(out, &pos, PROCFS_MAX_CONTENT, "\nVmSize:\t0 kB\nVmRSS:\t0 kB\n");
+    return pos;
+}
+
+static size_t build_cmdline(int pid_idx, char *out) {
+    const char *cmdline = tasks[pid_idx]->exe[0] ? tasks[pid_idx]->exe : tasks[pid_idx]->name;
+    size_t length = strlen(cmdline);
+    if (length >= PROCFS_MAX_CONTENT) length = PROCFS_MAX_CONTENT - 1;
+    memcpy(out, cmdline, length);
+    out[length] = '\0';
+    return length + 1;
+}
+
+static size_t build_comm(int pid_idx, char *out) {
+    size_t pos = 0; out[0] = '\0';
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, tasks[pid_idx]->name[0] ? tasks[pid_idx]->name : tasks[pid_idx]->exe);
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, "\n");
+    return pos;
 }
 
 static size_t build_cpuinfo(char *out) {
@@ -326,6 +542,14 @@ size_t get_procfs_content(const proc_node_t *node, char *out) {
         case PROC_FILE_MOUNTS:  return build_mounts(out);
         case PROC_FILE_AUXV:    return build_auxv(node->pid, out);
         case PROC_FILE_CPUINFO: return build_cpuinfo(out);
+        case PROC_FILE_MEMINFO: return build_meminfo(out);
+        case PROC_FILE_UPTIME:  return build_uptime(out);
+        case PROC_FILE_ROOT_STAT: return build_root_stat(out);
+        case PROC_FILE_LOADAVG: return build_loadavg(out);
+        case PROC_FILE_STAT:    return build_stat(node->pid, out);
+        case PROC_FILE_STATUS:  return build_status(node->pid, out);
+        case PROC_FILE_CMDLINE: return build_cmdline(node->pid, out);
+        case PROC_FILE_COMM:    return build_comm(node->pid, out);
         default:                return 0;
     }
 }
@@ -374,7 +598,7 @@ static bool procfs_resolve_impl(const char *abs_path, const char *orig_path, int
     if (starts_with(orig_rel, "/self/") || starts_with(rel, "/self/") ||
         (follow_self && strcmp(rel, "/self") == 0)) {
         char pidbuf[16];
-        fmt_int(tasks[self].pid, pidbuf, sizeof(pidbuf));
+        fmt_int(tasks[self]->pid, pidbuf, sizeof(pidbuf));
         const char *rest = rel + 5;  // skip "/self"
         size_t pos = 0;
         resolved[pos++] = '/';
@@ -392,16 +616,15 @@ static bool procfs_resolve_impl(const char *abs_path, const char *orig_path, int
         // Validate pid if one was parsed.
         if (pid_idx >= 0) {
             if (pid_idx >= MAX_TASKS) return false;
-            if (tasks[pid_idx].state == TASK_DEAD ||
-                tasks[pid_idx].state == TASK_ZOMBIE) return false;
+            if (tasks[pid_idx]->state == TASK_DEAD || tasks[pid_idx]->state == TASK_ZOMBIE) return false;
             if (!current_task_ptr) return false;
-            if (current_task_ptr->euid != 0 && current_task_ptr->euid != tasks[pid_idx].euid) return false;
+            if (current_task_ptr->euid != 0 && current_task_ptr->euid != tasks[pid_idx]->euid) return false;
         }
 
         // Validate fd if one was parsed.
         if (fd_num >= 0) {
             if (fd_num >= FD_MAX) return false;
-            if (!tasks[pid_idx].fd_table.entries[fd_num].open) return false;
+            if (!tasks[pid_idx]->fd_table.entries[fd_num].open) return false;
         }
 
         out->type   = proc_nodes[i].type;
@@ -432,15 +655,15 @@ bool is_procfs_dir(const proc_node_t *node) {
 int read_procfs_link(const proc_node_t *node, int self, char *out, size_t out_size) {
     switch (node->entry) {
     case PROC_LINK_SELF:
-        return fmt_int(tasks[self].pid, out, out_size);
+        return fmt_int(tasks[self]->pid, out, out_size);
     case PROC_LINK_ROOT_MOUNTS:
         return copy_str("self/mounts", out, out_size);
     case PROC_LINK_EXE:
-        return copy_str(tasks[node->pid].exe, out, out_size);
+        return copy_str(tasks[node->pid]->exe, out, out_size);
     case PROC_LINK_CWD:
-        return copy_str(tasks[node->pid].cwd, out, out_size);
+        return copy_str(tasks[node->pid]->cwd, out, out_size);
     case PROC_LINK_FD: {
-        fd_entry_t *e = &tasks[node->pid].fd_table.entries[node->fd_num];
+        fd_entry_t *e = &tasks[node->pid]->fd_table.entries[node->fd_num];
         if (!e->open) return -1;
         return copy_str(e->path, out, out_size);
     }
@@ -464,10 +687,10 @@ bool get_procfs_dirent(const proc_node_t *dir, int self, int index, char *name, 
         }
         int target = index - n_static, count = 0;
         for (int i = 0; i < MAX_TASKS; i++) {
-            if (tasks[i].state == TASK_DEAD || tasks[i].state == TASK_ZOMBIE) continue;
-            if (tasks[i].pid == 0) continue;
+            if (tasks[i]->state == TASK_DEAD || tasks[i]->state == TASK_ZOMBIE) continue;
+            if (tasks[i]->pid == 0) continue;
             if (count++ == target) {
-                fmt_int(tasks[i].pid, name, name_size);
+                fmt_int(tasks[i]->pid, name, name_size);
                 *type_out = DT_DIR;
                 return true;
             }

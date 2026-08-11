@@ -15,6 +15,8 @@ syscall_entry:
     add rsp, KERNEL_STACK_SIZE
 
     // build syscall_frame_t
+    push r11                       // user RFLAGS
+    push rcx                       // user RIP
     push r15
     push r14
     push r13
@@ -53,38 +55,50 @@ syscall_entry:
     cli
     mov byte ptr [rip + sched_lock], 0
     
-    // restore registers
-    pop rax
-    pop rbx
-    pop rcx
-    movabs rdx, 0x0000800000000000
-    cmp rcx, rdx
-    jb .Lrcx_ok
-    xor rcx, rcx           // Force non-canonical/kernel addresses to 0 to safely fault in ring 3
-.Lrcx_ok:
-    pop rdx
-    pop rsi
-    pop rdi
-    add rsp, 8            // skip user RSP
-    pop rbp
-    pop r8
-    pop r9
-    pop r10
-    pop r11
-    push rdx
-    movabs rdx, 0xfffffffffffc8fff
-    and r11, rdx
-    or r11, 2
-    pop rdx
-    pop r12
-    pop r13
-    pop r14
-    pop r15
+    // Validate the user return address and sanitize user RFLAGS.
+    mov rdx, [rsp + 128]
+    movabs rax, 0x0000800000000000
+    cmp rdx, rax
+    jb .Lrip_ok
+    xor edx, edx
+.Lrip_ok:
+    mov [rsp + 128], rdx
+    mov rdx, [rsp + 136]
+    movabs rax, 0xfffffffffffc8fff
+    and rdx, rax
+    or rdx, 2
+    mov [rsp + 136], rdx
 
-    sub rsp, 80           // go back to user RSP location
-    mov rsp, [rsp]        // restore user RSP from syscall_frame_t.rsp
-    swapgs                // Switch kernel GS back to user GS
-    sysretq
+    // iretq lets rt_sigreturn restore RCX and R11.
+    sub rsp, 40
+    mov qword ptr [rsp + 32], 0x1b
+    mov rax, [rsp + 88]            // saved user RSP (40 + offsetof(rsp))
+    mov [rsp + 24], rax
+    mov rax, [rsp + 176]           // saved RFLAGS (40 + offsetof(rflags))
+    mov [rsp + 16], rax
+    mov qword ptr [rsp + 8], 0x23
+    mov rax, [rsp + 168]           // saved RIP (40 + offsetof(rip))
+    mov [rsp], rax
+
+    // Restore registers.
+    mov r15, [rsp + 160]
+    mov r14, [rsp + 152]
+    mov r13, [rsp + 144]
+    mov r12, [rsp + 136]
+    mov r11, [rsp + 128]
+    mov r10, [rsp + 120]
+    mov r9,  [rsp + 112]
+    mov r8,  [rsp + 104]
+    mov rbp, [rsp + 96]
+    mov rdi, [rsp + 80]
+    mov rsi, [rsp + 72]
+    mov rdx, [rsp + 64]
+    mov rcx, [rsp + 56]
+    mov rbx, [rsp + 48]
+    mov rax, [rsp + 40]
+
+    swapgs
+    iretq
 
 .section .bss
 .align 8

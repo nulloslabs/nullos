@@ -23,7 +23,7 @@ iso: tools kernel initrd
 	    [ Makefile -nt $(OUTFILE) ] || \
 	    [ config.mk -nt $(OUTFILE) ] || \
 	    [ ../initrd/initrd.cpio.gz -nt $(OUTFILE) ] || \
-	    [ ../config/limine.conf -nt $(OUTFILE) ] || \
+	    [ ../limine.conf -nt $(OUTFILE) ] || \
 		[ ../tools/limine-binary/limine -nt $(OUTFILE) ] || \
 	    [ ../tools/limine-binary/limine-bios.sys -nt $(OUTFILE) ] || [ ../tools/limine-binary/limine-bios-cd.bin -nt $(OUTFILE) ] || [ ../tools/limine-binary/limine-uefi-cd.sys -nt $(OUTFILE) ] || \
 		[ ../tools/limine-binary/BOOTX64.EFI -nt $(OUTFILE) ]; then \

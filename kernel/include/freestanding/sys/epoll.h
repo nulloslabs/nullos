@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #define EPOLLIN      0x0001
 #define EPOLLPRI     0x0002
@@ -46,4 +47,5 @@ typedef struct {
 typedef struct {
     epoll_interest_t interests[MAX_EPOLL_INTERESTS];
     int count;
+    int refcount;
 } epoll_instance_t;

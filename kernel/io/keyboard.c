@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <main/halt.h>
 #include <io/keyboard.h>

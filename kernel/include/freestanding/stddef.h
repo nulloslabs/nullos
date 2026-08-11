@@ -1,5 +1,8 @@
 #pragma once
 
+#define NULL ((void *)0)
+#define offsetof(type, member) ((size_t)&(((type *)0)->member))
+
 #if defined(__i386__)
 typedef unsigned int size_t;
 typedef long off_t;
@@ -14,6 +17,3 @@ typedef long ptrdiff_t;
 typedef int pid_t;
 typedef unsigned int wchar_t;
 typedef unsigned int wint_t;
-
-#define NULL ((void*)0)
-#define offsetof(type, member) ((size_t)&(((type *)0)->member))

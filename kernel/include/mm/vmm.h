@@ -1,12 +1,15 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <stddef.h>
 
 #define PAGE_SIZE 4096
 #define KERNEL_HEAP_BASE  0xffffb00000000000ULL
 #define KERNEL_HEAP_LIMIT 0xffffc00000000000ULL
 #define USER_MMAP_BASE  0x0000100000000000ULL
+#define USER_MMAP32_BASE 0x0000000040000000ULL
+#define USER_VIRTUAL_LIMIT 0x0000800000000000ULL
 #define USER_STACK_BASE 0x0000700000000000ULL
 
 // Page Table Entry Flags
@@ -56,6 +59,7 @@ void vunmap_mmio(void* addr, size_t num_pages);
 
 void* vmap_user_at(vmm_context_t* ctx, uint64_t virt, size_t size, uint64_t flags);
 void* vmap_user_range(vmm_context_t* ctx, size_t size, uint64_t flags);
+void* vmap_user_range_32(vmm_context_t* ctx, size_t size, uint64_t flags);
 bool  reserve_vmm(vmm_context_t* ctx, uint64_t virt, uint64_t flags);
 uint64_t get_vmm_pte(vmm_context_t* ctx, uint64_t virt);
 

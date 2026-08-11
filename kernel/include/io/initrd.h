@@ -1,8 +1,10 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <sys/types.h>
+#include <time.h>
 
 #define MAX_MODIFIED_FILES 1024
 
@@ -22,6 +24,10 @@ struct initrd_archive_entry {
     uint32_t devmajor;
     uint32_t devminor;
     uint32_t nlink;
+    struct timespec atime;
+    struct timespec btime;
+    struct timespec mtime;
+    struct timespec ctime;
     char link_target[256];
 };
 
@@ -32,6 +38,10 @@ typedef struct {
     mode_t mode;
     uid_t uid;
     gid_t gid;
+    struct timespec atime;
+    struct timespec btime;
+    struct timespec mtime;
+    struct timespec ctime;
 } initrd_file_t;
 
 typedef struct {
@@ -43,6 +53,10 @@ typedef struct {
     mode_t mode;
     uid_t uid;
     gid_t gid;
+    struct timespec atime;
+    struct timespec btime;
+    struct timespec mtime;
+    struct timespec ctime;
     bool is_active;
     // Tombstone: marks a path as deleted so read/stat don't fall through to
     // the initrd archive. Set when an archive-backed entry is removed (unlink/rmdir);
@@ -68,6 +82,7 @@ int rmdir_initrd(const char *path);
 int symlink_initrd(const char *target, const char *path, uid_t uid, gid_t gid);
 int chmod_initrd(const char *path, mode_t mode);
 int chown_initrd(const char *path, uid_t uid, gid_t gid, bool follow);
+int set_initrd_times(const char *path, struct timespec atime, bool set_atime, struct timespec mtime, bool set_mtime, bool follow);
 int get_initrd_entry(int index, directory_entry_t* entry);
 int next_initrd_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size,
                       uint8_t *child_type, ino_t *child_ino);

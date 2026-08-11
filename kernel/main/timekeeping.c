@@ -23,6 +23,12 @@ uint64_t time_get_realtime_us(void) {
     return (uint64_t)realtime_us;
 }
 
+struct timespec time_get_realtime_ts(void) {
+    uint64_t usec = time_get_realtime_us();
+    struct timespec time = { .tv_sec = (time_t)(usec / 1000000ULL), .tv_nsec = (long)(usec % 1000000ULL) * 1000L };
+    return time;
+}
+
 void time_set_realtime_us(uint64_t usec) {
     uint64_t irq;
     int64_t uptime_us = (int64_t)hpet_elapsed_us();

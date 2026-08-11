@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <sys/types.h>
 #include <main/spinlocks.h>
 #include <termios.h>

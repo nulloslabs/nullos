@@ -1,5 +1,7 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include <stddef.h>
+#include <main/log.h>
 #include <io/pci.h>
 #include <io/io.h>
 #include <io/ac97.h>
@@ -13,7 +15,6 @@
 #include <io/usb.h>
 #include <io/uhci.h>
 #include <io/ohci.h>
-#include <io/terminal.h>
 
 static void (*msi_handlers[256])(void) = { 0 };
 static intx_chain_t intx_chains[16] = { 0 }; // legacy IRQs 0..15
@@ -106,7 +107,7 @@ void set_pci_d0(pci_device_t *dev) {
 
     uint32_t pmcsr = read_pci(dev->bus, dev->dev, dev->func, cap + 4);
     if ((pmcsr & 0x03) != 0) {
-        printf("pci: transitioning %02x:%02x.%x from d%d to d0\n", dev->bus, dev->dev, dev->func, pmcsr & 0x03);
+        log("pci: transitioning %02x:%02x.%x from d%d to d0\n", dev->bus, dev->dev, dev->func, pmcsr & 0x03);
         pmcsr &= ~0x03;
         write_pci(dev->bus, dev->dev, dev->func, cap + 4, pmcsr);
         extern void sleep(uint64_t ms);
@@ -133,7 +134,7 @@ uint8_t pci_enable_msi(pci_device_t *dev) {
     uint8_t cap = pci_find_cap(dev, 0x05);
     if (!cap) return 0;
 
-    if (next_msi_vector >= MSI_VECTOR_END) { printf("pci: out of msi vectors\n"); return 0; }
+    if (next_msi_vector >= MSI_VECTOR_END) { log("pci: out of msi vectors\n"); return 0; }
     uint8_t vector = next_msi_vector++;
 
     // Read Message Control (upper 16 bits of cap dword 0)
@@ -160,7 +161,7 @@ uint8_t pci_enable_msi(pci_device_t *dev) {
     // Mask legacy INTx so it never fires for this device again.
     pci_set_intx_disable(dev, 1);
 
-    printf("pci: %02x:%02x.%x using msi vector %d\n", dev->bus, dev->dev, dev->func, vector);
+    log("pci: %02x:%02x.%x using msi vector %d\n", dev->bus, dev->dev, dev->func, vector);
     return vector;
 }
 
@@ -199,7 +200,7 @@ void init_pci(void) {
             }
         }
     }
-    printf("pci: initialized pci\n");
+    log("pci: initialized pci\n");
 }
 
 void init_pci_drivers(void) {
@@ -248,7 +249,7 @@ void init_pci_drivers(void) {
     for (int i = 0; i < (int)(sizeof(known_pci_drivers) / sizeof(known_pci_drivers[0])); i++) {
         pci_device_t *dev = find_pci(known_pci_drivers[i].vendor, known_pci_drivers[i].device);
         if (dev) {
-            printf("pci: found driver for %s\n", known_pci_drivers[i].name);
+            log("pci: found driver for %s\n", known_pci_drivers[i].name);
             known_pci_drivers[i].init(dev);
         }
     }
@@ -261,11 +262,11 @@ void init_pci_drivers(void) {
             if (dev->subclass != known_storage_controllers[i].subclass) continue;
             if ((dev->progif & known_storage_controllers[i].progif_mask) != known_storage_controllers[i].progif_value) continue;
 
-            printf("pci: found controller for %s\n", known_storage_controllers[i].name);
+            log("pci: found controller for %s\n", known_storage_controllers[i].name);
             if (known_storage_controllers[i].init(dev)) {
                 for (int k = 0; k < (int)(sizeof(known_storage_drivers) / sizeof(known_storage_drivers[0])); k++) {
                     if (!*known_storage_drivers[k].present) continue;
-                    printf("pci: found driver for %s\n", known_storage_drivers[k].name);
+                    log("pci: found driver for %s\n", known_storage_drivers[k].name);
                     known_storage_drivers[k].init();
                 }
             }
@@ -275,7 +276,7 @@ void init_pci_drivers(void) {
 
     for (int i = 0; i < (int)(sizeof(known_usb_drivers)/sizeof(known_usb_drivers[0])); i++) {
         for (int j = 0; j < pci_device_count; j++) {
-            if (pci_devices[j].class == USB_PCI_CLASS && pci_devices[j].subclass == USB_PCI_SUBCLASS && pci_devices[j].progif == known_usb_drivers[i].progif) { printf("pci: found %s usb controller\n", known_usb_drivers[i].name); known_usb_drivers[i].init(&pci_devices[j]); }
+            if (pci_devices[j].class == USB_PCI_CLASS && pci_devices[j].subclass == USB_PCI_SUBCLASS && pci_devices[j].progif == known_usb_drivers[i].progif) { log("pci: found %s usb controller\n", known_usb_drivers[i].name); known_usb_drivers[i].init(&pci_devices[j]); }
         }
     }
 }

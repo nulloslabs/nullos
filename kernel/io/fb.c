@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include <errno.h>
 #include <main/limine_req.h>
 #include <main/string.h>

@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -308,8 +309,7 @@ int execute_elf(const char *path, char **argv, char **envp) {
         }
     }
 
-    // Record VMAs as we load segments; the task doesn't exist yet, so we
-    // accumulate into a local table and splice it into tasks[pid] below.
+    // Record VMAs before the task exists, then attach them after creation.
     vma_table_t local_vmas;
     init_vma_table(&local_vmas);
 
@@ -378,15 +378,16 @@ int execute_elf(const char *path, char **argv, char **envp) {
         destroy_vmm_context(ctx);
         return pid;
     }
-    if (pid >= 0) {
-        tasks[pid].stack_base = stack;
-        tasks[pid].brk = heap_start;
-        tasks[pid].brk_start = heap_start;
-        strncpy(tasks[pid].exe, path, sizeof(tasks[pid].exe) - 1);
-        tasks[pid].exe[sizeof(tasks[pid].exe) - 1] = '\0';
-        set_task_name_from_path(&tasks[pid], path);
+    task_t *task = task_by_pid(pid);
+    if (task) {
+        task->stack_base = stack;
+        task->brk = heap_start;
+        task->brk_start = heap_start;
+        strncpy(task->exe, path, sizeof(task->exe) - 1);
+        task->exe[sizeof(task->exe) - 1] = '\0';
+        set_task_name_from_path(task, path);
         // Hand off the VMA table we accumulated during loading.
-        memcpy(&tasks[pid].vmas, &local_vmas, sizeof(vma_table_t));
+        memcpy(&task->vmas, &local_vmas, sizeof(vma_table_t));
         // Save auxv for /proc/<pid>/auxv
         {
             int auxc = 0;
@@ -394,15 +395,15 @@ int execute_elf(const char *path, char **argv, char **envp) {
             auxc++; // include AT_NULL
             int words = auxc * 2;
             if (words > 16) words = 16;
-            memcpy(tasks[pid].auxv_blob, auxv, words * sizeof(uint64_t));
-            tasks[pid].auxv_blob_words = words;
+            memcpy(task->auxv_blob, auxv, words * sizeof(uint64_t));
+            task->auxv_blob_words = words;
         }
     }
 
     for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].waiting_for == pid) {
-            tasks[i].waiting_for = 0;
-            tasks[i].state = TASK_READY;
+        if (tasks[i]->waiting_for == pid) {
+            tasks[i]->waiting_for = 0;
+            tasks[i]->state = TASK_READY;
             break;
         }
     }
@@ -530,14 +531,14 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     write_msr(MSR_FS_BASE, 0);
     switch_vmm_context(ctx);
 
-    frame->rcx = entry;
+    frame->rip = entry;
     frame->rdx = 0;
     frame->rsp = v_rsp;
 
     for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].waiting_for == current_task_ptr->pid) {
-            tasks[i].waiting_for = 0;
-            tasks[i].state = TASK_READY;
+        if (tasks[i]->waiting_for == current_task_ptr->pid) {
+            tasks[i]->waiting_for = 0;
+            tasks[i]->state = TASK_READY;
             break;
         }
     }

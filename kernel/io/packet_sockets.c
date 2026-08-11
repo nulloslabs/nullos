@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <errno.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
@@ -16,6 +17,7 @@ typedef struct {
 
 typedef struct packet_socket_obj {
     spinlock_t lock;
+    int type;
     uint16_t protocol;
     int ifindex;
     raw_frame_t ring[PACKET_RING_SIZE];
@@ -36,10 +38,14 @@ void net_packet_tap_rx(const uint8_t *packet, uint16_t len) {
     packet_socket_t *curr = packet_sockets_list;
     while (curr) {
         spin_lock(&curr->lock);
-        if (curr->count < PACKET_RING_SIZE) {
+        uint16_t frame_protocol = 0;
+        if (len >= 14) memcpy(&frame_protocol, packet + 12, sizeof(frame_protocol));
+        if (len >= 14 && (!curr->protocol || curr->protocol == frame_protocol) && (!curr->ifindex || curr->ifindex == 1) && curr->count < PACKET_RING_SIZE) {
             raw_frame_t *f = &curr->ring[curr->tail];
-            memcpy(f->data, packet, len);
-            f->len = len;
+            const uint8_t *data = curr->type == SOCK_DGRAM ? packet + 14 : packet;
+            uint16_t data_len = curr->type == SOCK_DGRAM ? len - 14 : len;
+            memcpy(f->data, data, data_len);
+            f->len = data_len;
             curr->tail = (curr->tail + 1) % PACKET_RING_SIZE;
             curr->count++;
         }
@@ -55,6 +61,7 @@ static int packet_op_bind(socket_t *sock, const void *addr, socklen_t addrlen) {
     const sockaddr_ll_t *sll = (const sockaddr_ll_t *)addr;
     packet_socket_t *pkt = (packet_socket_t *)sock->priv;
     if (!pkt) return -EINVAL;
+    if (sll->sll_ifindex != 0 && sll->sll_ifindex != 1) return -ENODEV;
 
     pkt->protocol = sll->sll_protocol;
     pkt->ifindex = sll->sll_ifindex;
@@ -77,11 +84,23 @@ static int packet_op_accept(socket_t *sock, socket_t **out_sock) {
 }
 
 static int64_t packet_op_sendto(socket_t *sock, const void *buf, size_t len, int flags, const void *dest_addr, socklen_t addrlen) {
-    (void)flags; (void)dest_addr; (void)addrlen;
+    (void)flags;
     if (!sock || !buf || len == 0 || len > PACKET_MAX_LEN) return -EINVAL;
     if (!net_current_device || !net_current_device->send) return -ENETDOWN;
 
-    bool ok = net_current_device->send(buf, (uint16_t)len);
+    if (sock->type == SOCK_RAW) {
+        bool ok = net_current_device->send(buf, (uint16_t)len);
+        return ok ? (int64_t)len : -EIO;
+    }
+    if (!dest_addr || addrlen < sizeof(sockaddr_ll_t) || len > PACKET_MAX_LEN - 14) return -EINVAL;
+    const sockaddr_ll_t *sll = (const sockaddr_ll_t *)dest_addr;
+    if (sll->sll_ifindex != 0 && sll->sll_ifindex != 1) return -ENODEV;
+    uint8_t frame[PACKET_MAX_LEN];
+    memcpy(frame, sll->sll_addr, 6);
+    memcpy(frame + 6, net_current_device->mac, 6);
+    memcpy(frame + 12, &sll->sll_protocol, sizeof(sll->sll_protocol));
+    memcpy(frame + 14, buf, len);
+    bool ok = net_current_device->send(frame, (uint16_t)(len + 14));
     return ok ? (int64_t)len : -EIO;
 }
 
@@ -180,6 +199,12 @@ static int64_t packet_op_write(socket_t *sock, const void *buf, size_t count, ui
     return packet_op_sendto(sock, buf, count, 0, NULL, 0);
 }
 
+static bool packet_op_is_readable(socket_t *sock) {
+    if (!sock || !sock->priv) return false;
+    packet_socket_t *pkt = (packet_socket_t *)sock->priv;
+    return pkt->count != 0;
+}
+
 static const socket_ops_t packet_socket_ops = {
     .bind        = packet_op_bind,
     .connect     = packet_op_connect,
@@ -195,6 +220,7 @@ static const socket_ops_t packet_socket_ops = {
     .close       = packet_op_close,
     .read        = packet_op_read,
     .write       = packet_op_write,
+    .is_readable = packet_op_is_readable,
 };
 
 int create_packet_socket_obj(int type, int protocol, socket_t **out) {
@@ -205,6 +231,7 @@ int create_packet_socket_obj(int type, int protocol, socket_t **out) {
     if (!pkt) return -ENOMEM;
     memset(pkt, 0, sizeof(packet_socket_t));
     pkt->lock = SPINLOCK_INIT;
+    pkt->type = type;
     pkt->protocol = (uint16_t)protocol;
 
     socket_t *s = malloc(sizeof(socket_t));

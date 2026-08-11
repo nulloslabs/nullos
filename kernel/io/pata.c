@@ -1,11 +1,11 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <errno.h>
+#include <main/log.h>
 #include <main/string.h>
 #include <io/ide.h>
 #include <io/io.h>
 #include <io/pata.h>
-#include <io/terminal.h>
 
 static ide_device_t pata_devices[IDE_MAX_DEVICES];
 static uint64_t pata_sectors[IDE_MAX_DEVICES];
@@ -171,8 +171,8 @@ void init_pata(void) {
     }
 
     if (!found) {
-        printf("pata: no pata drive found\n");
+        log("pata: no pata drive found\n");
         return;
     }
-    printf("pata: initialized pata\n");
+    log("pata: initialized pata\n");
 }

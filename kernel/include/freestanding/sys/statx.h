@@ -15,7 +15,25 @@
 #define STATX_BLOCKS      0x00000400U
 #define STATX_BASIC_STATS 0x000007ffU
 #define STATX_BTIME       0x00000800U
+#define STATX_MNT_ID      0x00001000U
+#define STATX_DIOALIGN    0x00002000U
+#define STATX_MNT_ID_UNIQUE 0x00004000U
+#define STATX_SUBVOL      0x00008000U
+#define STATX_WRITE_ATOMIC 0x00010000U
+#define STATX_DIO_READ_ALIGN 0x00020000U
+#define STATX__RESERVED   0x80000000U
 #define STATX_ALL         0x00000fffU
+
+#define STATX_ATTR_COMPRESSED   0x00000004ULL
+#define STATX_ATTR_IMMUTABLE    0x00000010ULL
+#define STATX_ATTR_APPEND       0x00000020ULL
+#define STATX_ATTR_NODUMP       0x00000040ULL
+#define STATX_ATTR_ENCRYPTED    0x00000800ULL
+#define STATX_ATTR_AUTOMOUNT    0x00001000ULL
+#define STATX_ATTR_MOUNT_ROOT   0x00002000ULL
+#define STATX_ATTR_VERITY       0x00100000ULL
+#define STATX_ATTR_DAX          0x00200000ULL
+#define STATX_ATTR_WRITE_ATOMIC 0x00400000ULL
 
 #ifndef AT_EMPTY_PATH
 #define AT_EMPTY_PATH 0x1000
@@ -51,5 +69,12 @@ struct statx {
     uint64_t stx_mnt_id;
     uint32_t stx_dio_mem_align;
     uint32_t stx_dio_offset_align;
-    uint64_t __spare3[12];
+    uint64_t stx_subvol;
+    uint32_t stx_atomic_write_unit_min;
+    uint32_t stx_atomic_write_unit_max;
+    uint32_t stx_atomic_write_segments_max;
+    uint32_t stx_dio_read_offset_align;
+    uint32_t stx_atomic_write_unit_max_opt;
+    uint32_t __spare2[1];
+    uint64_t __spare3[8];
 };

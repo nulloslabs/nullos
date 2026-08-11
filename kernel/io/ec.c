@@ -1,9 +1,9 @@
 #include <stdint.h>
+#include <main/log.h>
 #include <main/spinlocks.h>
 #include <io/ec.h>
 #include <io/hpet.h>
 #include <io/io.h>
-#include <io/terminal.h>
 #include <uacpi/acpi.h>
 #include <uacpi/namespace.h>
 #include <uacpi/opregion.h>
@@ -133,6 +133,6 @@ uacpi_status init_ec(void) {
     uacpi_status status = uacpi_find_devices("PNP0C09", ec_device_callback, &discovery);
     if (uacpi_unlikely_error(status)) return status;
     if (uacpi_unlikely_error(discovery.status)) return discovery.status;
-    printf("ec: initialized ec\n");
+    log("ec: initialized ec\n");
     return UACPI_STATUS_OK;
 }

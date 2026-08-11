@@ -1,9 +1,10 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdarg.h>
+#include <main/log.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
-#include <io/terminal.h>
 #include <io/io.h>
 #include <io/serial.h>
 
@@ -156,8 +157,7 @@ int serial_vprintf(uint16_t port, const char *fmt, va_list args) {
         bool left_align = false;
         int width = 0;
         char pad_char = ' ';
-        bool is_long = false;
-        bool is_size = false;
+        int length_modifier = 0;
 
         // Left-align flag
         if (*p == '-') {
@@ -174,21 +174,21 @@ int serial_vprintf(uint16_t port, const char *fmt, va_list args) {
             width = width * 10 + (*p - '0');
             p++;
         }
-        // Long modifier
         if (*p == 'l') {
-            is_long = true;
+            length_modifier = 1;
             p++;
-            if (*p == 'l') p++;
-        }
-        // Size modifier (%z for size_t / ssize_t)
-        if (*p == 'z') {
-            is_size = true;
+            if (*p == 'l') {
+                length_modifier = 2;
+                p++;
+            }
+        } else if (*p == 'z') {
+            length_modifier = 3;
             p++;
         }
 
         switch (*p) {
             case 's': {
-                char *s = va_arg(args, char *);
+                const char *s = va_arg(args, const char *);
                 if (!s) s = "(null)";
                 int len = strlen(s);
                 if (!left_align)
@@ -204,36 +204,40 @@ int serial_vprintf(uint16_t port, const char *fmt, va_list args) {
             case 'i':
             case 'd':
             case 'u':
-            case 'b':
             case 'x': case 'X': {
-                uint64_t val;
-                if (is_long) {
-                    val = va_arg(args, uint64_t);
-                } else if (is_size) {
-                    val = (uint64_t)va_arg(args, size_t);
+                bool is_signed = *p == 'd' || *p == 'i';
+                bool is_neg = false;
+                uint64_t val = 0;
+                if (is_signed) {
+                    int64_t signed_val;
+                    if (length_modifier == 2) signed_val = va_arg(args, long long);
+                    else if (length_modifier == 1) signed_val = va_arg(args, long);
+                    else if (length_modifier == 3) signed_val = va_arg(args, ptrdiff_t);
+                    else signed_val = va_arg(args, int);
+                    is_neg = signed_val < 0;
+                    val = is_neg ? (uint64_t)(-(signed_val + 1)) + 1 : (uint64_t)signed_val;
                 } else {
-                    if (*p == 'd' || *p == 'i') val = (uint64_t)va_arg(args, int);
-                    else           val = (uint64_t)va_arg(args, unsigned int);
+                    if (length_modifier == 2) val = va_arg(args, unsigned long long);
+                    else if (length_modifier == 1) val = va_arg(args, unsigned long);
+                    else if (length_modifier == 3) val = va_arg(args, size_t);
+                    else val = va_arg(args, unsigned int);
                 }
-                bool is_neg = (*p == 'd' || *p == 'D' || *p == 'i') && (int64_t)val < 0;
-                if (is_neg) val = -(int64_t)val;
-                int base = (*p=='x'||*p=='X') ? 16 : (*p=='o'||*p=='O') ? 8 : (*p=='b') ? 2 : 10;
+                int base = (*p == 'x' || *p == 'X') ? 16 : *p == 'o' ? 8 : 10;
                 char buf[64];
                 int_to_str(val, buf, 64, base, (*p == 'X'));
                 int len = 0;
                 while (buf[len]) len++;
                 if (is_neg) len++; // account for '-'
-                if (!left_align)
-                    while (width > len) { PUTC(pad_char); width--; }
+                if (!left_align && pad_char == '0' && is_neg) { PUTC('-'); is_neg = false; }
+                if (!left_align) while (width > len) { PUTC(pad_char); width--; }
                 if (is_neg) PUTC('-');
                 char *ptr = buf;
                 while (*ptr) PUTC(*ptr++);
-                if (left_align)
-                    while (width > len) { PUTC(' '); width--; }
+                if (left_align) while (width > len) { PUTC(' '); width--; }
                 break;
             }
             case 'p': {
-                uint64_t x = va_arg(args, uint64_t);
+                uint64_t x = (uint64_t)(uintptr_t)va_arg(args, void *);
                 char buf[64];
                 int_to_str(x, buf, 64, 16, false);
                 PUTC('0'); PUTC('x');
@@ -307,5 +311,5 @@ void init_serial_ports(void) {
         // Enable the port for use.
         outb(port + 4, 0x0F);
     }
-    printf("serial: initialized serial ports\n");
+    log("serial: initialized serial ports\n");
 }

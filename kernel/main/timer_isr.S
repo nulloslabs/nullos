@@ -6,6 +6,8 @@
 .extern current_apic_mode
 .extern lapic_base
 .extern poll_usb_hcds
+.extern check_signals_from_interrupt
+.extern record_timer_interrupt
 // The spinlock for the scheduler is just a uint32_t
 .extern sched_lock
 
@@ -43,6 +45,11 @@ isr32:
     mov ax, 0x10
     mov ds, ax
     mov es, ax
+
+    mov rbx, rsp
+    and rsp, -16
+    call record_timer_interrupt
+    mov rsp, rbx
 
     // scheduler
     // Only poll USB HCDs + schedule a task switch if sched_lock is not held.
@@ -93,6 +100,13 @@ isr32:
     out 0x20, al
 
 .eoi_done:
+    // Deliver pending signals before returning to userspace.
+    mov rdi, rsp
+    mov rbx, rsp
+    and rsp, -16
+    call check_signals_from_interrupt
+    mov rsp, rbx
+
     // cleanup
     mov rax, [rsp + 144]
     test al, 3

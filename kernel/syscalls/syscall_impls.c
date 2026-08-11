@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <signal.h>
 #include <fcntl.h>
@@ -12,16 +13,21 @@
 #include <poll.h>
 #include <errno.h>
 #include <unistd.h>
+#include <asm/unistd.h>
 #include <asm/prctl.h>
 #include <linux/rseq.h>
 #include <linux/sched.h>
+#include <linux/types.h>
+#include <net/if.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/mman.h>
+#include <sys/mount.h>
 #include <sys/fb.h>
 #include <sys/stat.h>
 #include <sys/statx.h>
+#include <sys/sysinfo.h>
 #include <sys/resource.h>
 #include <sys/futex.h>
 #include <sys/reboot.h>
@@ -29,6 +35,7 @@
 #include <sys/epoll.h>
 #include <sys/uio.h>
 #include <sys/sysmacros.h>
+#include <main/log.h>
 #include <main/limine_req.h>
 #include <main/spinlocks.h>
 #include <main/elf.h>
@@ -57,10 +64,12 @@
 #include <io/ptys.h>
 #include <io/hpet.h>
 #include <io/sockets.h>
+#include <io/net.h>
 #include <io/unix_sockets.h>
 #include <io/serial.h>
 #include <io/procfs.h>
 #include <io/tmpfs.h>
+#include <io/ext4.h>
 #include <io/usb.h>
 #include <mm/mm.h>
 #include <mm/vmm.h>
@@ -75,38 +84,8 @@
    To who is reading this: Please don't try to modularize this, it's too late...just keep adding on...
  */
 
-// Should be never exposed to other files
-#define USER_ADDR_MAX 0x0000800000000000ULL
-#define MAX_BRK_SIZE (256ULL * 1024ULL * 1024ULL)
-#define MAX_IOV 1024
-#define MAX_MOUNTS 16
-#define MAX_IO_COUNT (16 * 1024 * 1024)
-#define MAX_FUTEX_WAITERS 256
-
-#define FW_FREE       0
-#define FW_WAITING    1
-#define FW_WOKEN      2
-#define FW_TIMED_OUT  3
-
-#define FD_SETSIZE 1024
-#define FD_SET_BYTES (FD_SETSIZE / 8)
-
-typedef struct {
-    int      state;
-    uint64_t phys_addr;
-    int      task_idx;
-    uint32_t bitset;
-    uint64_t deadline_us;
-} futex_waiter_t;
-
-typedef struct {
-    char path[64];
-    char filesystemtype[32];
-    bool active;
-} mount_t;
-
-
 static mount_t mounts[MAX_MOUNTS];
+static uint64_t next_mount_id = 2;
 static mode_t current_umask = 0022;
 static futex_waiter_t futex_waiters[MAX_FUTEX_WAITERS];
 
@@ -128,6 +107,17 @@ static bool user_write_range_ok(vmm_context_t *ctx, uint64_t addr, uint64_t size
     return user_address_range_ok(addr, size) && vmm_user_range_valid(ctx, addr, size, true);
 }
 
+static bool user_range_is_mapped(vmm_context_t *ctx, uint64_t addr, uint64_t size) {
+    if (!ctx || !user_address_range_ok(addr, size)) return true;
+    uint64_t start = addr & ~(uint64_t)(PAGE_SIZE - 1);
+    uint64_t end = (addr + size + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+    for (uint64_t page = start; page < end; page += PAGE_SIZE) {
+        uint64_t pte = get_vmm_pte(ctx, page);
+        if (pte & (VMM_PRESENT | VMM_DEMAND)) return true;
+    }
+    return false;
+}
+
 static inline int fd_isset(const uint8_t *set, int fd) { return (set[fd / 8] >> (fd % 8)) & 1; }
 static inline void fd_set_bit(uint8_t *set, int fd) { set[fd / 8] |= (uint8_t)(1u << (fd % 8)); }
 static inline void fd_clr_bit(uint8_t *set, int fd) { set[fd / 8] &= ~(uint8_t)(1u << (fd % 8)); }
@@ -137,9 +127,9 @@ static bool can_access_initrd(const initrd_file_t *file, int want_read, int want
     if (current_task_ptr && current_task_ptr->euid == 0) return true;
 
     int shift = 0;
-    if (current_task_ptr->euid == file->uid) {
+    if (current_task_ptr->fsuid == file->uid) {
         shift = 6;
-    } else if (current_task_ptr->egid == file->gid) {
+    } else if (current_task_ptr->fsgid == file->gid) {
         shift = 3;
     }
 
@@ -155,9 +145,9 @@ static bool can_access_stat_mode(const struct stat *st, int want_read, int want_
     if (current_task_ptr && current_task_ptr->euid == 0) return true;
 
     int shift = 0;
-    if (current_task_ptr->euid == st->st_uid) {
+    if (current_task_ptr->fsuid == st->st_uid) {
         shift = 6;
-    } else if (current_task_ptr->egid == st->st_gid) {
+    } else if (current_task_ptr->fsgid == st->st_gid) {
         shift = 3;
     }
 
@@ -430,6 +420,19 @@ static const char *get_sub_mount_name(const char *parent_path, int n, char *name
     return NULL;
 }
 
+static struct timespec synthetic_fs_time(void) {
+    static struct timespec timestamp;
+    if (timestamp.tv_sec == 0 && timestamp.tv_nsec == 0) timestamp = time_get_realtime_ts();
+    return timestamp;
+}
+
+static void stat_set_synthetic_times(struct stat *kst) {
+    struct timespec timestamp = synthetic_fs_time();
+    kst->st_atim = timestamp;
+    kst->st_mtim = timestamp;
+    kst->st_ctim = timestamp;
+}
+
 static bool stat_virtual_device(const char *abs_path, struct stat *kst) {
     // build_abs_path_at already resolved intermediate symlinks;
     // resolve the final component too for virtual device lookup.
@@ -451,6 +454,7 @@ static bool stat_virtual_device(const char *abs_path, struct stat *kst) {
         }
         kst->st_uid = 0; kst->st_gid = 0; kst->st_size = 0;
         kst->st_blocks = 0; kst->st_blksize = 4096;
+        stat_set_synthetic_times(kst);
         return true;
     }
     if (is_mounted_under(resolved, "devtmpfs", rel_path)) {
@@ -466,6 +470,7 @@ static bool stat_virtual_device(const char *abs_path, struct stat *kst) {
         }
         kst->st_uid = 0; kst->st_gid = 0; kst->st_size = 0;
         kst->st_blocks = 0; kst->st_blksize = 4096;
+        stat_set_synthetic_times(kst);
         return true;
     }
     return false;
@@ -488,12 +493,42 @@ static bool stat_tmpfs_to_kst(const char *abs_path, struct stat *kst, bool follo
     kst->st_nlink = 1;
     kst->st_dev = 0;
     kst->st_ino = f.inode;
+    kst->st_atim = f.atime;
+    kst->st_mtim = f.mtime;
+    kst->st_ctim = f.ctime;
     return true;
+}
+
+static bool stat_initrd_to_kst(const char *abs_path, struct stat *kst, bool follow) {
+    initrd_file_t f = follow ? stat_initrd(abs_path) : stat_initrd_nofollow(abs_path);
+    if (!f.mode) return false;
+    memset(kst, 0, sizeof(*kst));
+    kst->st_mode = f.mode;
+    kst->st_uid = f.uid;
+    kst->st_gid = f.gid;
+    kst->st_size = f.size;
+    kst->st_blocks = (f.size + 511) / 512;
+    kst->st_blksize = 4096;
+    kst->st_nlink = 1;
+    kst->st_dev = 1;
+    kst->st_ino = f.inode;
+    kst->st_atim = f.atime;
+    kst->st_mtim = f.mtime;
+    kst->st_ctim = f.ctime;
+    return true;
+}
+
+static bool stat_ext4_to_kst(const char *abs_path, struct stat *kst, bool follow) {
+    if (!check_ext4_path(abs_path)) return false;
+    return stat_ext4(abs_path, kst, follow) == 0;
 }
 
 static int check_directory_access(const char *path, bool write) {
     struct stat st;
-    if (is_tmpfs_dir(path)) {
+    if (check_ext4_path(path)) {
+        if (!stat_ext4_to_kst(path, &st, true)) return -ENOENT;
+        if (write) return -EROFS;
+    } else if (is_tmpfs_dir(path)) {
         if (!stat_tmpfs_to_kst(path, &st, true)) return -ENOENT;
     } else {
         initrd_file_t dir = read_initrd(path);
@@ -544,6 +579,7 @@ static bool stat_proc(const char *abs_path, const char *orig_path, struct stat *
     kst->st_uid = current_task_ptr ? current_task_ptr->euid : 0;
     kst->st_gid = current_task_ptr ? current_task_ptr->egid : 0;
     kst->st_blocks = 0; kst->st_blksize = 4096; kst->st_nlink = 1;
+    stat_set_synthetic_times(kst);
 
     if (is_procfs_dir(&n)) {
         kst->st_mode = 0040555;  // dr-xr-xr-x
@@ -561,16 +597,7 @@ static bool stat_proc(const char *abs_path, const char *orig_path, struct stat *
             }
             // Try virtual device first (e.g. /dev/tty0), then initrd.
             if (stat_virtual_device(target_abs, kst)) return true;
-            initrd_file_t f = read_initrd(target_abs);
-            if (f.mode) {
-                kst->st_mode = f.mode;
-                kst->st_uid = f.uid; kst->st_gid = f.gid;
-                kst->st_size = f.size;
-                kst->st_blocks = (f.size + 511) / 512;
-                kst->st_dev = 1;
-                kst->st_ino = f.inode;
-                return true;
-            }
+            if (stat_initrd_to_kst(target_abs, kst, true)) return true;
         }
         // lstat() or target not resolvable: report the synthetic symlink.
         kst->st_mode = 0120777;  // lrwxrwxrwx (symlink)
@@ -614,9 +641,8 @@ static int proc_open_common(char *abs_path, size_t abs_size, uint32_t flags) {
         }
         return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_PROC, flags);
     }
-    // Regular procfs files (maps, mounts, auxv, cpuinfo) are readable.
-    if (n.entry == PROC_FILE_MAPS || n.entry == PROC_FILE_MOUNTS ||
-        n.entry == PROC_FILE_AUXV || n.entry == PROC_FILE_CPUINFO) {
+    // Regular procfs files are readable.
+    if (n.entry == PROC_FILE_MAPS || n.entry == PROC_FILE_MOUNTS || n.entry == PROC_FILE_AUXV || n.entry == PROC_FILE_CPUINFO || n.entry == PROC_FILE_MEMINFO || n.entry == PROC_FILE_UPTIME || n.entry == PROC_FILE_ROOT_STAT || n.entry == PROC_FILE_LOADAVG || n.entry == PROC_FILE_STAT || n.entry == PROC_FILE_STATUS || n.entry == PROC_FILE_CMDLINE || n.entry == PROC_FILE_COMM) {
         return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_PROC, flags);
     }
     return -EACCES;
@@ -639,7 +665,7 @@ static int open_tmpfs_common(const char *abs_path, uint32_t flags, mode_t mode) 
         if (access < 0) return access;
         int r = write_tmpfs(abs_path, NULL, 0,
                             (mode ? mode : 0644) | S_IFREG,
-                            current_task_ptr->euid, current_task_ptr->egid);
+                            current_task_ptr->fsuid, current_task_ptr->fsgid);
         if (r < 0) return r;
     } else {
         // O_EXCL: fail if exists
@@ -666,6 +692,21 @@ static int open_tmpfs_common(const char *abs_path, uint32_t flags, mode_t mode) 
         }
     }
     return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_TMPFS, flags);
+}
+
+// Read-only ext-family open helper. Returns 1 when the path is not on ext4.
+static int open_ext4_common(const char *abs_path, uint32_t flags) {
+    if (!check_ext4_path(abs_path)) return 1;
+
+    struct stat st;
+    int status = stat_ext4(abs_path, &st, true);
+    if (status < 0) return status;
+
+    int want_write = (flags & O_WRONLY) || (flags & O_RDWR);
+    if (want_write || (flags & (O_CREAT | O_TRUNC))) return -EROFS;
+    if ((flags & O_DIRECTORY) && !S_ISDIR(st.st_mode)) return -ENOTDIR;
+    if (!can_access_stat_mode(&st, 1, 0, S_ISDIR(st.st_mode))) return -EACCES;
+    return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_EXT4, flags);
 }
 
 static uint64_t resolve_futex_key(uint32_t *uaddr, syscall_frame_t *frame) {
@@ -785,8 +826,8 @@ static int wake_futex(uint64_t phys, uint32_t max_wake, uint32_t bitset) {
 
         futex_waiters[i].state = FW_WOKEN;
         int idx = futex_waiters[i].task_idx;
-        if (idx >= 0 && idx < MAX_TASKS && tasks[idx].state == TASK_STOPPED)
-            tasks[idx].state = TASK_READY;
+        if (idx >= 0 && idx < MAX_TASKS && tasks[idx]->state == TASK_STOPPED)
+            tasks[idx]->state = TASK_READY;
         woken++;
     }
 
@@ -1133,7 +1174,7 @@ static int select_check_fd(int fd) {
             pty_t *p = get_pty(idx);
             if (p && p->allocated && get_tty_ring_count(&p->s2m) > 0) result |= 1;
         }
-    } else if (entry->type == FD_PIPE || entry->type == FD_SOCKET) {
+    } else if (entry->type == FD_PIPE) {
         unix_handle_t *h = (unix_handle_t *)entry->handle;
         if (h && h->in && !h->rd_shutdown) {
             uint64_t irq;
@@ -1141,6 +1182,9 @@ static int select_check_fd(int fd) {
             if (h->in->len > 0 || h->in->writers == 0) result |= 1;
             spin_unlock_irqrestore(&h->in->lock, irq);
         }
+    } else if (entry->type == FD_SOCKET) {
+        poll_net_device();
+        if (is_socket_readable((socket_t *)entry->handle)) result |= 1;
     } else {
         result |= 1;
     }
@@ -1354,6 +1398,7 @@ static int do_epoll_create1(int flags) {
     epoll_instance_t *epi = malloc(sizeof(epoll_instance_t));
     if (!epi) return -ENOMEM;
     memset(epi, 0, sizeof(*epi));
+    epi->refcount = 1;
 
     uint32_t fd_flags = 0;
     if (flags & EPOLL_CLOEXEC) fd_flags |= O_CLOEXEC;
@@ -1551,10 +1596,13 @@ void register_vfs_mount(const char *path, const char *fstype) {
     }
     for (int i = 0; i < MAX_MOUNTS; i++) {
         if (!mounts[i].active) {
+            strcpy(mounts[i].source, "none");
             strncpy(mounts[i].path, path, sizeof(mounts[i].path) - 1);
             mounts[i].path[sizeof(mounts[i].path) - 1] = '\0';
             strncpy(mounts[i].filesystemtype, fstype, sizeof(mounts[i].filesystemtype) - 1);
             mounts[i].filesystemtype[sizeof(mounts[i].filesystemtype) - 1] = '\0';
+            mounts[i].flags = 0;
+            mounts[i].id = next_mount_id++;
             mounts[i].active = true;
             break;
         }
@@ -1575,10 +1623,8 @@ int enumerate_vfs_mounts(int index, char *out_line, size_t line_size) {
         if (!mounts[i].active) continue;
         if (count != index) { count++; continue; }
 
-        // Build "<dev> <mountpoint> <fstype> rw 0 0".
-        // Device name is "none" for virtual filesystems; mountpoint and fstype
-        // come from the mount entry.  Assemble manually (no snprintf freestanding).
-        const char *dev = "none";
+        // Build "<dev> <mountpoint> <fstype> <options> 0 0".
+        const char *dev = mounts[i].source[0] ? mounts[i].source : "none";
         const char *mp  = mounts[i].path;
         const char *ft  = mounts[i].filesystemtype;
         size_t w = 0;
@@ -1587,7 +1633,11 @@ int enumerate_vfs_mounts(int index, char *out_line, size_t line_size) {
         for (const char *s = mp;  *s && w + 1 < line_size; ) out_line[w++] = *s++;
         if (w + 1 < line_size) out_line[w++] = ' ';
         for (const char *s = ft;  *s && w + 1 < line_size; ) out_line[w++] = *s++;
-        if (w + 3 < line_size) { out_line[w++] = ' '; out_line[w++] = 'r'; out_line[w++] = 'w'; }
+        if (w + 3 < line_size) {
+            out_line[w++] = ' ';
+            out_line[w++] = 'r';
+            out_line[w++] = (mounts[i].flags & MS_RDONLY) ? 'o' : 'w';
+        }
         if (w + 4 < line_size) { out_line[w++] = ' '; out_line[w++] = '0'; out_line[w++] = ' '; out_line[w++] = '0'; }
         out_line[w] = '\0';
         ret = (int)w;
@@ -1598,7 +1648,7 @@ int enumerate_vfs_mounts(int index, char *out_line, size_t line_size) {
     return ret;
 }
 
-void check_signals(syscall_frame_t *frame) {
+static void check_signals_context(syscall_frame_t *frame, bool from_syscall, bool sched_locked) {
     if (!current_task_ptr) return;
     if (current_task_ptr->pending_signals == 0) return;
 
@@ -1624,8 +1674,8 @@ void check_signals(syscall_frame_t *frame) {
                     current_task_ptr->pending_signals &= ~(1ULL << i);
                     // Notify parent so waitpid(WUNTRACED) wakes up
                     for (int _j = 0; _j < MAX_TASKS; _j++) {
-                        if (tasks[_j].state != TASK_DEAD && tasks[_j].pid == current_task_ptr->ppid) {
-                            tasks[_j].pending_signals |= (1ULL << SIGCHLD);
+                        if (tasks[_j]->state != TASK_DEAD && tasks[_j]->pid == current_task_ptr->ppid) {
+                            tasks[_j]->pending_signals |= (1ULL << SIGCHLD);
                             break;
                         }
                     }
@@ -1634,15 +1684,15 @@ void check_signals(syscall_frame_t *frame) {
                     // must release/reacquire it around the yield for the stop
                     // to actually switch to another task (otherwise bash's
                     // tcgetpgrp/kill(0, SIGTTIN) loop spins forever).
-                    spin_unlock(&sched_lock);
+                    if (sched_locked) spin_unlock(&sched_lock);
                     __asm__ volatile("int $32");
-                    spin_lock(&sched_lock);
+                    if (sched_locked) spin_lock(&sched_lock);
                     continue;
                 } else if (i == SIGCONT) {
                     // Default action: continue (already running, just clear)
                     current_task_ptr->pending_signals &= ~(1ULL << i);
                     continue;
-                } else if (i == SIGCHLD || i == SIGWINCH) {
+                } else if (i == SIGCHLD || i == SIGURG || i == SIGWINCH) {
                     // Default action: ignore
                     current_task_ptr->pending_signals &= ~(1ULL << i);
                     continue;
@@ -1658,17 +1708,18 @@ void check_signals(syscall_frame_t *frame) {
 
             current_task_ptr->pending_signals &= ~(1ULL << i);
 
-            if ((flags & SA_RESTART) && frame->rax == (uint64_t)-EINTR) {
+            if (from_syscall && (flags & SA_RESTART) && frame->rax == (uint64_t)-EINTR && current_task_ptr->orig_rax != __NR_nanosleep && current_task_ptr->orig_rax != __NR_clock_nanosleep) {
                 frame->rax = current_task_ptr->orig_rax;
-                frame->rcx -= 2; // Rewind the syscall instruction (2-byte `syscall`)
+                frame->rip -= 2; // Rewind the syscall instruction (2-byte `syscall`)
             }
 
+            signal_stack_frame_t saved = { .context = *frame, .blocked_signals = current_task_ptr->blocked_signals };
             uint64_t user_rsp = frame->rsp - 128; // red zone
-            user_rsp -= sizeof(syscall_frame_t);
+            user_rsp -= sizeof(saved);
             user_rsp &= ~15ULL;
 
             uint64_t sf_addr = user_rsp;
-            write_vmm(current_task_ptr->ctx, sf_addr, frame, sizeof(syscall_frame_t));
+            write_vmm(current_task_ptr->ctx, sf_addr, &saved, sizeof(saved));
 
             user_rsp -= 16; // always allocate space for siginfo
             uint32_t sinfo[4] = {i, 0, 0, 0};
@@ -1678,15 +1729,52 @@ void check_signals(syscall_frame_t *frame) {
             user_rsp -= 8;
             write_vmm(current_task_ptr->ctx, user_rsp, &restorer, sizeof(uint64_t));
 
-            frame->rcx = handler;
+            frame->rip = handler;
             frame->rdi = i;
             frame->rsi = (flags & 4) ? sinfo_addr : 0;
             frame->rdx = 0;
             frame->rsp = user_rsp;
 
+            current_task_ptr->blocked_signals |= sa[3];
+            if (!(flags & SA_NODEFER)) current_task_ptr->blocked_signals |= 1ULL << (i - 1);
+            current_task_ptr->blocked_signals &= ~((1ULL << (SIGKILL - 1)) | (1ULL << (SIGSTOP - 1)));
+            if (flags & SA_RESETHAND) sa[0] = (uint64_t)SIG_DFL;
+
             break;
         }
     }
+}
+
+void check_signals(syscall_frame_t *frame) {
+    check_signals_context(frame, true, true);
+}
+
+void check_signals_from_user_exception(syscall_frame_t *frame) {
+    check_signals_context(frame, false, false);
+}
+
+void check_signals_from_interrupt(interrupt_frame_t *irq) {
+    if (!irq || (irq->cs & 3) != 3) return;
+
+    syscall_frame_t frame = {
+        .rax = irq->rax, .rbx = irq->rbx, .rcx = irq->rcx,
+        .rdx = irq->rdx, .rsi = irq->rsi, .rdi = irq->rdi,
+        .rsp = irq->rsp, .rbp = irq->rbp,
+        .r8 = irq->r8, .r9 = irq->r9, .r10 = irq->r10,
+        .r11 = irq->r11, .r12 = irq->r12, .r13 = irq->r13,
+        .r14 = irq->r14, .r15 = irq->r15,
+        .rip = irq->rip, .rflags = irq->rflags,
+    };
+
+    check_signals_context(&frame, false, false);
+
+    irq->rax = frame.rax; irq->rbx = frame.rbx; irq->rcx = frame.rcx;
+    irq->rdx = frame.rdx; irq->rsi = frame.rsi; irq->rdi = frame.rdi;
+    irq->rsp = frame.rsp; irq->rbp = frame.rbp;
+    irq->r8 = frame.r8; irq->r9 = frame.r9; irq->r10 = frame.r10;
+    irq->r11 = frame.r11; irq->r12 = frame.r12; irq->r13 = frame.r13;
+    irq->r14 = frame.r14; irq->r15 = frame.r15;
+    irq->rip = frame.rip; irq->rflags = frame.rflags;
 }
 
 void check_futex_timeouts(void) {
@@ -1701,14 +1789,14 @@ void check_futex_timeouts(void) {
         if (futex_waiters[i].deadline_us != 0 &&
             now >= futex_waiters[i].deadline_us) {
             futex_waiters[i].state = FW_TIMED_OUT;
-            if (tasks[idx].state == TASK_STOPPED)
-                tasks[idx].state = TASK_READY;
+            if (tasks[idx]->state == TASK_STOPPED)
+                tasks[idx]->state = TASK_READY;
             continue;
         }
 
-        if (tasks[idx].pending_signals && tasks[idx].state == TASK_STOPPED) {
+        if (tasks[idx]->pending_signals && tasks[idx]->state == TASK_STOPPED) {
             futex_waiters[i].state = FW_WOKEN;
-            tasks[idx].state = TASK_READY;
+            tasks[idx]->state = TASK_READY;
         }
     }
 }
@@ -1763,8 +1851,7 @@ static void handle_futex_death(task_t *task, uint64_t uaddr, pid_t tid, bool pen
     spin_unlock_irqrestore(&futex_lock, irq);
 }
 
-static void stat_to_statx(struct statx *sx, const struct stat *kst,
-                          const char *abs_path) {
+static void stat_to_statx(struct statx *sx, const struct stat *kst, const char *abs_path) {
     memset(sx, 0, sizeof(*sx));
     sx->stx_mask      = STATX_BASIC_STATS;
     sx->stx_blksize   = kst->st_blksize ? (uint32_t)kst->st_blksize : 4096;
@@ -1781,10 +1868,85 @@ static void stat_to_statx(struct statx *sx, const struct stat *kst,
     sx->stx_dev_major  = major(kst->st_dev);
     sx->stx_dev_minor  = minor(kst->st_dev);
     (void)abs_path;
-    // Times: we don't track per-file atime/mtime/ctime/btime yet; leave 0.
     sx->stx_atime.tv_sec  = kst->st_atime;
     sx->stx_mtime.tv_sec  = kst->st_mtime;
     sx->stx_ctime.tv_sec  = kst->st_ctime;
+    sx->stx_atime.tv_nsec = (uint32_t)kst->st_atim.tv_nsec;
+    sx->stx_mtime.tv_nsec = (uint32_t)kst->st_mtim.tv_nsec;
+    sx->stx_ctime.tv_nsec = (uint32_t)kst->st_ctim.tv_nsec;
+}
+
+static void statx_add_mount(struct statx *sx, const char *path, unsigned int mask) {
+    if (!path) return;
+    uint64_t id = 1;
+    size_t best = 1;
+    bool mount_root = strcmp(path, "/") == 0;
+    uint64_t irq;
+    spin_lock_irqsave(&vfs_lock, &irq);
+    for (int i = 0; i < MAX_MOUNTS; i++) {
+        if (!mounts[i].active) continue;
+        size_t length = strlen(mounts[i].path);
+        if (length < best || strncmp(path, mounts[i].path, length) != 0) continue;
+        if (path[length] != '\0' && path[length] != '/') continue;
+        best = length;
+        id = mounts[i].id;
+        mount_root = path[length] == '\0';
+    }
+    spin_unlock_irqrestore(&vfs_lock, irq);
+    sx->stx_attributes_mask |= STATX_ATTR_MOUNT_ROOT;
+    if (mount_root) sx->stx_attributes |= STATX_ATTR_MOUNT_ROOT;
+    if (mask & STATX_MNT_ID_UNIQUE) {
+        sx->stx_mnt_id = id;
+        sx->stx_mask |= STATX_MNT_ID_UNIQUE;
+    } else if (mask & STATX_MNT_ID) {
+        sx->stx_mnt_id = id;
+        sx->stx_mask |= STATX_MNT_ID;
+    }
+}
+
+static void statx_add_fs_metadata(struct statx *sx, const char *path, bool follow, unsigned int mask) {
+    if (!path) return;
+    if (check_ext4_path(path)) statx_ext4_metadata(path, sx, follow);
+    if (mask & STATX_BTIME) {
+        tmpfs_file_t file = follow ? stat_tmpfs(path) : stat_tmpfs_nofollow(path);
+        if (file.mode) {
+            sx->stx_btime.tv_sec = file.btime.tv_sec;
+            sx->stx_btime.tv_nsec = file.btime.tv_nsec;
+            sx->stx_mask |= STATX_BTIME;
+        } else if (!check_ext4_path(path) && !is_procfs_path(path) && !is_mounted_under(path, "devtmpfs", NULL) && !is_mounted_under(path, "devpts", NULL)) {
+            initrd_file_t initrd_file = follow ? stat_initrd(path) : stat_initrd_nofollow(path);
+            if (initrd_file.mode) {
+                sx->stx_btime.tv_sec = initrd_file.btime.tv_sec;
+                sx->stx_btime.tv_nsec = initrd_file.btime.tv_nsec;
+                sx->stx_mask |= STATX_BTIME;
+            }
+        }
+    }
+    statx_add_mount(sx, path, mask);
+}
+
+static int stat_fd_to_kst(int fd, struct stat *kst) {
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) return -EBADF;
+    if (entry->type == FD_DEV && stat_virtual_device(entry->path, kst)) return 0;
+    if (entry->type == FD_STREAM && stat_virtual_device("/dev/tty0", kst)) return 0;
+    if (entry->type == FD_FILE) return stat_initrd_to_kst(entry->path, kst, true) ? 0 : -ENOENT;
+    if (entry->type == FD_TMPFS) return stat_tmpfs_to_kst(entry->path, kst, true) ? 0 : -ENOENT;
+    if (entry->type == FD_EXT4) return stat_ext4(entry->path, kst, true);
+    if (entry->type == FD_PROC) return stat_proc(entry->path, NULL, kst, true) ? 0 : -ENOENT;
+    memset(kst, 0, sizeof(*kst));
+    if (entry->type == FD_PIPE) kst->st_mode = S_IFIFO | 0600;
+    else if (entry->type == FD_SOCKET) kst->st_mode = S_IFSOCK | 0777;
+    else if (entry->type == FD_PTY_MASTER) kst->st_mode = S_IFCHR | 0600;
+    else if (entry->type == FD_EPOLL || entry->type == FD_EPOLL_H) kst->st_mode = S_IFREG | 0600;
+    else return -EBADF;
+    kst->st_uid = current_task_ptr->euid;
+    kst->st_gid = current_task_ptr->egid;
+    kst->st_nlink = 1;
+    kst->st_blksize = 4096;
+    kst->st_ino = (ino_t)(uintptr_t)(entry->handle ? entry->handle : entry);
+    stat_set_synthetic_times(kst);
+    return 0;
 }
 
 void cleanup_futex_task(int task_idx) {
@@ -1993,6 +2155,21 @@ void sys_read(syscall_frame_t *frame) {
         return;
     }
 
+    if (entry->type == FD_EXT4) {
+        if (count == 0) { frame->rax = 0; return; }
+        if (count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
+        uint8_t *kbuf = malloc(count);
+        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
+        int64_t got = read_ext4(entry->path, kbuf, count, entry->offset);
+        if (got >= 0) {
+            write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, (uint64_t)got);
+            entry->offset += (uint64_t)got;
+        }
+        free(kbuf);
+        frame->rax = (uint64_t)got;
+        return;
+    }
+
     initrd_file_t file = read_initrd(entry->path);
     if (!file.data || entry->offset >= file.size) { frame->rax = 0; return; }
 
@@ -2014,6 +2191,8 @@ void sys_write(syscall_frame_t *frame) {
 
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+
+    if (entry->type == FD_EXT4) { frame->rax = (uint64_t)-EROFS; return; }
 
     if (entry->type == FD_STREAM) {
         char kbuf[64];
@@ -2289,6 +2468,11 @@ void sys_open(syscall_frame_t *frame) {
         if (tr != 1) { frame->rax = (uint64_t)tr; return; }
     }
 
+    {
+        int er = open_ext4_common(abs_path, flags);
+        if (er != 1) { frame->rax = (uint64_t)er; return; }
+    }
+
     initrd_file_t file = read_initrd(abs_path);
 
     if (!file.mode && !(flags & O_CREAT)) { frame->rax = (uint64_t)-ENOENT; return; }
@@ -2302,7 +2486,7 @@ void sys_open(syscall_frame_t *frame) {
     if ((flags & O_CREAT) && !file.data && !file.mode) {
         int access = check_parent_access(abs_path, true);
         if (access < 0) { frame->rax = (uint64_t)access; return; }
-        int r = write_initrd(abs_path, "", 0, mode | 0o100000, current_task_ptr->euid, current_task_ptr->egid);
+        int r = write_initrd(abs_path, "", 0, mode | 0o100000, current_task_ptr->fsuid, current_task_ptr->fsgid);
         if (r < 0) { frame->rax = (uint64_t)r; return; }
         file = read_initrd(abs_path);
     }
@@ -2345,7 +2529,7 @@ void sys_stat(syscall_frame_t *frame) {
     abs_path[sizeof(abs_path) - 1] = '\0';
 
     struct stat kst = {0};
-    if (stat_virtual_device(abs_path, &kst) || stat_tmpfs_to_kst(abs_path, &kst, true)) {
+    if (stat_virtual_device(abs_path, &kst) || stat_tmpfs_to_kst(abs_path, &kst, true) || stat_ext4_to_kst(abs_path, &kst, true)) {
         write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
         frame->rax = 0;
         return;
@@ -2356,18 +2540,7 @@ void sys_stat(syscall_frame_t *frame) {
         return;
     }
 
-    initrd_file_t file = read_initrd(abs_path);
-    if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
-
-    kst.st_mode = file.mode;
-    kst.st_uid = file.uid;
-    kst.st_gid = file.gid;
-    kst.st_size = file.size;
-    kst.st_blocks = (file.size + 511) / 512;
-    kst.st_blksize = 4096;
-    kst.st_nlink = 1;
-    kst.st_dev   = 1;
-    kst.st_ino   = file.inode;
+    if (!stat_initrd_to_kst(abs_path, &kst, true)) { frame->rax = (uint64_t)-ENOENT; return; }
 
     write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
     frame->rax = 0;
@@ -2404,17 +2577,8 @@ void sys_fstat(syscall_frame_t *frame) {
     }
 
     if (entry->type == FD_FILE) {
-        initrd_file_t file = read_initrd(entry->path);
         struct stat kst = {0};
-        kst.st_mode = file.mode;
-        kst.st_uid = file.uid;
-        kst.st_gid = file.gid;
-        kst.st_size = file.size;
-        kst.st_blocks = (file.size + 511) / 512;
-        kst.st_blksize = 4096;
-        kst.st_nlink = 1;
-        kst.st_dev   = 1;
-        kst.st_ino   = file.inode;
+        if (!stat_initrd_to_kst(entry->path, &kst, true)) { frame->rax = (uint64_t)-ENOENT; return; }
         write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
         frame->rax = 0;
         return;
@@ -2426,6 +2590,14 @@ void sys_fstat(syscall_frame_t *frame) {
             frame->rax = 0;
             return;
         }
+    }
+    if (entry->type == FD_EXT4) {
+        struct stat kst = {0};
+        int status = stat_ext4(entry->path, &kst, true);
+        if (status < 0) { frame->rax = (uint64_t)status; return; }
+        write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
+        frame->rax = 0;
+        return;
     }
     if (entry->type == FD_PROC) {
         struct stat kst = {0};
@@ -2466,7 +2638,7 @@ void sys_lstat(syscall_frame_t *frame) {
     }
 
     struct stat kst = {0};
-    if (stat_virtual_device(abs_path, &kst) || stat_tmpfs_to_kst(abs_path, &kst, false)) {
+    if (stat_virtual_device(abs_path, &kst) || stat_tmpfs_to_kst(abs_path, &kst, false) || stat_ext4_to_kst(abs_path, &kst, false)) {
         write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
         frame->rax = 0;
         return;
@@ -2477,18 +2649,7 @@ void sys_lstat(syscall_frame_t *frame) {
         return;
     }
 
-    initrd_file_t file = stat_initrd_nofollow(abs_path);
-    if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
-
-    kst.st_mode = file.mode;
-    kst.st_uid = file.uid;
-    kst.st_gid = file.gid;
-    kst.st_size = file.size;
-    kst.st_blocks = (file.size + 511) / 512;
-    kst.st_blksize = 4096;
-    kst.st_nlink = 1;
-    kst.st_dev   = 1;
-    kst.st_ino   = file.inode;
+    if (!stat_initrd_to_kst(abs_path, &kst, false)) { frame->rax = (uint64_t)-ENOENT; return; }
 
     write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
     frame->rax = 0;
@@ -2539,6 +2700,12 @@ void sys_poll(syscall_frame_t *frame) {
                     } else { \
                         k_fds[i].revents |= POLLIN; \
                     } \
+                } else if (entry->type == FD_PIPE) { \
+                    unix_handle_t *h = (unix_handle_t *)entry->handle; \
+                    if (h && h->in && (h->in->len > 0 || h->in->writers == 0)) k_fds[i].revents |= POLLIN; \
+                } else if (entry->type == FD_SOCKET) { \
+                    poll_net_device(); \
+                    if (is_socket_readable((socket_t *)entry->handle)) k_fds[i].revents |= POLLIN; \
                 } else { \
                     k_fds[i].revents |= POLLIN; \
                 } \
@@ -2617,6 +2784,12 @@ void sys_lseek(syscall_frame_t *frame) {
         tmpfs_file_t file = read_tmpfs(entry->path);
         if (!file.mode) { frame->rax = -ENOENT; return; }
         file_size = (int64_t)file.size;
+    } else if (entry->type == FD_EXT4) {
+        struct stat st;
+        int status = stat_ext4(entry->path, &st, true);
+        if (status < 0) { frame->rax = status; return; }
+        if (st.st_size < 0) { frame->rax = -EOVERFLOW; return; }
+        file_size = st.st_size;
     } else {
         initrd_file_t file = read_initrd(entry->path);
         if (!file.mode) { frame->rax = -ENOENT; return; }
@@ -2673,7 +2846,9 @@ void sys_mmap(syscall_frame_t *frame) {
 
     // Validate addr if MAP_FIXED or hint provided
     if (addr != 0 && !user_address_range_ok(addr, length)) { frame->rax = (uint64_t)-EINVAL; return; }
-    if ((flags & MAP_FIXED) && (addr & (PAGE_SIZE - 1))) { frame->rax = (uint64_t)-EINVAL; return; }
+    bool fixed = (flags & MAP_FIXED) != 0;
+    bool fixed_noreplace = (flags & MAP_FIXED_NOREPLACE) != 0;
+    if ((fixed || fixed_noreplace) && (addr & (PAGE_SIZE - 1))) { frame->rax = (uint64_t)-EINVAL; return; }
 
     // Reject W+X mappings (W^X policy)
     if ((prot & PROT_WRITE) && (prot & PROT_EXEC)) {
@@ -2688,6 +2863,10 @@ void sys_mmap(syscall_frame_t *frame) {
     struct limine_framebuffer *mapped_fb = NULL;
     if (!(flags & MAP_ANONYMOUS) && fd >= 0) {
         fd_entry_t *entry = get_current_fd(fd);
+        if (entry && entry->type == FD_EXT4 && (flags & MAP_SHARED) && (prot & PROT_WRITE)) {
+            frame->rax = (uint64_t)-EACCES;
+            return;
+        }
         char rel[256];
         if (entry && entry->type == FD_DEV && is_mounted_under(entry->path, "devtmpfs", rel) && rel[0] == 'f' && rel[1] == 'b' && rel[2] >= '0' && rel[2] <= '9' && rel[3] == '\0') {
             requested_fb = true;
@@ -2708,7 +2887,11 @@ void sys_mmap(syscall_frame_t *frame) {
     if (flags & MAP_SHARED) vmm_flags |= VMM_SHARED;
 
     void *ptr = NULL;
-    if (flags & MAP_FIXED) {
+    if (fixed_noreplace && user_range_is_mapped(current_task_ptr->ctx, addr, num_pages * PAGE_SIZE)) {
+        frame->rax = (uint64_t)-EEXIST;
+        return;
+    }
+    if (fixed || fixed_noreplace) {
         // MAP_FIXED must *replace* any existing mapping in [addr, addr+size):
         // POSIX/Linux semantics are that the old mappings are discarded, not
         // merged.  ld.so relies on this when it overlays an anonymous
@@ -2727,8 +2910,9 @@ void sys_mmap(syscall_frame_t *frame) {
                 unmap_vmm(current_task_ptr->ctx, a);
         }
         ptr = vmap_user_at(current_task_ptr->ctx, addr, num_pages * PAGE_SIZE, vmm_flags);
-    } else if (addr != 0) {
-        // Hint: try to map at addr, if fails, fallback to auto
+    } else if ((flags & MAP_32BIT) && addr == 0) {
+        ptr = vmap_user_range_32(current_task_ptr->ctx, num_pages * PAGE_SIZE, vmm_flags);
+    } else if (addr != 0 && !user_range_is_mapped(current_task_ptr->ctx, addr, num_pages * PAGE_SIZE)) {
         ptr = vmap_user_at(current_task_ptr->ctx, addr & ~(PAGE_SIZE - 1), num_pages * PAGE_SIZE, vmm_flags);
         if (!ptr) ptr = vmap_user_range(current_task_ptr->ctx, num_pages * PAGE_SIZE, vmm_flags);
     } else {
@@ -2795,8 +2979,26 @@ void sys_mmap(syscall_frame_t *frame) {
             return;
         }
 
-        initrd_file_t file = read_initrd(entry->path);
-        if (file.data) {
+        if (entry->type == FD_EXT4) {
+            uint8_t *chunk = malloc(65536);
+            if (!chunk) { frame->rax = (uint64_t)-ENOMEM; return; }
+            uint64_t copied = 0;
+            uint64_t map_size = num_pages * PAGE_SIZE;
+            while (copied < map_size) {
+                uint64_t amount = map_size - copied;
+                if (amount > 65536) amount = 65536;
+                int64_t got = read_ext4(entry->path, chunk, amount, offset + copied);
+                if (got < 0) { free(chunk); frame->rax = (uint64_t)got; return; }
+                if (got == 0) break;
+                write_vmm(current_task_ptr->ctx, (uint64_t)ptr + copied,
+                          chunk, (uint64_t)got);
+                copied += (uint64_t)got;
+                if ((uint64_t)got < amount) break;
+            }
+            free(chunk);
+        } else {
+            initrd_file_t file = read_initrd(entry->path);
+            if (file.data) {
             // Validate offset is within file bounds to prevent out-of-bounds read
             if (offset >= file.size && file.size > 0) {
                 // Nothing to copy, mapping is zero-filled
@@ -2808,6 +3010,7 @@ void sys_mmap(syscall_frame_t *frame) {
             }
             // Zero the remaining bytes (BSS-like) is already handled by vmap_user_at/vmalloc_ex
             // which zeroed the newly allocated pages.
+            }
         }
     }
 
@@ -2904,12 +3107,16 @@ void sys_brk(syscall_frame_t *frame) {
             if (get_vmm_phys(current_task_ptr->ctx, a) == 0) {
                 void *page = pmalloc();
                 if (!page) {
-                    // OOM - return current brk without updating
+                    for (uint64_t rollback = old_brk; rollback < a; rollback += PAGE_SIZE) unmap_vmm(current_task_ptr->ctx, rollback);
                     frame->rax = current_task_ptr->brk;
                     return;
                 }
-                map_vmm(current_task_ptr->ctx, a, (uint64_t)page,
-                        VMM_USER | VMM_WRITABLE | VMM_NX);
+                if (!map_vmm(current_task_ptr->ctx, a, (uint64_t)page, VMM_USER | VMM_WRITABLE | VMM_NX)) {
+                    pfree(page);
+                    for (uint64_t rollback = old_brk; rollback < a; rollback += PAGE_SIZE) unmap_vmm(current_task_ptr->ctx, rollback);
+                    frame->rax = current_task_ptr->brk;
+                    return;
+                }
                 memset_vmm(current_task_ptr->ctx, a, 0, 4096);
             }
         }
@@ -2926,7 +3133,7 @@ void sys_rt_sigaction(syscall_frame_t *frame) {
     uint64_t act_ptr = frame->rsi;
     uint64_t oldact_ptr = frame->rdx;
 
-    if (signum < 1 || signum > 31) {
+    if (signum < 1 || signum > 31 || (act_ptr && (signum == SIGKILL || signum == SIGSTOP))) {
         frame->rax = (uint64_t)-EINVAL;
         return;
     }
@@ -2980,17 +3187,19 @@ void sys_rt_sigprocmask(syscall_frame_t *frame) {
 
 void sys_rt_sigreturn(syscall_frame_t *frame) {
     uint64_t user_rsp = frame->rsp;
-    syscall_frame_t saved_frame;
-    if (user_rsp > USER_ADDR_MAX - 16 || copy_from_user(&saved_frame, (const void *)(user_rsp + 16), sizeof(saved_frame)) < 0) {
+    signal_stack_frame_t saved;
+    if (user_rsp > USER_ADDR_MAX - 16 || copy_from_user(&saved, (const void *)(user_rsp + 16), sizeof(saved)) < 0) {
         frame->rax = (uint64_t)-EFAULT;
         return;
     }
-    if (saved_frame.rcx >= USER_ADDR_MAX || saved_frame.rsp >= USER_ADDR_MAX) {
+    syscall_frame_t saved_frame = saved.context;
+    if (saved_frame.rip >= USER_ADDR_MAX || saved_frame.rsp >= USER_ADDR_MAX) {
         frame->rax = (uint64_t)-EFAULT;
         return;
     }
-    saved_frame.r11 &= ~((3ULL << 12) | (1ULL << 14) | (1ULL << 16) | (1ULL << 17));
-    saved_frame.r11 |= 1ULL << 1;
+    saved_frame.rflags &= ~((3ULL << 12) | (1ULL << 14) | (1ULL << 16) | (1ULL << 17));
+    saved_frame.rflags |= 1ULL << 1;
+    current_task_ptr->blocked_signals = saved.blocked_signals & ~((1ULL << (SIGKILL - 1)) | (1ULL << (SIGSTOP - 1)));
     *frame = saved_frame;
 }
 
@@ -3000,6 +3209,69 @@ void sys_ioctl(syscall_frame_t *frame) {
     uint64_t argp = frame->rdx;
 
     fd_entry_t *entry = get_current_fd(fd);
+
+    if (entry && entry->type == FD_SOCKET) {
+        static short interface_flags = IFF_UP | IFF_BROADCAST | IFF_RUNNING | IFF_MULTICAST;
+        static int interface_mtu = 1500;
+
+        if (req == SIOCADDRT || req == SIOCDELRT) {
+            struct rtentry route;
+            if (copy_from_user(&route, (const void *)argp, sizeof(route)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+            if (req == SIOCADDRT && (route.rt_flags & RTF_GATEWAY)) memcpy(&net_gateway_ip, route.rt_gateway.sa_data + 2, sizeof(net_gateway_ip));
+            if (req == SIOCDELRT) net_gateway_ip = 0;
+            frame->rax = 0;
+            return;
+        }
+
+        if (req >= SIOCGIFNAME && req <= SIOCGIFINDEX) {
+            struct ifreq ifr;
+            if (copy_from_user(&ifr, (const void *)argp, sizeof(ifr)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+            ifr.ifr_name[IFNAMSIZ - 1] = '\0';
+            if (req == SIOCGIFNAME) {
+                if (ifr.ifr_ifindex != 1) { frame->rax = (uint64_t)-ENODEV; return; }
+                strncpy(ifr.ifr_name, "eth0", IFNAMSIZ);
+            } else if (strcmp(ifr.ifr_name, "eth0") != 0) {
+                frame->rax = (uint64_t)-ENODEV;
+                return;
+            } else if (req == SIOCGIFINDEX) {
+                ifr.ifr_ifindex = 1;
+            } else if (req == SIOCGIFHWADDR) {
+                if (!net_current_device) { frame->rax = (uint64_t)-ENODEV; return; }
+                ifr.ifr_hwaddr.sa_family = ARPHRD_ETHER;
+                memcpy(ifr.ifr_hwaddr.sa_data, net_current_device->mac, 6);
+            } else if (req == SIOCGIFFLAGS) {
+                ifr.ifr_flags = interface_flags;
+            } else if (req == SIOCSIFFLAGS) {
+                interface_flags = ifr.ifr_flags;
+            } else if (req == SIOCGIFADDR) {
+                ifr.ifr_addr.sa_family = AF_INET;
+                memcpy(ifr.ifr_addr.sa_data + 2, &net_local_ip, sizeof(net_local_ip));
+            } else if (req == SIOCSIFADDR) {
+                memcpy(&net_local_ip, ifr.ifr_addr.sa_data + 2, sizeof(net_local_ip));
+            } else if (req == SIOCGIFNETMASK) {
+                ifr.ifr_netmask.sa_family = AF_INET;
+                memcpy(ifr.ifr_netmask.sa_data + 2, &net_subnet_mask, sizeof(net_subnet_mask));
+            } else if (req == SIOCSIFNETMASK) {
+                memcpy(&net_subnet_mask, ifr.ifr_netmask.sa_data + 2, sizeof(net_subnet_mask));
+            } else if (req == SIOCGIFBRDADDR) {
+                uint32_t broadcast = net_local_ip | ~net_subnet_mask;
+                ifr.ifr_broadaddr.sa_family = AF_INET;
+                memcpy(ifr.ifr_broadaddr.sa_data + 2, &broadcast, sizeof(broadcast));
+            } else if (req == SIOCSIFBRDADDR) {
+            } else if (req == SIOCGIFMTU) {
+                ifr.ifr_mtu = interface_mtu;
+            } else if (req == SIOCSIFMTU) {
+                if (ifr.ifr_mtu < 68 || ifr.ifr_mtu > 1500) { frame->rax = (uint64_t)-EINVAL; return; }
+                interface_mtu = ifr.ifr_mtu;
+            } else {
+                frame->rax = (uint64_t)-EINVAL;
+                return;
+            }
+            if (copy_to_user((void *)argp, &ifr, sizeof(ifr)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+            frame->rax = 0;
+            return;
+        }
+    }
 
     // Handle framebuffer ioctl requests
     if (entry && entry->type == FD_DEV) {
@@ -3441,6 +3713,18 @@ void sys_pread64(syscall_frame_t *frame) {
 
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type == FD_EXT4) {
+        if (count == 0) { frame->rax = 0; return; }
+        if (count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
+        uint8_t *kbuf = malloc(count);
+        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
+        int64_t got = read_ext4(entry->path, kbuf, count, offset);
+        if (got >= 0)
+            write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, (uint64_t)got);
+        free(kbuf);
+        frame->rax = (uint64_t)got;
+        return;
+    }
     if (entry->type != FD_FILE) { frame->rax = (uint64_t)-ESPIPE; return; }
 
     initrd_file_t file = read_initrd(entry->path);
@@ -3534,41 +3818,54 @@ void sys_writev(syscall_frame_t *frame) {
     frame->rax = total;
 }
 
-void sys_access(syscall_frame_t *frame) {
-    const char *user_path = (const char *)frame->rdi;
-    int mode = (int)frame->rsi;
-
-    if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
-    if (mode & ~(R_OK | W_OK | X_OK)) { frame->rax = (uint64_t)-EINVAL; return; }
-
-    char path[256];
-    int cr = copy_string_from_user(path, user_path, sizeof(path));
-    if (cr < 0) { frame->rax = (uint64_t)cr; return; }
-
-    char abs_path[256];
-    build_abs_path(path, abs_path, sizeof(abs_path));
-
+static int check_path_access(const char *path, const char *abs_path, int mode, bool follow) {
     int want_read = (mode & R_OK) != 0;
     int want_write = (mode & W_OK) != 0;
     int want_exec = (mode & X_OK) != 0;
 
     struct stat kst = {0};
-    if (stat_virtual_device(abs_path, &kst) || stat_tmpfs_to_kst(abs_path, &kst, true) || stat_proc(abs_path, path, &kst, true)) {
-        if (mode == F_OK || can_access_stat_mode(&kst, want_read, want_write, want_exec)) {
-            frame->rax = 0;
-        } else {
-            frame->rax = (uint64_t)-EACCES;
-        }
-        return;
+    if (stat_virtual_device(abs_path, &kst) || stat_tmpfs_to_kst(abs_path, &kst, follow) || stat_ext4_to_kst(abs_path, &kst, follow) || stat_proc(abs_path, path, &kst, follow)) {
+        if (want_write && check_ext4_path(abs_path)) return -EROFS;
+        return mode == F_OK || can_access_stat_mode(&kst, want_read, want_write,
+                                                    want_exec) ? 0 : -EACCES;
     }
 
-    initrd_file_t file = read_initrd(abs_path);
-    if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
-    if (mode == F_OK || can_access_initrd(&file, want_read, want_write, want_exec)) {
-        frame->rax = 0;
-    } else {
-        frame->rax = (uint64_t)-EACCES;
-    }
+    initrd_file_t file = follow ? stat_initrd(abs_path) : stat_initrd_nofollow(abs_path);
+    if (!file.mode) return -ENOENT;
+    return mode == F_OK || can_access_initrd(&file, want_read, want_write,
+                                             want_exec) ? 0 : -EACCES;
+}
+
+static int check_access_at(int dirfd, const char *user_path, int mode, int flags) {
+    if (!user_path) return -EFAULT;
+    if (mode & ~(R_OK | W_OK | X_OK)) return -EINVAL;
+    if (flags & ~(AT_EACCESS | AT_SYMLINK_NOFOLLOW)) return -EINVAL;
+
+    char path[256];
+    int status = copy_string_from_user(path, user_path, sizeof(path));
+    if (status < 0) return status;
+    if (!path[0]) return -ENOENT;
+
+    char abs_path[256];
+    status = build_abs_path_at(dirfd, path, abs_path, sizeof(abs_path));
+    if (status < 0) return status;
+    return check_path_access(path, abs_path, mode,
+                             !(flags & AT_SYMLINK_NOFOLLOW));
+}
+
+void sys_access(syscall_frame_t *frame) {
+    frame->rax = (uint64_t)check_access_at(AT_FDCWD,
+        (const char *)frame->rdi, (int)frame->rsi, AT_EACCESS);
+}
+
+void sys_faccessat(syscall_frame_t *frame) {
+    frame->rax = (uint64_t)check_access_at((int)frame->rdi,
+        (const char *)frame->rsi, (int)frame->rdx, AT_EACCESS);
+}
+
+void sys_faccessat2(syscall_frame_t *frame) {
+    frame->rax = (uint64_t)check_access_at((int)frame->rdi,
+        (const char *)frame->rsi, (int)frame->rdx, (int)frame->r10);
 }
 
 void sys_pipe(syscall_frame_t *frame) {
@@ -3714,59 +4011,86 @@ void sys_dup2(syscall_frame_t *frame) {
     frame->rax = (uint64_t)newfd;
 }
 
-void sys_nanosleep(syscall_frame_t *frame) {
-    struct timespec *req = (struct timespec *)frame->rdi;
-    struct timespec *rem = (struct timespec *)frame->rsi;
-    
-    if (!req) { frame->rax = (uint64_t)-EINVAL; return; }
-    if (!user_range_ok(current_task_ptr->ctx, (uint64_t)req, sizeof(struct timespec))) { frame->rax = (uint64_t)-EFAULT; return; }
-
-    struct timespec ts;
-    read_vmm(current_task_ptr->ctx, &ts, (uint64_t)req, sizeof(struct timespec));
-
-    // Validate: tv_nsec must be in [0, 999999999] and tv_sec must be non-negative
-    if (ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000L || ts.tv_sec < 0) {
-        frame->rax = (uint64_t)-EINVAL; return;
+static int sleep_clock_status(int clock_id) {
+    switch (clock_id) {
+    case CLOCK_REALTIME:
+    case CLOCK_MONOTONIC:
+    case CLOCK_BOOTTIME:
+        return 0;
+    case CLOCK_PROCESS_CPUTIME_ID:
+    case CLOCK_THREAD_CPUTIME_ID:
+    case CLOCK_MONOTONIC_RAW:
+    case CLOCK_REALTIME_COARSE:
+    case CLOCK_MONOTONIC_COARSE:
+    case CLOCK_REALTIME_ALARM:
+    case CLOCK_BOOTTIME_ALARM:
+    case CLOCK_TAI:
+        return -EOPNOTSUPP;
+    default:
+        return -EINVAL;
     }
-    
-    // Cap sleep at ~292 years to prevent integer overflow in µs calculation
-    if (ts.tv_sec > 9000000000LL) { ts.tv_sec = 9000000000LL; }
-    
-    uint64_t total_us = ((uint64_t)ts.tv_sec * 1000000ULL) + (uint64_t)(ts.tv_nsec / 1000);
-    uint64_t start_time = hpet_elapsed_us();
+}
 
-    // Loop until the requested time has actually elapsed
-    while (hpet_elapsed_us() - start_time < total_us) {
+static ktime_t sleep_clock_now_ns(int clock_id) {
+    uint64_t now_us = clock_id == CLOCK_REALTIME ? time_get_realtime_us() : hpet_elapsed_us();
+    if (now_us >= (uint64_t)INT64_MAX / 1000ULL) return INT64_MAX;
+    return (ktime_t)(now_us * 1000ULL);
+}
+
+static ktime_t sleep_timespec_to_ns(const struct timespec *time) {
+    if ((uint64_t)time->tv_sec >= (uint64_t)(INT64_MAX / 1000000000LL)) return INT64_MAX;
+    return (ktime_t)time->tv_sec * 1000000000LL + time->tv_nsec;
+}
+
+static ktime_t sleep_ns_add(ktime_t left, ktime_t right) {
+    if (right > INT64_MAX - left) return INT64_MAX;
+    return left + right;
+}
+
+static struct timespec sleep_ns_to_timespec(ktime_t ns) {
+    struct timespec result = { .tv_sec = ns / 1000000000LL, .tv_nsec = ns % 1000000000LL };
+    return result;
+}
+
+static int do_clock_nanosleep(int clock_id, int flags, const struct timespec *req, struct timespec *rem) {
+    int clock_status = sleep_clock_status(clock_id);
+    if (clock_status < 0) return clock_status;
+    if (flags & ~TIMER_ABSTIME) return -EINVAL;
+
+    struct timespec request;
+    if (!req || copy_from_user(&request, req, sizeof(request)) < 0) return -EFAULT;
+    if (request.tv_sec < 0 || request.tv_nsec < 0 || request.tv_nsec >= 1000000000L) return -EINVAL;
+
+    bool absolute = (flags & TIMER_ABSTIME) != 0;
+    int wait_clock = absolute ? clock_id : CLOCK_MONOTONIC;
+    ktime_t request_ns = sleep_timespec_to_ns(&request);
+    ktime_t deadline = absolute ? request_ns : sleep_ns_add(sleep_clock_now_ns(wait_clock), request_ns);
+
+    while (sleep_clock_now_ns(wait_clock) < deadline) {
         if (signal_pending()) {
-            if (rem) {
-                uint64_t elapsed = hpet_elapsed_us() - start_time;
-                uint64_t remaining_us = total_us > elapsed ? total_us - elapsed : 0;
-                struct timespec r = { 
-                    .tv_sec = remaining_us / 1000000, 
-                    .tv_nsec = (remaining_us % 1000000) * 1000 
-                };
-                if (user_range_ok(current_task_ptr->ctx, (uint64_t)rem, sizeof(struct timespec))) {
-                    write_vmm(current_task_ptr->ctx, (uint64_t)rem, &r, sizeof(struct timespec));
-                }
+            if (!absolute && rem) {
+                ktime_t now = sleep_clock_now_ns(wait_clock);
+                struct timespec remaining = sleep_ns_to_timespec(now < deadline ? deadline - now : 0);
+                if (copy_to_user(rem, &remaining, sizeof(remaining)) < 0) return -EFAULT;
             }
-            frame->rax = (uint64_t)-EINTR;
-            return;
+            return -EINTR;
         }
 
         current_task_ptr->state = TASK_READY;
-        
         spin_unlock(&sched_lock);
-        __asm__ volatile("int $32"); 
+        __asm__ volatile("int $32");
         spin_lock(&sched_lock);
     }
 
-    if (rem) {
-        if (!user_range_ok(current_task_ptr->ctx, (uint64_t)rem, sizeof(struct timespec))) { frame->rax = (uint64_t)-EFAULT; return; }
-        struct timespec zero_ts = {0, 0};
-        write_vmm(current_task_ptr->ctx, (uint64_t)rem, &zero_ts, sizeof(struct timespec));
-    }
+    return 0;
+}
 
-    frame->rax = 0;
+void sys_nanosleep(syscall_frame_t *frame) {
+    frame->rax = (uint64_t)do_clock_nanosleep(CLOCK_MONOTONIC, 0, (const struct timespec *)frame->rdi, (struct timespec *)frame->rsi);
+}
+
+void sys_clock_nanosleep(syscall_frame_t *frame) {
+    frame->rax = (uint64_t)do_clock_nanosleep((int)frame->rdi, (int)frame->rsi, (const struct timespec *)frame->rdx, (struct timespec *)frame->r10);
 }
 
 void sys_getitimer(syscall_frame_t *frame) {
@@ -4290,6 +4614,64 @@ void sys_socketpair(syscall_frame_t *frame) {
     frame->rax = 0;
 }
 
+void sys_setsockopt(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    int level = (int)frame->rsi;
+    int optname = (int)frame->rdx;
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
+    if (level != SOL_SOCKET) { frame->rax = (uint64_t)-ENOPROTOOPT; return; }
+    switch (optname) {
+        case SO_REUSEADDR:
+        case SO_KEEPALIVE:
+        case SO_BROADCAST:
+        case SO_LINGER:
+            frame->rax = 0;
+            return;
+        case SO_BINDTODEVICE: {
+            const char *name = (const char *)frame->r10;
+            socklen_t length = (socklen_t)frame->r8;
+            char interface[IFNAMSIZ];
+            if (!name || length == 0 || length > IFNAMSIZ) { frame->rax = (uint64_t)-EINVAL; return; }
+            memset(interface, 0, sizeof(interface));
+            if (copy_from_user(interface, name, length) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+            interface[IFNAMSIZ - 1] = '\0';
+            if (strcmp(interface, "eth0") != 0) { frame->rax = (uint64_t)-ENODEV; return; }
+            frame->rax = 0;
+            return;
+        }
+        default:
+            frame->rax = (uint64_t)-ENOPROTOOPT;
+            return;
+    }
+}
+
+void sys_getsockopt(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    int level = (int)frame->rsi;
+    int optname = (int)frame->rdx;
+    int *optval = (int *)frame->r10;
+    uint32_t *optlen = (uint32_t *)frame->r8;
+    fd_entry_t *entry = get_current_fd(fd);
+    int val;
+
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
+    if (level != SOL_SOCKET) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_range_ok(current_task_ptr->ctx, (uint64_t)optval, sizeof(int)) || !user_range_ok(current_task_ptr->ctx, (uint64_t)optlen, sizeof(uint32_t))) {
+        frame->rax = (uint64_t)-EFAULT; return;
+    }
+    if (optname == SO_ERROR) val = get_unix_socket_error((unix_handle_t *)entry->handle);
+    else if (optname == SO_TYPE) val = get_unix_socket_type((unix_handle_t *)entry->handle);
+    else { frame->rax = (uint64_t)-ENOPROTOOPT; return; }
+    write_vmm(current_task_ptr->ctx, (uint64_t)optval, &val, sizeof(int));
+    uint32_t len = sizeof(int);
+    write_vmm(current_task_ptr->ctx, (uint64_t)optlen, &len, sizeof(uint32_t));
+    frame->rax = 0;
+}
+
+
 void sys_clone(syscall_frame_t *frame) {
     uint64_t clone_flags = frame->rdi;
     uint64_t new_stack    = frame->rsi;
@@ -4536,23 +4918,23 @@ void sys_wait4(syscall_frame_t *frame) {
 
         for (int i = 0; i < MAX_TASKS; i++) {
             // Only care about children of the current task
-            if (!tasks[i].state || tasks[i].ppid != current_task_ptr->pid) continue;
+            if (!tasks[i]->state || tasks[i]->ppid != current_task_ptr->pid) continue;
 
-            if (pid > 0 && tasks[i].pid != pid) continue;
-            if (pid == 0 && tasks[i].pgid != current_task_ptr->pgid) continue;
-            if (pid < -1 && tasks[i].pgid != -pid) continue;
+            if (pid > 0 && tasks[i]->pid != pid) continue;
+            if (pid == 0 && tasks[i]->pgid != current_task_ptr->pgid) continue;
+            if (pid < -1 && tasks[i]->pgid != -pid) continue;
 
             found_child = 1;
 
-            if (tasks[i].state == TASK_ZOMBIE) {
+            if (tasks[i]->state == TASK_ZOMBIE) {
                 // Encode wstatus correctly (Linux wait status encoding)
                 int status;
-                if (tasks[i].term_sig != 0) {
+                if (tasks[i]->term_sig != 0) {
                     // Killed by signal: low 7 bits = signal number
-                    status = tasks[i].term_sig & 0x7f;
+                    status = tasks[i]->term_sig & 0x7f;
                 } else {
                     // Normal exit: bits 8-15 = exit code, low byte = 0
-                    status = (tasks[i].exit_status & 0xff) << 8;
+                    status = (tasks[i]->exit_status & 0xff) << 8;
                 }
                 if (wstatus) {
                     write_vmm(current_task_ptr->ctx, (uint64_t)wstatus, &status, sizeof(int));
@@ -4561,22 +4943,22 @@ void sys_wait4(syscall_frame_t *frame) {
                     struct rusage ru = {0};
                     write_vmm(current_task_ptr->ctx, (uint64_t)rusage, &ru, sizeof(struct rusage));
                 }
-                pid_t ret = tasks[i].pid;
-                tasks[i].state = TASK_DEAD;
+                pid_t ret = tasks[i]->pid;
+                release_task_slot(i);
                 frame->rax = (uint64_t)ret;
                 
                 spin_unlock(&sched_lock);
                 return;
             }
 
-            if ((options & WUNTRACED) && tasks[i].state == TASK_STOPPED && tasks[i].stopped_by_signal && !tasks[i].stop_reported) {
+            if ((options & WUNTRACED) && tasks[i]->state == TASK_STOPPED && tasks[i]->stopped_by_signal && !tasks[i]->stop_reported) {
                 // Report stopped child (bits 8-15 = stop signal, low byte = 0x7f)
                 int status = (SIGTSTP << 8) | 0x7f;
                 if (wstatus) {
                     write_vmm(current_task_ptr->ctx, (uint64_t)wstatus, &status, sizeof(int));
                 }
-                tasks[i].stop_reported = 1;
-                frame->rax = (uint64_t)tasks[i].pid;
+                tasks[i]->stop_reported = 1;
+                frame->rax = (uint64_t)tasks[i]->pid;
                 
                 spin_unlock(&sched_lock);
                 return;
@@ -4634,8 +5016,8 @@ void sys_kill(syscall_frame_t *frame) {
     if (pid > 0) {
         // Send to specific process
         for (int i = 0; i < MAX_TASKS; i++) {
-            if (tasks[i].state != TASK_DEAD && tasks[i].pid == pid) {
-                if (current_task_ptr->euid != 0 && current_task_ptr->uid != tasks[i].uid) {
+            if (tasks[i]->state != TASK_DEAD && tasks[i]->pid == pid) {
+                if (current_task_ptr->euid != 0 && current_task_ptr->uid != tasks[i]->uid) {
                     frame->rax = (uint64_t)-EPERM; return;
                 }
                 if (pid == 1 && sig != 0 && current_task_ptr->euid != 0) { frame->rax = (uint64_t)-EPERM; return; }
@@ -4654,10 +5036,10 @@ void sys_kill(syscall_frame_t *frame) {
         pid_t my_pgrp = current_task_ptr->pgid;
         int found = 0;
         for (int i = 0; i < MAX_TASKS; i++) {
-            if (tasks[i].state == TASK_DEAD) continue;
-            if (tasks[i].pgid != my_pgrp) continue;
+            if (tasks[i]->state == TASK_DEAD) continue;
+            if (tasks[i]->pgid != my_pgrp) continue;
             if (sig == 0) { found = 1; continue; }
-            if (current_task_ptr->euid != 0 && current_task_ptr->uid != tasks[i].uid) continue;
+            if (current_task_ptr->euid != 0 && current_task_ptr->uid != tasks[i]->uid) continue;
             deliver_sig_to_task(i, sig);
             found = 1;
         }
@@ -4669,9 +5051,9 @@ void sys_kill(syscall_frame_t *frame) {
         // Send to every process the caller may signal (all except PID 1)
         int found = 0;
         for (int i = 0; i < MAX_TASKS; i++) {
-            if (tasks[i].state == TASK_DEAD) continue;
-            if (tasks[i].pid == 1 || tasks[i].pid == current_task_ptr->pid) continue;
-            if (current_task_ptr->euid != 0 && current_task_ptr->uid != tasks[i].uid) continue;
+            if (tasks[i]->state == TASK_DEAD) continue;
+            if (tasks[i]->pid == 1 || tasks[i]->pid == current_task_ptr->pid) continue;
+            if (current_task_ptr->euid != 0 && current_task_ptr->uid != tasks[i]->uid) continue;
             if (sig != 0) deliver_sig_to_task(i, sig);
             found = 1;
         }
@@ -4683,9 +5065,9 @@ void sys_kill(syscall_frame_t *frame) {
     pid_t target_pgrp = -pid;
     int found = 0;
     for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].state == TASK_DEAD) continue;
-        if (tasks[i].pgid != target_pgrp) continue;
-        if (current_task_ptr->euid != 0 && current_task_ptr->uid != tasks[i].uid) continue;
+        if (tasks[i]->state == TASK_DEAD) continue;
+        if (tasks[i]->pgid != target_pgrp) continue;
+        if (current_task_ptr->euid != 0 && current_task_ptr->uid != tasks[i]->uid) continue;
         if (sig != 0) deliver_sig_to_task(i, sig);
         found = 1;
     }
@@ -4785,7 +5167,7 @@ void sys_fcntl(syscall_frame_t *frame) {
         case F_GETLK:
         case F_SETLK:
         case F_SETLKW: {
-            if (entry->type != FD_FILE && entry->type != FD_TMPFS) { frame->rax = (uint64_t)-EBADF; return; }
+            if (entry->type != FD_FILE && entry->type != FD_TMPFS && entry->type != FD_EXT4) { frame->rax = (uint64_t)-EBADF; return; }
             struct flock lock;
             if (copy_from_user(&lock, (const void *)arg, sizeof(lock)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
             if (lock.l_type != F_RDLCK && lock.l_type != F_WRLCK && lock.l_type != F_UNLCK) { frame->rax = (uint64_t)-EINVAL; return; }
@@ -4823,7 +5205,7 @@ void sys_flock(syscall_frame_t *frame) {
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
 
-    if (entry->type != FD_FILE && entry->type != FD_TMPFS) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type != FD_FILE && entry->type != FD_TMPFS && entry->type != FD_EXT4) { frame->rax = (uint64_t)-EBADF; return; }
 
     int op = operation & ~LOCK_NB;
     if (op != LOCK_SH && op != LOCK_EX && op != LOCK_UN) { frame->rax = (uint64_t)-EINVAL; return; }
@@ -4850,6 +5232,7 @@ void sys_fdatasync(syscall_frame_t *frame) {
 
 // Helper: truncate a path (initrd or tmpfs) to 'length' bytes.
 static int do_truncate_path(const char *abs_path, uint64_t length) {
+    if (check_ext4_path(abs_path)) return -EROFS;
     // tmpfs
     if (is_tmpfs_dir(abs_path)) {
         tmpfs_file_t f = stat_tmpfs(abs_path);
@@ -4907,6 +5290,8 @@ void sys_ftruncate(syscall_frame_t *frame) {
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
 
+    if (entry->type == FD_EXT4) { frame->rax = (uint64_t)-EROFS; return; }
+
     // tmpfs: path-based, like initrd below.
     if (entry->type == FD_TMPFS) {
         int r = truncate_tmpfs(entry->path, length);
@@ -4944,6 +5329,35 @@ void sys_getdents(syscall_frame_t *frame) {
     // through a symlink (e.g. /dev-link -> /dev) still matches the correct mount.
     char resolved_path[256];
     resolve_dir_for_readdir(entry->path, resolved_path, sizeof(resolved_path), NULL, 0);
+
+    if (entry->type == FD_EXT4 || check_ext4_path(resolved_path)) {
+        struct stat st;
+        int status = stat_ext4(resolved_path, &st, true);
+        if (status < 0) { frame->rax = (uint64_t)status; return; }
+        if (!S_ISDIR(st.st_mode)) { frame->rax = (uint64_t)-ENOTDIR; return; }
+        if (index == 0) {
+            if (!emit_dirent(bufp, &written, buflen, st.st_ino, 1, DT_DIR, ".")) { frame->rax = written; return; }
+            index = 1; entry->offset = index;
+        }
+        if (index == 1) {
+            if (!emit_dirent(bufp, &written, buflen, st.st_ino, 2, DT_DIR, "..")) { frame->rax = written; return; }
+            index = 2; entry->offset = index;
+        }
+        int child_index = index - 2;
+        while (1) {
+            char child[256];
+            uint8_t child_type;
+            ino_t child_ino;
+            status = get_next_ext4_child(&child_index, resolved_path, child,
+                                         sizeof(child), &child_type, &child_ino);
+            if (status != 0) break;
+            if (!emit_dirent(bufp, &written, buflen, child_ino, (uint64_t)(child_index + 2), child_type, child)) break;
+            index = child_index + 2;
+            entry->offset = index;
+        }
+        frame->rax = written;
+        return;
+    }
 
     // tmpfs directory enumeration (/tmp, /run, ...)  [getdents]
     // Path-based throughout, mirroring the plain initrd enumeration below
@@ -5124,19 +5538,7 @@ void sys_getcwd(syscall_frame_t *frame) {
     frame->rax = cwd_len;
 }
 
-void sys_chdir(syscall_frame_t *frame) {
-    const char *user_path = (const char *)frame->rdi;
-    if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
-
-    char path_buf[256];
-    if (copy_string_from_user(path_buf, user_path, sizeof(path_buf)) < 0) {
-        frame->rax = (uint64_t)-EFAULT; return;
-    }
-
-    char abs_path[256];
-    build_abs_path(path_buf, abs_path, sizeof(abs_path));
-
-    // Fully resolve symlinks so cwd is always canonical
+static int change_working_directory(const char *abs_path) {
     char resolved[256];
     resolve_path_symlinks(abs_path, resolved, sizeof(resolved));
 
@@ -5147,37 +5549,67 @@ void sys_chdir(syscall_frame_t *frame) {
     if (is_procfs_path(resolved)) {
         int self = proc_self_idx();
         proc_node_t n;
-        if (!resolve_procfs(resolved, self, &n)) { frame->rax = (uint64_t)-ENOENT; return; }
-        if (!is_procfs_dir(&n)) { frame->rax = (uint64_t)-ENOTDIR; return; }
+        if (!resolve_procfs(resolved, self, &n)) return -ENOENT;
+        if (!is_procfs_dir(&n)) return -ENOTDIR;
         strncpy(current_task_ptr->cwd, resolved, 255);
         current_task_ptr->cwd[255] = '\0';
-        frame->rax = 0;
-        return;
+        return 0;
     }
 
     // tmpfs directories: validate via tmpfs, then set cwd.
     if (is_tmpfs_dir(resolved)) {
         tmpfs_file_t dir = stat_tmpfs(resolved);
-        if (!dir.mode) { frame->rax = (uint64_t)-ENOENT; return; }
-        if (!S_ISDIR(dir.mode)) { frame->rax = (uint64_t)-ENOTDIR; return; }
+        if (!dir.mode) return -ENOENT;
+        if (!S_ISDIR(dir.mode)) return -ENOTDIR;
         strncpy(current_task_ptr->cwd, resolved, 255);
         current_task_ptr->cwd[255] = '\0';
-        frame->rax = 0;
-        return;
+        return 0;
+    }
+
+    if (check_ext4_path(resolved)) {
+        struct stat st;
+        int status = stat_ext4(resolved, &st, true);
+        if (status < 0) return status;
+        if (!S_ISDIR(st.st_mode)) return -ENOTDIR;
+        if (!can_access_stat_mode(&st, 1, 0, 1)) return -EACCES;
+        strncpy(current_task_ptr->cwd, resolved, 255);
+        current_task_ptr->cwd[255] = '\0';
+        return 0;
     }
 
     initrd_file_t dir = read_initrd(resolved);
-    if (!dir.data && !dir.mode) { frame->rax = (uint64_t)-ENOENT; return; }
-    if ((dir.mode & 0040000) == 0 && strcmp(resolved, "/") != 0) {
-        frame->rax = (uint64_t)-ENOTDIR; return;
-    }
+    if (!dir.data && !dir.mode) return -ENOENT;
+    if ((dir.mode & 0040000) == 0 && strcmp(resolved, "/") != 0) return -ENOTDIR;
 
     strncpy(current_task_ptr->cwd, resolved, 255);
     current_task_ptr->cwd[255] = '\0';
-    frame->rax = 0;
+    return 0;
+}
+
+void sys_chdir(syscall_frame_t *frame) {
+    const char *user_path = (const char *)frame->rdi;
+    if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
+
+    char path_buf[256];
+    if (copy_string_from_user(path_buf, user_path, sizeof(path_buf)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+
+    char abs_path[256];
+    build_abs_path(path_buf, abs_path, sizeof(abs_path));
+    frame->rax = (uint64_t)change_working_directory(abs_path);
+}
+
+void sys_fchdir(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type != FD_FILE && entry->type != FD_TMPFS && entry->type != FD_EXT4 && entry->type != FD_PROC && entry->type != FD_DEV) { frame->rax = (uint64_t)-ENOTDIR; return; }
+
+    int status = change_working_directory(entry->path);
+    frame->rax = (uint64_t)(status == -ENOENT ? -ENOTDIR : status);
 }
 
 static int reject_procfs_mutation(const char *path) {
+    if (check_ext4_path(path)) return -EROFS;
     if (is_procfs_path(path)) return -EROFS;
     return 0;
 }
@@ -5251,7 +5683,7 @@ void sys_mkdir(syscall_frame_t *frame) {
     if (access < 0) { frame->rax = (uint64_t)access; return; }
 
     if (is_tmpfs_dir(abs_path)) {
-        frame->rax = (uint64_t)mkdir_tmpfs(abs_path, mode, current_task_ptr->euid, current_task_ptr->egid);
+        frame->rax = (uint64_t)mkdir_tmpfs(abs_path, mode, current_task_ptr->fsuid, current_task_ptr->fsgid);
         return;
     }
 
@@ -5259,7 +5691,7 @@ void sys_mkdir(syscall_frame_t *frame) {
     initrd_file_t existing = read_initrd(abs_path);
     if (existing.data || existing.mode) { frame->rax = (uint64_t)-EEXIST; return; }
 
-    frame->rax = (uint64_t)mkdir_initrd(abs_path, mode, current_task_ptr->euid, current_task_ptr->egid);
+    frame->rax = (uint64_t)mkdir_initrd(abs_path, mode, current_task_ptr->fsuid, current_task_ptr->fsgid);
 }
 
 void sys_rmdir(syscall_frame_t *frame) {
@@ -5385,11 +5817,11 @@ void sys_symlink(syscall_frame_t *frame) {
     if (access < 0) { frame->rax = (uint64_t)access; return; }
 
     if (is_tmpfs_dir(abs_linkpath_buf)) {
-        frame->rax = (uint64_t)symlink_tmpfs(target_buf, abs_linkpath_buf, current_task_ptr->euid, current_task_ptr->egid);
+        frame->rax = (uint64_t)symlink_tmpfs(target_buf, abs_linkpath_buf, current_task_ptr->fsuid, current_task_ptr->fsgid);
         return;
     }
 
-    frame->rax = (uint64_t)symlink_initrd(target_buf, abs_linkpath_buf, current_task_ptr->euid, current_task_ptr->egid);
+    frame->rax = (uint64_t)symlink_initrd(target_buf, abs_linkpath_buf, current_task_ptr->fsuid, current_task_ptr->fsgid);
 }
 
 void sys_readlink(syscall_frame_t *frame) {
@@ -5447,6 +5879,17 @@ void sys_readlink(syscall_frame_t *frame) {
         return;
     }
 
+    if (check_ext4_path(abs_path)) {
+        char target[256];
+        int tlen = read_ext4_link(abs_path, target, sizeof(target));
+        if (tlen < 0) { frame->rax = (uint64_t)tlen; return; }
+        size_t ulen = (size_t)tlen;
+        if (ulen > bufsiz) ulen = bufsiz;
+        write_vmm(current_task_ptr->ctx, (uint64_t)buf, target, ulen);
+        frame->rax = (uint64_t)ulen;
+        return;
+    }
+
     // Must inspect the symlink itself, not its target.
     initrd_file_t file = stat_initrd_nofollow(abs_path);
     if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
@@ -5470,6 +5913,8 @@ void sys_chmod(syscall_frame_t *frame) {
 
     char abs_path[256];
     get_absolute_path(path_buf, abs_path, sizeof(abs_path));
+
+    if (check_ext4_path(abs_path)) { frame->rax = (uint64_t)-EROFS; return; }
 
     if (is_tmpfs_dir(abs_path)) {
         struct stat tst;
@@ -5495,6 +5940,8 @@ void sys_fchmod(syscall_frame_t *frame) {
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
 
+    if (entry->type == FD_EXT4) { frame->rax = (uint64_t)-EROFS; return; }
+
     // tmpfs file: stat the inode to check ownership, then chmod by path.
     if (entry->type == FD_TMPFS) {
         struct stat tst;
@@ -5516,6 +5963,7 @@ void sys_fchmod(syscall_frame_t *frame) {
 
 static int change_path_ownership(const char *path, uid_t uid, gid_t gid, bool follow) {
     if (current_task_ptr->euid != 0) return -EPERM;
+    if (check_ext4_path(path)) return -EROFS;
     if (is_mounted_under(path, "devtmpfs", NULL) || is_mounted_under(path, "devpts", NULL) || is_procfs_path(path)) return -EPERM;
     if (is_tmpfs_dir(path)) return chown_tmpfs(path, uid, gid, follow);
     return chown_initrd(path, uid, gid, follow);
@@ -5541,7 +5989,7 @@ void sys_fchown(syscall_frame_t *frame) {
     gid_t gid = (gid_t)frame->rdx;
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
-    if (entry->type != FD_FILE && entry->type != FD_TMPFS) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (entry->type != FD_FILE && entry->type != FD_TMPFS && entry->type != FD_EXT4) { frame->rax = (uint64_t)-EINVAL; return; }
     frame->rax = (uint64_t)change_path_ownership(entry->path, uid, gid, true);
 }
 
@@ -5564,6 +6012,21 @@ void sys_umask(syscall_frame_t *frame) {
     mode_t old_mask = current_umask;
     current_umask = mask & 0777;
     frame->rax = (uint64_t)old_mask;
+}
+
+void sys_time(syscall_frame_t *frame) {
+    time_t *result = (time_t *)frame->rdi;
+    time_t seconds = (time_t)(time_get_realtime_us() / 1000000ULL);
+
+    if (result) {
+        if (!user_range_ok(current_task_ptr->ctx, (uint64_t)result, sizeof(*result))) {
+            frame->rax = (uint64_t)-EFAULT;
+            return;
+        }
+        write_vmm(current_task_ptr->ctx, (uint64_t)result, &seconds, sizeof(seconds));
+    }
+
+    frame->rax = (uint64_t)seconds;
 }
 
 void sys_gettimeofday(syscall_frame_t *frame) {
@@ -5616,6 +6079,22 @@ void sys_getrusage(syscall_frame_t *frame) {
     frame->rax = 0;
 }
 
+void sys_sysinfo(syscall_frame_t *frame) {
+    struct sysinfo *user_info = (struct sysinfo *)frame->rdi;
+    if (!user_info || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_info, sizeof(*user_info))) { frame->rax = (uint64_t)-EFAULT; return; }
+
+    struct sysinfo info = {0};
+    info.uptime = (long)(hpet_elapsed_us() / 1000000ULL);
+    get_load_averages(info.loads);
+    info.totalram = get_total_pmm_memory();
+    info.freeram = get_free_pmm_memory();
+    info.procs = get_process_count();
+    info.mem_unit = 1;
+
+    if (copy_to_user(user_info, &info, sizeof(info)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    frame->rax = 0;
+}
+
 void sys_times(syscall_frame_t *frame) {
     tms_t *buf = (tms_t *)frame->rdi;
     uint64_t ticks = hpet_elapsed_us() / 10000ULL;
@@ -5627,6 +6106,69 @@ void sys_times(syscall_frame_t *frame) {
     }
 
     frame->rax = (uint64_t)ticks;
+}
+
+void sys_syslog(syscall_frame_t *frame) {
+    int type = (int)frame->rdi;
+    char *user_buf = (char *)frame->rsi;
+    int size = (int)frame->rdx;
+
+    if (type < SYSLOG_ACTION_CLOSE || type > SYSLOG_ACTION_SIZE_BUFFER) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (type != SYSLOG_ACTION_READ_ALL && type != SYSLOG_ACTION_SIZE_BUFFER && (!current_task_ptr || current_task_ptr->euid != 0)) { frame->rax = (uint64_t)-EPERM; return; }
+
+    switch (type) {
+        case SYSLOG_ACTION_CLOSE:
+        case SYSLOG_ACTION_OPEN:
+            frame->rax = 0;
+            return;
+        case SYSLOG_ACTION_READ:
+        case SYSLOG_ACTION_READ_ALL:
+        case SYSLOG_ACTION_READ_CLEAR: {
+            if (!user_buf || size < 0) { frame->rax = (uint64_t)-EINVAL; return; }
+            if (size && !user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_buf, (uint64_t)size)) { frame->rax = (uint64_t)-EFAULT; return; }
+            size_t capacity = (size_t)size;
+            if (capacity > get_log_capacity()) capacity = get_log_capacity();
+            if (!capacity) { frame->rax = 0; return; }
+            char *buffer = malloc(capacity);
+            if (!buffer) { frame->rax = (uint64_t)-ENOMEM; return; }
+            size_t length;
+            if (type == SYSLOG_ACTION_READ) {
+                while (!(length = read_stream_log(buffer, capacity))) {
+                    if (signal_pending()) { free(buffer); frame->rax = (uint64_t)-EINTR; return; }
+                    current_task_ptr->state = TASK_READY;
+                    spin_unlock(&sched_lock);
+                    __asm__ volatile("int $32");
+                    spin_lock(&sched_lock);
+                }
+            } else {
+                length = type == SYSLOG_ACTION_READ_CLEAR ? read_clear_log(buffer, capacity) : read_log(buffer, capacity);
+            }
+            int result = copy_to_user(user_buf, buffer, length);
+            free(buffer);
+            frame->rax = result < 0 ? (uint64_t)result : length;
+            return;
+        }
+        case SYSLOG_ACTION_CLEAR:
+            clear_log();
+            frame->rax = 0;
+            return;
+        case SYSLOG_ACTION_SIZE_UNREAD:
+            frame->rax = get_log_size();
+            return;
+        case SYSLOG_ACTION_SIZE_BUFFER:
+            frame->rax = get_log_capacity();
+            return;
+        case SYSLOG_ACTION_CONSOLE_OFF:
+        case SYSLOG_ACTION_CONSOLE_ON:
+            control_log_console(type, 0);
+            frame->rax = 0;
+            return;
+        case SYSLOG_ACTION_CONSOLE_LEVEL:
+            if (size < 1 || size > 8) { frame->rax = (uint64_t)-EINVAL; return; }
+            control_log_console(type, size);
+            frame->rax = 0;
+            return;
+    }
 }
 
 void sys_getuid(syscall_frame_t *frame) {
@@ -5643,12 +6185,14 @@ void sys_setuid(syscall_frame_t *frame) {
     if (current_task_ptr && current_task_ptr->euid == 0) {
         current_task_ptr->uid = uid;
         current_task_ptr->euid = uid;
+        current_task_ptr->fsuid = uid;
         frame->rax = 0;
         return;
     }
 
     if (uid == current_task_ptr->uid || uid == current_task_ptr->euid) {
         current_task_ptr->euid = uid;
+        current_task_ptr->fsuid = uid;
         frame->rax = 0;
         return;
     }
@@ -5662,12 +6206,14 @@ void sys_setgid(syscall_frame_t *frame) {
     if (current_task_ptr && current_task_ptr->euid == 0) {
         current_task_ptr->gid = gid;
         current_task_ptr->egid = gid;
+        current_task_ptr->fsgid = gid;
         frame->rax = 0;
         return;
     }
 
     if (gid == current_task_ptr->gid || gid == current_task_ptr->egid) {
         current_task_ptr->egid = gid;
+        current_task_ptr->fsgid = gid;
         frame->rax = 0;
         return;
     }
@@ -5696,8 +6242,8 @@ void sys_setpgid(syscall_frame_t *frame) {
     // Find the target task
     task_t *target = NULL;
     for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].state != TASK_DEAD && tasks[i].pid == pid) {
-            target = &tasks[i];
+        if (tasks[i]->state != TASK_DEAD && tasks[i]->pid == pid) {
+            target = tasks[i];
             break;
         }
     }
@@ -5749,12 +6295,14 @@ void sys_seteuid(syscall_frame_t *frame) {
 
     if (current_task_ptr && current_task_ptr->euid == 0) {
         current_task_ptr->euid = euid;
+        current_task_ptr->fsuid = euid;
         frame->rax = 0;
         return;
     }
 
     if (euid == current_task_ptr->uid || euid == current_task_ptr->euid) {
         current_task_ptr->euid = euid;
+        current_task_ptr->fsuid = euid;
         frame->rax = 0;
         return;
     }
@@ -5767,12 +6315,14 @@ void sys_setegid(syscall_frame_t *frame) {
 
     if (current_task_ptr && current_task_ptr->euid == 0) {
         current_task_ptr->egid = egid;
+        current_task_ptr->fsgid = egid;
         frame->rax = 0;
         return;
     }
 
     if (egid == current_task_ptr->gid || egid == current_task_ptr->egid) {
         current_task_ptr->egid = egid;
+        current_task_ptr->fsgid = egid;
         frame->rax = 0;
         return;
     }
@@ -5800,7 +6350,10 @@ void sys_setresuid(syscall_frame_t *frame) {
     }
 
     if (ruid != no_change) current_task_ptr->uid = ruid;
-    if (euid != no_change) current_task_ptr->euid = euid;
+    if (euid != no_change) {
+        current_task_ptr->euid = euid;
+        current_task_ptr->fsuid = euid;
+    }
     frame->rax = 0;
 }
 
@@ -5844,7 +6397,10 @@ void sys_setresgid(syscall_frame_t *frame) {
     }
 
     if (rgid != no_change) current_task_ptr->gid = rgid;
-    if (egid != no_change) current_task_ptr->egid = egid;
+    if (egid != no_change) {
+        current_task_ptr->egid = egid;
+        current_task_ptr->fsgid = egid;
+    }
     frame->rax = 0;
 }
 
@@ -5868,6 +6424,26 @@ void sys_getresgid(syscall_frame_t *frame) {
     frame->rax = 0;
 }
 
+void sys_setfsuid(syscall_frame_t *frame) {
+    uid_t fsuid = (uid_t)frame->rdi;
+    uid_t previous = current_task_ptr->fsuid;
+
+    if (current_task_ptr->euid == 0 || fsuid == current_task_ptr->uid || fsuid == current_task_ptr->euid || fsuid == current_task_ptr->fsuid)
+        current_task_ptr->fsuid = fsuid;
+
+    frame->rax = previous;
+}
+
+void sys_setfsgid(syscall_frame_t *frame) {
+    gid_t fsgid = (gid_t)frame->rdi;
+    gid_t previous = current_task_ptr->fsgid;
+
+    if (current_task_ptr->euid == 0 || fsgid == current_task_ptr->gid || fsgid == current_task_ptr->egid || fsgid == current_task_ptr->fsgid)
+        current_task_ptr->fsgid = fsgid;
+
+    frame->rax = previous;
+}
+
 void sys_getpgid(syscall_frame_t *frame) {
     pid_t pid = (pid_t)frame->rdi;
     if (pid == 0) {
@@ -5875,8 +6451,8 @@ void sys_getpgid(syscall_frame_t *frame) {
         return;
     }
     for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].state != TASK_DEAD && tasks[i].pid == pid) {
-            frame->rax = (uint64_t)tasks[i].pgid;
+        if (tasks[i]->state != TASK_DEAD && tasks[i]->pid == pid) {
+            frame->rax = (uint64_t)tasks[i]->pgid;
             return;
         }
     }
@@ -5890,12 +6466,12 @@ void sys_getsid(syscall_frame_t *frame) {
         return;
     }
     for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].state != TASK_DEAD && tasks[i].pid == pid) {
+        if (tasks[i]->state != TASK_DEAD && tasks[i]->pid == pid) {
             // Only allowed to query tasks in same session
-            if (tasks[i].sid != current_task_ptr->sid) {
+            if (tasks[i]->sid != current_task_ptr->sid) {
                 frame->rax = (uint64_t)-EPERM;
             } else {
-                frame->rax = (uint64_t)tasks[i].sid;
+                frame->rax = (uint64_t)tasks[i]->sid;
             }
             return;
         }
@@ -6005,22 +6581,60 @@ void sys_rt_sigtimedwait(syscall_frame_t *frame) {
     }
 }
 
+static int set_path_times(const char *path, struct timespec atime, bool set_atime, struct timespec mtime, bool set_mtime, bool follow) {
+    struct stat st = {0};
+    bool is_virtual = stat_virtual_device(path, &st);
+    bool is_tmpfs = !is_virtual && stat_tmpfs_to_kst(path, &st, follow);
+    bool is_ext4 = !is_virtual && !is_tmpfs && stat_ext4_to_kst(path, &st, follow);
+    bool is_proc = !is_virtual && !is_tmpfs && !is_ext4 && stat_proc(path, path, &st, follow);
+    bool is_initrd = !is_virtual && !is_tmpfs && !is_ext4 && !is_proc && stat_initrd_to_kst(path, &st, follow);
+    if (!is_virtual && !is_tmpfs && !is_ext4 && !is_proc && !is_initrd) return -ENOENT;
+    if (!set_atime && !set_mtime) return 0;
+
+    bool owner = current_task_ptr->fsuid == 0 || current_task_ptr->fsuid == st.st_uid;
+    if (!owner && !can_access_stat_mode(&st, 0, 1, 0)) return -EACCES;
+    if (is_ext4 || is_virtual || is_proc) return -EROFS;
+    if (is_tmpfs) return set_tmpfs_times(path, atime, set_atime, mtime, set_mtime, follow);
+    return set_initrd_times(path, atime, set_atime, mtime, set_mtime, follow);
+}
+
+static int get_utimens_times(const struct timespec *user_times, struct timespec *atime, bool *set_atime, struct timespec *mtime, bool *set_mtime) {
+    struct timespec now = time_get_realtime_ts();
+    if (!user_times) { *atime = *mtime = now; *set_atime = *set_mtime = true; return 0; }
+
+    struct timespec times[2];
+    if (copy_from_user(times, user_times, sizeof(times)) < 0) return -EFAULT;
+    if ((times[0].tv_nsec < 0 || times[0].tv_nsec >= 1000000000L) && times[0].tv_nsec != UTIME_NOW && times[0].tv_nsec != UTIME_OMIT) return -EINVAL;
+    if ((times[1].tv_nsec < 0 || times[1].tv_nsec >= 1000000000L) && times[1].tv_nsec != UTIME_NOW && times[1].tv_nsec != UTIME_OMIT) return -EINVAL;
+
+    *set_atime = times[0].tv_nsec != UTIME_OMIT;
+    *set_mtime = times[1].tv_nsec != UTIME_OMIT;
+    *atime = times[0].tv_nsec == UTIME_NOW ? now : times[0];
+    *mtime = times[1].tv_nsec == UTIME_NOW ? now : times[1];
+    return 0;
+}
+
 void sys_utime(syscall_frame_t *frame) {
+    struct syscall_utimbuf { time_t actime; time_t modtime; };
     const char *user_path = (const char *)frame->rdi;
-    if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
+    const struct syscall_utimbuf *user_times = (const struct syscall_utimbuf *)frame->rsi;
+    if (!user_path) { frame->rax = (uint64_t)-EFAULT; return; }
 
-    char path_buf[256];
-    if (copy_string_from_user(path_buf, user_path, sizeof(path_buf)) < 0) {
-        frame->rax = (uint64_t)-EFAULT; return;
-    }
-
+    char path[256];
+    int status = copy_string_from_user(path, user_path, sizeof(path));
+    if (status < 0) { frame->rax = (uint64_t)status; return; }
     char abs_path[256];
-    build_abs_path(path_buf, abs_path, sizeof(abs_path));
+    build_abs_path(path, abs_path, sizeof(abs_path));
 
-    initrd_file_t file = read_initrd(abs_path);
-    if (!file.data && !file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
-
-    frame->rax = 0;
+    struct timespec now = time_get_realtime_ts();
+    struct timespec atime = now, mtime = now;
+    if (user_times) {
+        struct syscall_utimbuf times;
+        if (copy_from_user(&times, user_times, sizeof(times)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+        atime = (struct timespec){ .tv_sec = times.actime, .tv_nsec = 0 };
+        mtime = (struct timespec){ .tv_sec = times.modtime, .tv_nsec = 0 };
+    }
+    frame->rax = (uint64_t)set_path_times(abs_path, atime, true, mtime, true, true);
 }
 
 void sys_prctl(syscall_frame_t *frame) {
@@ -6187,8 +6801,6 @@ void sys_mount(syscall_frame_t *frame) {
     unsigned long mountflags = (unsigned long)frame->r10;
     const void *data = (const void *)frame->r8;
 
-    (void)source; (void)mountflags; (void)data;
-
     bool priv = current_task_ptr && current_task_ptr->euid == 0;
     if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
 
@@ -6196,7 +6808,17 @@ void sys_mount(syscall_frame_t *frame) {
 
     char target_buf[64];
     char fstype_buf[32];
+    char source_buf[65];
+    char data_buf[64];
+    strcpy(source_buf, "none");
+    data_buf[0] = '\0';
     if (copy_string_from_user(target_buf, target, sizeof(target_buf)) < 0 || copy_string_from_user(fstype_buf, fstype, sizeof(fstype_buf)) < 0) {
+        frame->rax = (uint64_t)-EFAULT; return;
+    }
+    if (source && copy_string_from_user(source_buf, source, sizeof(source_buf)) < 0) {
+        frame->rax = (uint64_t)-EFAULT; return;
+    }
+    if (data && copy_string_from_user(data_buf, data, sizeof(data_buf)) < 0) {
         frame->rax = (uint64_t)-EFAULT; return;
     }
 
@@ -6215,6 +6837,18 @@ void sys_mount(syscall_frame_t *frame) {
         if (r < 0) { frame->rax = (uint64_t)r; return; }
     }
 
+    bool is_ext_family = strcmp(fstype_buf, "ext2") == 0 ||
+                         strcmp(fstype_buf, "ext3") == 0 ||
+                         strcmp(fstype_buf, "ext4") == 0;
+    if (is_ext_family) {
+        if (!source || !source_buf[0]) { frame->rax = (uint64_t)-EINVAL; return; }
+        if (!(mountflags & MS_RDONLY)) { frame->rax = (uint64_t)-EROFS; return; }
+        if (mountflags & ~(MS_RDONLY | MS_SILENT)) { frame->rax = (uint64_t)-EOPNOTSUPP; return; }
+        if (data_buf[0] && strcmp(data_buf, "ro") != 0) { frame->rax = (uint64_t)-EOPNOTSUPP; return; }
+        int r = mount_ext4(source_buf, target_buf);
+        if (r < 0) { frame->rax = (uint64_t)r; return; }
+    }
+
     uint64_t irq;
     spin_lock_irqsave(&vfs_lock, &irq);
     for (int i = 0; i < MAX_MOUNTS; i++) {
@@ -6228,8 +6862,11 @@ void sys_mount(syscall_frame_t *frame) {
     }
     for (int i = 0; i < MAX_MOUNTS; i++) {
         if (!mounts[i].active) {
+            strncpy(mounts[i].source, source_buf, 64); mounts[i].source[64] = '\0';
             strncpy(mounts[i].path, target_buf, 63); mounts[i].path[63] = '\0';
             strncpy(mounts[i].filesystemtype, fstype_buf, 31); mounts[i].filesystemtype[31] = '\0';
+            mounts[i].flags = mountflags;
+            mounts[i].id = next_mount_id++;
             mounts[i].active = true;
             spin_unlock_irqrestore(&vfs_lock, irq);
             frame->rax = 0;
@@ -6237,6 +6874,7 @@ void sys_mount(syscall_frame_t *frame) {
         }
     }
     spin_unlock_irqrestore(&vfs_lock, irq);
+    if (is_ext_family) unmount_ext4(target_buf);
     frame->rax = (uint64_t)-ENOMEM;
 }
 
@@ -6273,6 +6911,9 @@ void sys_umount2(syscall_frame_t *frame) {
     }
 
     bool was_tmpfs = (strcmp(fstype_copy, "tmpfs") == 0);
+    bool was_ext_family = strcmp(fstype_copy, "ext2") == 0 ||
+                          strcmp(fstype_copy, "ext3") == 0 ||
+                          strcmp(fstype_copy, "ext4") == 0;
 
     uint64_t irq;
     spin_lock_irqsave(&vfs_lock, &irq);
@@ -6281,6 +6922,10 @@ void sys_umount2(syscall_frame_t *frame) {
             mounts[i].active = false;
             spin_unlock_irqrestore(&vfs_lock, irq);
             if (was_tmpfs) destroy_tmpfs_root(target_buf);
+            if (was_ext_family) {
+                int status = unmount_ext4(target_buf);
+                if (status < 0) { frame->rax = (uint64_t)status; return; }
+            }
             frame->rax = 0;
             return;
         }
@@ -6304,7 +6949,7 @@ void sys_reboot(syscall_frame_t *frame) {
         case LINUX_REBOOT_CMD_RESTART:
             if (magic2 != LINUX_REBOOT_MAGIC2 && magic2 != LINUX_REBOOT_MAGIC2A && magic2 != LINUX_REBOOT_MAGIC2B && magic2 != LINUX_REBOOT_MAGIC2C) { frame->rax = (uint64_t)-EINVAL; return; }
             if (!arg) {
-                printf("reboot: rebooting system\n");
+                log("reboot: rebooting system\n");
             } else {
                 // Check if pointer given by the user is safe
                 if (user_range_ok(current_task_ptr->ctx, (uintptr_t)arg, 1)) {
@@ -6318,10 +6963,10 @@ void sys_reboot(syscall_frame_t *frame) {
                         i++;
                     }
                     copied_str[i] = '\0';
-                    printf("reboot: rebooting system with '%s'\n", copied_str);
+                    log("reboot: rebooting system with '%s'\n", copied_str);
                 } else {
 invalid_ptr:
-                    printf("reboot: rebooting system with invalid command pointer\n");
+                    log("reboot: rebooting system with invalid command pointer\n");
                 }
             }
             reboot();
@@ -6448,6 +7093,15 @@ void sys_readahead(syscall_frame_t *frame) {
         return;
     }
 
+    if (entry->type == FD_EXT4) {
+        uint8_t *buffer = malloc(count);
+        if (!buffer) { frame->rax = (uint64_t)-ENOMEM; return; }
+        int64_t status = read_ext4(entry->path, buffer, count, (uint64_t)offset);
+        free(buffer);
+        frame->rax = status < 0 ? (uint64_t)status : 0;
+        return;
+    }
+
     // FD_FILE (initrd): data is already fully in memory.
     // Validate the requested range lies within the file.
     initrd_file_t file = read_initrd(entry->path);
@@ -6485,9 +7139,9 @@ void sys_tkill(syscall_frame_t *frame) {
     if (sig < 0 || sig > 31) { frame->rax = (uint64_t)-EINVAL; return; }
 
     for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].state == TASK_DEAD) continue;
-        if (tasks[i].pid != tid) continue;
-        if (current_task_ptr->euid != 0 && current_task_ptr->uid != tasks[i].uid) {
+        if (tasks[i]->state == TASK_DEAD) continue;
+        if (tasks[i]->pid != tid) continue;
+        if (current_task_ptr->euid != 0 && current_task_ptr->uid != tasks[i]->uid) {
             frame->rax = (uint64_t)-EPERM; return;
         }
         if (tid == 1 && sig != 0 && current_task_ptr->euid != 0) { frame->rax = (uint64_t)-EPERM; return; }
@@ -6561,8 +7215,8 @@ void sys_futex(syscall_frame_t *frame) {
             if ((uint32_t)woken < val) {
                 futex_waiters[i].state = FW_WOKEN;
                 int idx = futex_waiters[i].task_idx;
-                if (idx >= 0 && idx < MAX_TASKS && tasks[idx].state == TASK_STOPPED)
-                    tasks[idx].state = TASK_READY;
+                if (idx >= 0 && idx < MAX_TASKS && tasks[idx]->state == TASK_STOPPED)
+                    tasks[idx]->state = TASK_READY;
                 woken++;
             } else if ((uint32_t)requeued < val2) {
                 futex_waiters[i].phys_addr = phys2;
@@ -6605,8 +7259,8 @@ void sys_futex(syscall_frame_t *frame) {
             if ((uint32_t)woken < val) {
                 futex_waiters[i].state = FW_WOKEN;
                 int idx = futex_waiters[i].task_idx;
-                if (idx >= 0 && idx < MAX_TASKS && tasks[idx].state == TASK_STOPPED)
-                    tasks[idx].state = TASK_READY;
+                if (idx >= 0 && idx < MAX_TASKS && tasks[idx]->state == TASK_STOPPED)
+                    tasks[idx]->state = TASK_READY;
                 woken++;
             } else if ((uint32_t)requeued < val2) {
                 futex_waiters[i].phys_addr = phys2;
@@ -6664,8 +7318,8 @@ void sys_futex(syscall_frame_t *frame) {
             if (futex_waiters[i].phys_addr != phys) continue;
             futex_waiters[i].state = FW_WOKEN;
             int idx = futex_waiters[i].task_idx;
-            if (idx >= 0 && idx < MAX_TASKS && tasks[idx].state == TASK_STOPPED)
-                tasks[idx].state = TASK_READY;
+            if (idx >= 0 && idx < MAX_TASKS && tasks[idx]->state == TASK_STOPPED)
+                tasks[idx]->state = TASK_READY;
             woken++;
         }
 
@@ -6689,8 +7343,8 @@ void sys_futex(syscall_frame_t *frame) {
                 if (futex_waiters[i].phys_addr != phys2) continue;
                 futex_waiters[i].state = FW_WOKEN;
                 int idx = futex_waiters[i].task_idx;
-                if (idx >= 0 && idx < MAX_TASKS && tasks[idx].state == TASK_STOPPED)
-                    tasks[idx].state = TASK_READY;
+                if (idx >= 0 && idx < MAX_TASKS && tasks[idx]->state == TASK_STOPPED)
+                    tasks[idx]->state = TASK_READY;
                 woken++;
             }
         }
@@ -6762,6 +7416,35 @@ void sys_getdents64(syscall_frame_t *frame) {
     // through a symlink (e.g. /dev-link -> /dev) still matches the correct mount.
     char resolved_path[256];
     resolve_dir_for_readdir(entry->path, resolved_path, sizeof(resolved_path), NULL, 0);
+
+    if (entry->type == FD_EXT4 || check_ext4_path(resolved_path)) {
+        struct stat st;
+        int status = stat_ext4(resolved_path, &st, true);
+        if (status < 0) { frame->rax = (uint64_t)status; return; }
+        if (!S_ISDIR(st.st_mode)) { frame->rax = (uint64_t)-ENOTDIR; return; }
+        if (index == 0) {
+            if (!emit_dirent64(bufp, &written, buflen, st.st_ino, 1, DT_DIR, ".")) { frame->rax = written; return; }
+            index = 1; entry->offset = index;
+        }
+        if (index == 1) {
+            if (!emit_dirent64(bufp, &written, buflen, st.st_ino, 2, DT_DIR, "..")) { frame->rax = written; return; }
+            index = 2; entry->offset = index;
+        }
+        int child_index = index - 2;
+        while (1) {
+            char child[256];
+            uint8_t child_type;
+            ino_t child_ino;
+            status = get_next_ext4_child(&child_index, resolved_path, child,
+                                         sizeof(child), &child_type, &child_ino);
+            if (status != 0) break;
+            if (!emit_dirent64(bufp, &written, buflen, child_ino, (uint64_t)(child_index + 2), child_type, child)) break;
+            index = child_index + 2;
+            entry->offset = index;
+        }
+        frame->rax = written;
+        return;
+    }
 
     // tmpfs directory enumeration (/tmp, /run, ...)
     // Path-based throughout (next_tmpfs_child is the exact brother of
@@ -6962,15 +7645,44 @@ void sys_clock_gettime(syscall_frame_t *frame) {
     frame->rax = 0;
 }
 
+void sys_clock_getres(syscall_frame_t *frame) {
+    int clk_id = (int)frame->rdi;
+    struct timespec *resolution = (struct timespec *)frame->rsi;
+
+    switch (clk_id) {
+        case CLOCK_REALTIME:
+        case CLOCK_REALTIME_COARSE:
+        case CLOCK_MONOTONIC:
+        case CLOCK_MONOTONIC_RAW:
+        case CLOCK_BOOTTIME:
+            break;
+        default:
+            frame->rax = (uint64_t)-EINVAL;
+            return;
+    }
+
+    if (!resolution) {
+        frame->rax = 0;
+        return;
+    }
+    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)resolution, sizeof(*resolution))) {
+        frame->rax = (uint64_t)-EFAULT;
+        return;
+    }
+
+    struct timespec result = { .tv_sec = 0, .tv_nsec = 1000 };
+    write_vmm(current_task_ptr->ctx, (uint64_t)resolution, &result,
+              sizeof(result));
+    frame->rax = 0;
+}
+
 void sys_exit_group(syscall_frame_t *frame) {
     int status = (int)frame->rdi;
 
     for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].state != TASK_DEAD && 
-            tasks[i].ctx == current_task_ptr->ctx &&
-            &tasks[i] != current_task_ptr) {
-            tasks[i].state = TASK_ZOMBIE;
-            tasks[i].exit_status = status;
+        if (tasks[i]->state != TASK_DEAD && tasks[i]->ctx == current_task_ptr->ctx && tasks[i] != current_task_ptr) {
+            tasks[i]->state = TASK_ZOMBIE;
+            tasks[i]->exit_status = status;
         }
     }
 
@@ -7074,13 +7786,13 @@ void sys_tgkill(syscall_frame_t *frame) {
     if (tid <= 0) { frame->rax = (uint64_t)-EINVAL; return; }
 
     for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].state == TASK_DEAD) continue;
-        if (tasks[i].pid != tid) continue;
-        if (tgid > 0 && tasks[i].pgid != current_task_ptr->pgid) {
+        if (tasks[i]->state == TASK_DEAD) continue;
+        if (tasks[i]->pid != tid) continue;
+        if (tgid > 0 && tasks[i]->pgid != current_task_ptr->pgid) {
             // tgkill requires the tid to be in the caller's thread group;
             // fallback: also allow same-pgid match for our process model.
         }
-        if (current_task_ptr->euid != 0 && current_task_ptr->uid != tasks[i].uid) {
+        if (current_task_ptr->euid != 0 && current_task_ptr->uid != tasks[i]->uid) {
             frame->rax = (uint64_t)-EPERM; return;
         }
         if (tid == 1 && sig != 0 && current_task_ptr->euid != 0) { frame->rax = (uint64_t)-EPERM; return; }
@@ -7187,6 +7899,11 @@ void sys_openat(syscall_frame_t *frame) {
         if (pr != 1) { frame->rax = (uint64_t)pr; return; }
     }
 
+    {
+        int er = open_ext4_common(abs_path, flags);
+        if (er != 1) { frame->rax = (uint64_t)er; return; }
+    }
+
     initrd_file_t file = read_initrd(abs_path);
 
     if (!file.mode && !(flags & O_CREAT)) { frame->rax = (uint64_t)-ENOENT; return; }
@@ -7200,7 +7917,7 @@ void sys_openat(syscall_frame_t *frame) {
     if ((flags & O_CREAT) && !file.data && !file.mode) {
         int access = check_parent_access(abs_path, true);
         if (access < 0) { frame->rax = (uint64_t)access; return; }
-        int r = write_initrd(abs_path, "", 0, mode | 0o100000, current_task_ptr->euid, current_task_ptr->egid);
+        int r = write_initrd(abs_path, "", 0, mode | 0o100000, current_task_ptr->fsuid, current_task_ptr->fsgid);
         if (r < 0) { frame->rax = (uint64_t)r; return; }
         file = read_initrd(abs_path);
     }
@@ -7233,9 +7950,16 @@ void sys_fchownat(syscall_frame_t *frame) {
         if (!(flags & AT_EMPTY_PATH)) { frame->rax = (uint64_t)-ENOENT; return; }
         fd_entry_t *entry = get_current_fd(dirfd);
         if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
-        if (entry->type != FD_FILE && entry->type != FD_TMPFS) { frame->rax = (uint64_t)-EINVAL; return; }
+        if (entry->type != FD_FILE && entry->type != FD_TMPFS && entry->type != FD_EXT4) { frame->rax = (uint64_t)-EINVAL; return; }
         frame->rax = (uint64_t)change_path_ownership(entry->path, uid, gid, true);
         return;
+    }
+
+    if (path[0] != '/' && dirfd != AT_FDCWD) {
+        struct stat dir_stat;
+        int status = stat_fd_to_kst(dirfd, &dir_stat);
+        if (status < 0) { frame->rax = (uint64_t)status; return; }
+        if (!S_ISDIR(dir_stat.st_mode)) { frame->rax = (uint64_t)-ENOTDIR; return; }
     }
 
     char abs_path[256];
@@ -7285,29 +8009,18 @@ void sys_fstatat(syscall_frame_t *frame) {
         frame->rax = 0;
         return;
     }
+    if (stat_ext4_to_kst(abs_path, &kst, follow_final)) {
+        write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
+        frame->rax = 0;
+        return;
+    }
     if (stat_proc(abs_path, path, &kst, follow_final)) {
         write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
         frame->rax = 0;
         return;
     }
 
-    initrd_file_t file;
-    if (flags & AT_SYMLINK_NOFOLLOW) {
-        file = stat_initrd_nofollow(abs_path);
-    } else {
-        file = read_initrd(abs_path);
-    }
-    if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
-
-    kst.st_mode = file.mode;
-    kst.st_uid = file.uid;
-    kst.st_gid = file.gid;
-    kst.st_size = file.size;
-    kst.st_blocks = (file.size + 511) / 512;
-    kst.st_blksize = 4096;
-    kst.st_nlink = 1;
-    kst.st_dev   = 1;
-    kst.st_ino   = file.inode;
+    if (!stat_initrd_to_kst(abs_path, &kst, follow_final)) { frame->rax = (uint64_t)-ENOENT; return; }
 
     write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
     frame->rax = 0;
@@ -7378,7 +8091,7 @@ void sys_symlinkat(syscall_frame_t *frame) {
     if (mutation_status < 0) { frame->rax = (uint64_t)mutation_status; return; }
 
     if (is_tmpfs_dir(abs_path)) {
-        frame->rax = (uint64_t)symlink_tmpfs(target_buf, abs_path, current_task_ptr->euid, current_task_ptr->egid);
+        frame->rax = (uint64_t)symlink_tmpfs(target_buf, abs_path, current_task_ptr->fsuid, current_task_ptr->fsgid);
         return;
     }
 
@@ -7386,7 +8099,7 @@ void sys_symlinkat(syscall_frame_t *frame) {
     initrd_file_t existing = stat_initrd_nofollow(abs_path);
     if (existing.mode) { frame->rax = (uint64_t)-EEXIST; return; }
 
-    int ret = symlink_initrd(target_buf, abs_path, current_task_ptr->euid, current_task_ptr->egid);
+    int ret = symlink_initrd(target_buf, abs_path, current_task_ptr->fsuid, current_task_ptr->fsgid);
 
     frame->rax = ret < 0 ? (uint64_t)ret : 0;
 }
@@ -7444,6 +8157,17 @@ void sys_readlinkat(syscall_frame_t *frame) {
         return;
     }
 
+    if (check_ext4_path(abs_path)) {
+        char target[256];
+        int tlen = read_ext4_link(abs_path, target, sizeof(target));
+        if (tlen < 0) { frame->rax = (uint64_t)tlen; return; }
+        size_t ulen = (size_t)tlen;
+        if (ulen > bufsiz) ulen = bufsiz;
+        write_vmm(current_task_ptr->ctx, (uint64_t)buf, target, ulen);
+        frame->rax = (uint64_t)ulen;
+        return;
+    }
+
     initrd_file_t file = stat_initrd_nofollow(abs_path);
     if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
     if (!S_ISLNK(file.mode)) { frame->rax = (uint64_t)-EINVAL; return; }
@@ -7471,6 +8195,8 @@ void sys_fchmodat(syscall_frame_t *frame) {
     char abs_path[256];
     int res = build_abs_path_at(dirfd, path_buf, abs_path, sizeof(abs_path));
     if (res < 0) { frame->rax = (uint64_t)res; return; }
+
+    if (check_ext4_path(abs_path)) { frame->rax = (uint64_t)-EROFS; return; }
 
     if (is_tmpfs_dir(abs_path)) {
         struct stat tst;
@@ -7610,29 +8336,40 @@ void sys_get_robust_list(syscall_frame_t *frame) {
 }
 
 void sys_utimensat(syscall_frame_t *frame) {
-    int dirfd                      = (int)frame->rdi;
-    const char *user_path          = (const char *)frame->rsi;
-    const struct timespec *times   = (const struct timespec *)frame->rdx;
-    int flag                       = (int)frame->r10;
-    // Unused flags
-    (void)times;
-    (void)flag;
+    int dirfd = (int)frame->rdi;
+    const char *user_path = (const char *)frame->rsi;
+    const struct timespec *user_times = (const struct timespec *)frame->rdx;
+    int flags = (int)frame->r10;
+    if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) { frame->rax = (uint64_t)-EINVAL; return; }
 
-    if (dirfd != AT_FDCWD) { frame->rax = (uint64_t)-ENOTSUP; return; }
-    if (!user_path) { frame->rax = (uint64_t)-EFAULT; return; }
-
-    char path_buf[256];
-    if (copy_string_from_user(path_buf, user_path, sizeof(path_buf)) < 0) {
-        frame->rax = (uint64_t)-EFAULT; return;
-    }
+    struct timespec atime, mtime;
+    bool set_atime, set_mtime;
+    int status = get_utimens_times(user_times, &atime, &set_atime, &mtime, &set_mtime);
+    if (status < 0) { frame->rax = (uint64_t)status; return; }
 
     char abs_path[256];
-    build_abs_path(path_buf, abs_path, sizeof(abs_path));
+    if (!user_path) {
+        fd_entry_t *entry = get_current_fd(dirfd);
+        if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+        strncpy(abs_path, entry->path, sizeof(abs_path) - 1);
+        abs_path[sizeof(abs_path) - 1] = '\0';
+    } else {
+        char path[256];
+        status = copy_string_from_user(path, user_path, sizeof(path));
+        if (status < 0) { frame->rax = (uint64_t)status; return; }
+        if (path[0] == '\0') {
+            if (!(flags & AT_EMPTY_PATH)) { frame->rax = (uint64_t)-ENOENT; return; }
+            fd_entry_t *entry = get_current_fd(dirfd);
+            if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
+            strncpy(abs_path, entry->path, sizeof(abs_path) - 1);
+            abs_path[sizeof(abs_path) - 1] = '\0';
+        } else {
+            status = build_abs_path_at(dirfd, path, abs_path, sizeof(abs_path));
+            if (status < 0) { frame->rax = (uint64_t)status; return; }
+        }
+    }
 
-    initrd_file_t file = read_initrd(abs_path);
-    if (!file.data && !file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
-
-    frame->rax = 0;
+    frame->rax = (uint64_t)set_path_times(abs_path, atime, set_atime, mtime, set_mtime, !(flags & AT_SYMLINK_NOFOLLOW));
 }
 
 void sys_epoll_pwait(syscall_frame_t *frame) {
@@ -7768,51 +8505,6 @@ void sys_pipe2(syscall_frame_t *frame) {
     frame->rax = 0;
 }
 
-void sys_getsockopt(syscall_frame_t *frame) {
-    int fd = (int)frame->rdi;
-    int level = (int)frame->rsi;
-    int optname = (int)frame->rdx;
-    int *optval = (int *)frame->r10;
-    uint32_t *optlen = (uint32_t *)frame->r8;
-    fd_entry_t *entry = get_current_fd(fd);
-    int val;
-
-    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
-    if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
-    if (level != SOL_SOCKET) { frame->rax = (uint64_t)-EINVAL; return; }
-    if (!user_range_ok(current_task_ptr->ctx, (uint64_t)optval, sizeof(int)) || !user_range_ok(current_task_ptr->ctx, (uint64_t)optlen, sizeof(uint32_t))) {
-        frame->rax = (uint64_t)-EFAULT; return;
-    }
-    if (optname == SO_ERROR) val = get_unix_socket_error((unix_handle_t *)entry->handle);
-    else if (optname == SO_TYPE) val = get_unix_socket_type((unix_handle_t *)entry->handle);
-    else { frame->rax = (uint64_t)-ENOPROTOOPT; return; }
-    write_vmm(current_task_ptr->ctx, (uint64_t)optval, &val, sizeof(int));
-    uint32_t len = sizeof(int);
-    write_vmm(current_task_ptr->ctx, (uint64_t)optlen, &len, sizeof(uint32_t));
-    frame->rax = 0;
-}
-
-void sys_setsockopt(syscall_frame_t *frame) {
-    int fd = (int)frame->rdi;
-    int level = (int)frame->rsi;
-    int optname = (int)frame->rdx;
-    fd_entry_t *entry = get_current_fd(fd);
-    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
-    if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
-    if (level != SOL_SOCKET) { frame->rax = (uint64_t)-ENOPROTOOPT; return; }
-    switch (optname) {
-        case SO_REUSEADDR:
-        case SO_KEEPALIVE:
-        case SO_BROADCAST:
-        case SO_LINGER:
-            frame->rax = 0;
-            return;
-        default:
-            frame->rax = (uint64_t)-ENOPROTOOPT;
-            return;
-    }
-}
-
 void sys_prlimit64(syscall_frame_t *frame) {
     pid_t pid = (pid_t)frame->rdi;
     int resource = (int)frame->rsi;
@@ -7888,15 +8580,49 @@ void sys_statx(syscall_frame_t *frame) {
     unsigned int mask = (unsigned int)frame->r10;
     struct statx *sx = (struct statx *)frame->r8;
 
-    (void)mask;  // we always return STATX_BASIC_STATS regardless of request
-
-    if (!sx) { frame->rax = (uint64_t)-EINVAL; return; }
-    if (!user_range_ok(current_task_ptr->ctx, (uint64_t)sx, sizeof(struct statx))) { frame->rax = (uint64_t)-EFAULT; return; }
-    if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!sx) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)sx, sizeof(struct statx))) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (mask & STATX__RESERVED) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_STATX_SYNC_TYPE)) { frame->rax = (uint64_t)-EINVAL; return; }
+    if ((flags & AT_STATX_SYNC_TYPE) != AT_STATX_SYNC_AS_STAT && (flags & AT_STATX_SYNC_TYPE) != AT_STATX_FORCE_SYNC && (flags & AT_STATX_SYNC_TYPE) != AT_STATX_DONT_SYNC) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!user_path && !(flags & AT_EMPTY_PATH)) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char path[256];
-    int cr = copy_string_from_user(path, user_path, sizeof(path));
-    if (cr < 0) { frame->rax = (uint64_t)cr; return; }
+    if (user_path) {
+        int cr = copy_string_from_user(path, user_path, sizeof(path));
+        if (cr < 0) { frame->rax = (uint64_t)cr; return; }
+    } else {
+        path[0] = '\0';
+    }
+
+    struct stat kst = {0};
+    if (path[0] == '\0') {
+        if (!(flags & AT_EMPTY_PATH)) { frame->rax = (uint64_t)-ENOENT; return; }
+        int status;
+        if (dirfd == AT_FDCWD) {
+            char cwd[256];
+            strncpy(cwd, current_task_ptr->cwd, sizeof(cwd) - 1);
+            cwd[sizeof(cwd) - 1] = '\0';
+            status = stat_tmpfs_to_kst(cwd, &kst, true) || stat_ext4_to_kst(cwd, &kst, true) || stat_proc(cwd, cwd, &kst, true) || stat_initrd_to_kst(cwd, &kst, true) || stat_virtual_device(cwd, &kst) ? 0 : -ENOENT;
+        } else {
+            status = stat_fd_to_kst(dirfd, &kst);
+        }
+        if (status < 0) { frame->rax = (uint64_t)status; return; }
+        struct statx ksx;
+        const char *statx_path = dirfd == AT_FDCWD ? current_task_ptr->cwd : get_current_fd(dirfd)->path;
+        stat_to_statx(&ksx, &kst, statx_path);
+        statx_add_fs_metadata(&ksx, statx_path, true, mask);
+        write_vmm(current_task_ptr->ctx, (uint64_t)sx, &ksx, sizeof(ksx));
+        frame->rax = 0;
+        return;
+    }
+
+    if (path[0] != '/' && dirfd != AT_FDCWD) {
+        struct stat dir_stat;
+        int status = stat_fd_to_kst(dirfd, &dir_stat);
+        if (status < 0) { frame->rax = (uint64_t)status; return; }
+        if (!S_ISDIR(dir_stat.st_mode)) { frame->rax = (uint64_t)-ENOTDIR; return; }
+    }
 
     char abs_path[256];
     int br = build_abs_path_at(dirfd, path, abs_path, sizeof(abs_path));
@@ -7913,27 +8639,16 @@ void sys_statx(syscall_frame_t *frame) {
         abs_path[sizeof(abs_path) - 1] = '\0';
     }
 
-    struct stat kst = {0};
     if (!((stat_virtual_device(abs_path, &kst)) ||
           (follow_final ? stat_tmpfs_to_kst(abs_path, &kst, true) : stat_tmpfs_to_kst(abs_path, &kst, false)) ||
+          (stat_ext4_to_kst(abs_path, &kst, follow_final)) ||
           (stat_proc(abs_path, path, &kst, follow_final)))) {
-        initrd_file_t file;
-        file = (flags & AT_SYMLINK_NOFOLLOW) ? stat_initrd_nofollow(abs_path)
-                                              : read_initrd(abs_path);
-        if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
-        kst.st_mode  = file.mode;
-        kst.st_uid   = file.uid;
-        kst.st_gid   = file.gid;
-        kst.st_size  = file.size;
-        kst.st_blocks = (file.size + 511) / 512;
-        kst.st_blksize = 4096;
-        kst.st_nlink = 1;
-        kst.st_dev   = 1;
-        kst.st_ino   = file.inode;
+        if (!stat_initrd_to_kst(abs_path, &kst, follow_final)) { frame->rax = (uint64_t)-ENOENT; return; }
     }
 
     struct statx ksx;
     stat_to_statx(&ksx, &kst, abs_path);
+    statx_add_fs_metadata(&ksx, abs_path, follow_final, mask);
     write_vmm(current_task_ptr->ctx, (uint64_t)sx, &ksx, sizeof(ksx));
     frame->rax = 0;
 }

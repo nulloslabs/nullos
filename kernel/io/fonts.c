@@ -1,16 +1,20 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include <errno.h>
+#include <main/log.h>
 #include <main/string.h>
 #include <main/sched.h>
 #include <main/limine_req.h>
 #include <main/halt.h>
 #include <io/initrd.h>
 #include <io/tmpfs.h>
+#include <io/ext4.h>
 #include <io/fonts.h>
 #include <io/terminal.h>
 #include <io/devtmpfs.h>
 #include <io/procfs.h>
 #include <syscalls/syscall_impls.h>
+#include <mm/mm.h>
 #include <limine.h>
 
 unsigned char current_font[16384];
@@ -688,7 +692,8 @@ static uint8_t builtin_8x16_font[] = {
 // Resolve a font through the same filesystem split used by the syscall layer.
 // proc_buf owns generated procfs contents for the lifetime of change_font().
 static int read_font_file(const char *path, const void **data, uint64_t *size,
-                          char proc_buf[PROCFS_MAX_CONTENT], int link_depth) {
+                          char proc_buf[PROCFS_MAX_CONTENT], bool *owned,
+                          int link_depth) {
     if (link_depth >= 40) return -ELOOP;
     if (is_devtmpfs_device_path(path)) return -EEXIST;
 
@@ -705,7 +710,8 @@ static int read_font_file(const char *path, const void **data, uint64_t *size,
 
             char resolved[256];
             resolve_link_target(path, target, resolved, sizeof(resolved));
-            return read_font_file(resolved, data, size, proc_buf, link_depth + 1);
+            return read_font_file(resolved, data, size, proc_buf, owned,
+                                  link_depth + 1);
         }
 
         *size = get_procfs_content(&node, proc_buf);
@@ -719,6 +725,27 @@ static int read_font_file(const char *path, const void **data, uint64_t *size,
         if (S_ISDIR(file.mode)) return -EISDIR;
         *data = file.data;
         *size = file.size;
+        return 0;
+    }
+
+    if (check_ext4_path(path)) {
+        struct stat st;
+        int status = stat_ext4(path, &st, true);
+        if (status < 0) return status;
+        if (S_ISDIR(st.st_mode)) return -EISDIR;
+        if (!S_ISREG(st.st_mode) || st.st_size <= 0 ||
+            (uint64_t)st.st_size > sizeof(current_font)) return -EFBIG;
+
+        void *buffer = malloc((size_t)st.st_size);
+        if (!buffer) return -ENOMEM;
+        int64_t count = read_ext4(path, buffer, (uint64_t)st.st_size, 0);
+        if (count < 0 || count != st.st_size) {
+            free(buffer);
+            return count < 0 ? (int)count : -EIO;
+        }
+        *data = buffer;
+        *size = (uint64_t)st.st_size;
+        *owned = true;
         return 0;
     }
 
@@ -740,16 +767,27 @@ int change_font(const char *path, uint8_t w, uint8_t h) {
     const void *font_data = NULL;
     uint64_t font_size = 0;
     char proc_buf[PROCFS_MAX_CONTENT];
-    int r = read_font_file(abs_path, &font_data, &font_size, proc_buf, 0);
+    bool owned = false;
+    int r = read_font_file(abs_path, &font_data, &font_size, proc_buf, &owned, 0);
     if (r < 0) return r;
 
-    if (!font_data || font_size == 0 || font_size > sizeof(current_font)) return -ENOENT;
-    if ((uint64_t)256 * h * w / 8 != font_size) return -EFBIG;
-    if (memcmp(current_font, font_data, font_size) == 0) return 0;
+    if (!font_data || font_size == 0 || font_size > sizeof(current_font)) {
+        if (owned) free((void *)font_data);
+        return -ENOENT;
+    }
+    if ((uint64_t)256 * h * w / 8 != font_size) {
+        if (owned) free((void *)font_data);
+        return -EFBIG;
+    }
+    if (memcmp(current_font, font_data, font_size) == 0) {
+        if (owned) free((void *)font_data);
+        return 0;
+    }
 
     clrscr(); // Clear the screen so there isn't any weird shenanigans
 
     memcpy(current_font, font_data, font_size);
+    if (owned) free((void *)font_data);
     current_font_w = w;
     current_font_h = h;
     return 0;
@@ -770,5 +808,5 @@ void init_default_font(void) {
         // We can't print the output without the font, so just silently halt
         halt();
     }
-    printf("fonts: initialized %dx%d font\n", current_font_w, current_font_h); // Now we can use functions like log() again!
+    log("fonts: initialized %dx%d font\n", current_font_w, current_font_h); // Now we can use functions like log() again!
 }

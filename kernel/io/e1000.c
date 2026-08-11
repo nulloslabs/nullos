@@ -1,9 +1,10 @@
+#include <stdbool.h>
+#include <main/log.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
 #include <io/e1000.h>
 #include <io/io.h>
 #include <io/net.h>
-#include <io/terminal.h>
 #include <mm/mm.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
@@ -129,7 +130,7 @@ void init_e1000(pci_device_t *dev) {
     // covered by the HHDM; map it explicitly with cache-disabled attributes.
     uint32_t bar0 = read_pci(dev->bus, dev->dev, dev->func, 0x10);
     if (bar0 & 0x1) {
-        printf("e1000: bar0 is not a memory bar\n");
+        log("e1000: bar0 is not a memory bar\n");
         return;
     }
 
@@ -139,17 +140,17 @@ void init_e1000(pci_device_t *dev) {
         uint32_t bar1 = read_pci(dev->bus, dev->dev, dev->func, 0x14);
         mmio_phys |= (uint64_t)bar1 << 32;
     } else if (bar_type == 0x3) {
-        printf("e1000: invalid bar0 type\n");
+        log("e1000: invalid bar0 type\n");
         return;
     }
     if (mmio_phys == 0) {
-        printf("e1000: invalid bar0 address\n");
+        log("e1000: invalid bar0 address\n");
         return;
     }
 
     e1000_mmio = vmap_mmio(mmio_phys, E1000_MMIO_SIZE / PAGE_SIZE);
     if (!e1000_mmio) {
-        printf("e1000: unable to map bar0\n");
+        log("e1000: unable to map bar0\n");
         return;
     }
 
@@ -223,7 +224,7 @@ void init_e1000(pci_device_t *dev) {
 
     pci_request_irq(dev, poll_e1000);
 
-    printf("e1000: initialized e1000\n");
+    log("e1000: initialized e1000\n");
 
     e1000_ready = true;
 

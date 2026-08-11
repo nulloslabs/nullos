@@ -1,8 +1,47 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <main/sched.h>
 #include <syscalls/syscalls.h>
+
+#define USER_ADDR_MAX 0x0000800000000000ULL
+#define MAX_BRK_SIZE (256ULL * 1024ULL * 1024ULL)
+#define MAX_IOV 1024
+#define MAX_MOUNTS 16
+#define MAX_IO_COUNT (16 * 1024 * 1024)
+#define MAX_FUTEX_WAITERS 256
+
+#define FW_FREE       0
+#define FW_WAITING    1
+#define FW_WOKEN      2
+#define FW_TIMED_OUT  3
+
+#define FD_SETSIZE 1024
+#define FD_SET_BYTES (FD_SETSIZE / 8)
+
+
+typedef struct {
+    int      state;
+    uint64_t phys_addr;
+    int      task_idx;
+    uint32_t bitset;
+    uint64_t deadline_us;
+} futex_waiter_t;
+
+typedef struct {
+    syscall_frame_t context;
+    uint64_t blocked_signals;
+} __attribute__((packed)) signal_stack_frame_t;
+
+typedef struct {
+    uint64_t id;
+    char source[65];
+    char path[64];
+    char filesystemtype[32];
+    unsigned long flags;
+    bool active;
+} mount_t;
 
 // Some public helpers
 void wake_clear_child_tid(task_t *task);
@@ -13,6 +52,7 @@ bool is_devtmpfs_device_path(const char *path);
 void register_vfs_mount(const char *path, const char *fstype);
 int enumerate_vfs_mounts(int index, char *out_line, size_t line_size);
 void check_signals(syscall_frame_t *frame);
+void check_signals_from_user_exception(syscall_frame_t *frame);
 void check_futex_timeouts(void);
 void cleanup_futex_task(int task_idx);
 void process_robust_list(task_t *task);
@@ -41,6 +81,8 @@ void sys_pread64(syscall_frame_t *frame);
 void sys_readv(syscall_frame_t *frame);
 void sys_writev(syscall_frame_t *frame);
 void sys_access(syscall_frame_t *frame);
+void sys_faccessat(syscall_frame_t *frame);
+void sys_faccessat2(syscall_frame_t *frame);
 void sys_pipe(syscall_frame_t *frame);
 void sys_select(syscall_frame_t *frame);
 void sys_dup(syscall_frame_t *frame);
@@ -88,6 +130,7 @@ void sys_ftruncate(syscall_frame_t *frame);
 void sys_getdents(syscall_frame_t *frame);
 void sys_getcwd(syscall_frame_t *frame);
 void sys_chdir(syscall_frame_t *frame);
+void sys_fchdir(syscall_frame_t *frame);
 void sys_rename(syscall_frame_t *frame);
 void sys_mkdir(syscall_frame_t *frame);
 void sys_rmdir(syscall_frame_t *frame);
@@ -101,10 +144,13 @@ void sys_chown(syscall_frame_t *frame);
 void sys_fchown(syscall_frame_t *frame);
 void sys_lchown(syscall_frame_t *frame);
 void sys_umask(syscall_frame_t *frame);
+void sys_time(syscall_frame_t *frame);
 void sys_gettimeofday(syscall_frame_t *frame);
 void sys_getrlimit(syscall_frame_t *frame);
 void sys_getrusage(syscall_frame_t *frame);
+void sys_sysinfo(syscall_frame_t *frame);
 void sys_times(syscall_frame_t *frame);
+void sys_syslog(syscall_frame_t *frame);
 void sys_getuid(syscall_frame_t *frame);
 void sys_getgid(syscall_frame_t *frame);
 void sys_setuid(syscall_frame_t *frame);
@@ -119,6 +165,8 @@ void sys_setresuid(syscall_frame_t *frame);
 void sys_getresuid(syscall_frame_t *frame);
 void sys_setresgid(syscall_frame_t *frame);
 void sys_getresgid(syscall_frame_t *frame);
+void sys_setfsuid(syscall_frame_t *frame);
+void sys_setfsgid(syscall_frame_t *frame);
 void sys_utime(syscall_frame_t *frame);
 void sys_prctl(syscall_frame_t *frame);
 void sys_arch_prctl(syscall_frame_t *frame);
@@ -132,6 +180,8 @@ void sys_setdomainname(syscall_frame_t *frame);
 void sys_gettid(syscall_frame_t *frame);
 void sys_readahead(syscall_frame_t *frame);
 void sys_clock_gettime(syscall_frame_t *frame);
+void sys_clock_getres(syscall_frame_t *frame);
+void sys_clock_nanosleep(syscall_frame_t *frame);
 void sys_futex(syscall_frame_t *frame);
 void sys_getdents64(syscall_frame_t *frame);
 void sys_exit_group(syscall_frame_t *frame);

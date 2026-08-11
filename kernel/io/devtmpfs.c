@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <errno.h>
 #include <main/string.h>
 #include <io/devtmpfs.h>

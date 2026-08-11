@@ -43,6 +43,8 @@
 #define __NR_getsockname 51
 #define __NR_getpeername 52
 #define __NR_socketpair 53
+#define __NR_setsockopt 54
+#define __NR_getsockopt 55
 #define __NR_clone 56
 #define __NR_fork 57
 #define __NR_vfork 58
@@ -60,6 +62,7 @@
 #define __NR_getdents 78
 #define __NR_getcwd 79
 #define __NR_chdir 80
+#define __NR_fchdir 81
 #define __NR_rename 82
 #define __NR_mkdir 83
 #define __NR_rmdir 84
@@ -76,8 +79,10 @@
 #define __NR_gettimeofday 96
 #define __NR_getrlimit 97
 #define __NR_getrusage 98
+#define __NR_sysinfo 99
 #define __NR_times 100
 #define __NR_getuid 102
+#define __NR_syslog 103
 #define __NR_getgid 104
 #define __NR_setuid 105
 #define __NR_setgid 106
@@ -94,6 +99,8 @@
 #define __NR_setresgid 119
 #define __NR_getresgid 120
 #define __NR_getpgid 121
+#define __NR_setfsuid 122
+#define __NR_setfsgid 123
 #define __NR_getsid 124
 #define __NR_rt_sigtimedwait 128
 #define __NR_utime 132
@@ -109,12 +116,15 @@
 #define __NR_gettid 186
 #define __NR_readahead 187
 #define __NR_tkill 200
+#define __NR_time 201
 #define __NR_futex 202
 #define __NR_sched_getaffinity 204
 #define __NR_epoll_create 213
 #define __NR_getdents64 217
 #define __NR_set_tid_address 218
 #define __NR_clock_gettime 228
+#define __NR_clock_getres 229
+#define __NR_clock_nanosleep 230
 #define __NR_exit_group 231
 #define __NR_epoll_wait 232
 #define __NR_epoll_ctl 233
@@ -126,6 +136,7 @@
 #define __NR_symlinkat 266
 #define __NR_readlinkat 267
 #define __NR_fchmodat 268
+#define __NR_faccessat 269
 #define __NR_pselect6 270
 #define __NR_set_robust_list 273
 #define __NR_get_robust_list 274
@@ -133,10 +144,9 @@
 #define __NR_epoll_pwait 281
 #define __NR_epoll_create1 291
 #define __NR_pipe2 293
-#define __NR_getsockopt 300
-#define __NR_setsockopt 301
 #define __NR_prlimit64 302
 #define __NR_getrandom 318
 #define __NR_statx 332
 #define __NR_rseq 334
+#define __NR_faccessat2 439
 #define __NR_epoll_pwait2 441

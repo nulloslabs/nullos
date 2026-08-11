@@ -1,9 +1,11 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <main/spinlocks.h>
 
 #define TMPFS_MAX_NAME      128
@@ -21,12 +23,21 @@ typedef enum {
 } tmpfs_type_t;
 
 typedef struct {
+    int inode;
+    char *name;
+} tmpfs_child_t;
+
+typedef struct {
     bool         active;
     tmpfs_type_t type;
     char         name[TMPFS_MAX_NAME];
     mode_t       mode;
     uid_t        uid;
     gid_t        gid;
+    struct timespec atime;
+    struct timespec btime;
+    struct timespec mtime;
+    struct timespec ctime;
     int          parent;        // index of parent inode, -1 for mount root
     int          mount_idx;     // which tmpfs mount this inode lives under
     // TMPFS_REG:
@@ -34,7 +45,7 @@ typedef struct {
     uint64_t     size;
     uint64_t     capacity;
     // TMPFS_DIR:
-    int          children[TMPFS_MAX_CHILDREN];
+    tmpfs_child_t children[TMPFS_MAX_CHILDREN];
     int          child_count;
     // TMPFS_LNK:
     char         target[TMPFS_LINK_MAX];
@@ -49,6 +60,10 @@ typedef struct {
     mode_t   mode;
     uid_t    uid;
     gid_t    gid;
+    struct timespec atime;
+    struct timespec btime;
+    struct timespec mtime;
+    struct timespec ctime;
 } tmpfs_file_t;
 
 typedef struct { char name[128]; int type; } tmpfs_dirent_t;
@@ -75,6 +90,7 @@ int  rename_tmpfs(const char *old_path, const char *new_path);
 int  link_tmpfs(const char *old_path, const char *new_path);
 int  chmod_tmpfs(const char *path, mode_t mode);
 int  chown_tmpfs(const char *path, uid_t uid, gid_t gid, bool follow);
+int  set_tmpfs_times(const char *path, struct timespec atime, bool set_atime, struct timespec mtime, bool set_mtime, bool follow);
 int  truncate_tmpfs(const char *path, uint64_t size);
 int  read_tmpfs_link(const char *path, char *out, size_t out_size);
 int  next_tmpfs_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size, uint8_t *child_type, ino_t *child_ino);

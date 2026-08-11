@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <stdarg.h>
 #include <limine.h>
 #include <io/fb.h>
@@ -36,3 +37,4 @@ int putchar(int c);
 int puts(const char *s);
 int vprintf(const char *fmt, va_list args);
 int printf(const char *fmt, ...);
+void init_terminal_backbuffer(void);

@@ -13,7 +13,8 @@ A secure, fast and privacy-focused hobby OS.
 | Done | PCI support |
 | Done | Framebuffer, BGA, SVGA II support |
 | Done | IDE PATA and ATAPI support |
-| Done | Sound card support |
+| Done | ext2, ext3 and ext4 support |
+| Done | AC97 support |
 | Done | Initrd support |
 | Done | Gzip decompression support |
 | Done | GDT, IDT and SSE support |
@@ -48,7 +49,7 @@ A secure, fast and privacy-focused hobby OS.
 
 ```bash
 # You can remove --depth=1 to clone the entire commit history (may take a while)
-git clone --depth=1 https://github.com/asmileyguy/nullos.git
+git clone --depth=1 https://github.com/nulloslabs/nullos.git
 cd nullos
 ```
 

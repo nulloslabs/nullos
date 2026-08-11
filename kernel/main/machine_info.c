@@ -1,10 +1,11 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <cpuid.h>
+#include <main/log.h>
 #include <main/string.h>
 #include <main/machine_info.h>
 #include <io/hpet.h>
-#include <io/terminal.h>
 #include <mm/pmm.h>
 const char* get_cpu_name(void) {
     static char buf[49] = {0};
@@ -191,5 +192,5 @@ void cache_machine_info(void) {
     get_cpu_threads();
     get_cpu_freq();
     cpu_has_feature(CPU_FEATURE_FPU); // One function already caches everything.
-    printf("machine info: cached machine info\n");
+    log("machine info: cached machine info\n");
 }

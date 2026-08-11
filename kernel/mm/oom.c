@@ -1,8 +1,8 @@
 #include <stddef.h>
 #include <signal.h>
+#include <main/log.h>
 #include <main/panic.h>
 #include <main/sched.h>
-#include <io/terminal.h>
 #include <mm/mm.h>
 #include <mm/vma.h>
 #include <mm/oom.h>
@@ -15,14 +15,14 @@ void kill_oom(void) {
     spin_lock_irqsave(&sched_lock, &flags);
 
     for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].ring == 0) continue;
-        if (tasks[i].pid == 0 || tasks[i].pid == 1) continue;
-        if (tasks[i].state == TASK_DEAD || tasks[i].state == TASK_ZOMBIE) continue;
+        if (tasks[i]->ring == 0) continue;
+        if (tasks[i]->pid == 0 || tasks[i]->pid == 1) continue;
+        if (tasks[i]->state == TASK_DEAD || tasks[i]->state == TASK_ZOMBIE) continue;
 
         uint64_t usage = 0;
         for (int j = 0; j < VMA_MAX; j++) {
-            if (tasks[i].vmas.entries[j].used) {
-                usage += (tasks[i].vmas.entries[j].end - tasks[i].vmas.entries[j].start);
+            if (tasks[i]->vmas.entries[j].used) {
+                usage += (tasks[i]->vmas.entries[j].end - tasks[i]->vmas.entries[j].start);
             }
         }
 
@@ -33,11 +33,11 @@ void kill_oom(void) {
     }
 
     if (target_idx != -1) {
-        printf("oom: out of memory, killing process '%s' (pid %d)\n", tasks[target_idx].name, tasks[target_idx].pid);
+        log("oom: out of memory, killing process '%s' (pid %d)\n", tasks[target_idx]->name, tasks[target_idx]->pid);
         for (int i = 0; i < MAX_TASKS; i++) {
-            if (tasks[i].ring == 0) continue;
-            if (tasks[i].state == TASK_DEAD || tasks[i].state == TASK_ZOMBIE) continue;
-            if (tasks[i].pgid == tasks[target_idx].pgid) tasks[i].pending_signals |= (1ULL << SIGKILL);
+            if (tasks[i]->ring == 0) continue;
+            if (tasks[i]->state == TASK_DEAD || tasks[i]->state == TASK_ZOMBIE) continue;
+            if (tasks[i]->pgid == tasks[target_idx]->pgid) tasks[i]->pending_signals |= (1ULL << SIGKILL);
         }
     } else {
         panic("out of memory");

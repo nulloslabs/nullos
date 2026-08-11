@@ -1,6 +1,8 @@
+#include <stdbool.h>
 #include <stddef.h>
 #include <errno.h>
 #include <linux/sched.h>
+#include <main/log.h>
 #include <main/string.h>
 #include <main/halt.h>
 #include <main/panic.h>
@@ -12,22 +14,133 @@
 #include <main/msr.h>
 #include <main/mp.h>
 #include <main/timekeeping.h>
-#include <io/terminal.h>
+#include <io/hpet.h>
 #include <io/usb.h>
 #include <mm/mm.h>
 #include <mm/vmm.h>
 #include <syscalls/syscall_impls.h>
 
-task_t tasks[MAX_TASKS];
+static task_t *dead_task;
+task_t *tasks[MAX_TASKS];
 int current_task = 0;
-task_t* current_task_ptr = &tasks[0];
+task_t* current_task_ptr = NULL;
 static spinlock_t task_lock = SPINLOCK_INIT;
 static pid_t next_pid = 0;
+static bool sched_ready = false;
+static uint64_t idle_time_us = 0;
+static uint64_t last_account_us = 0;
+static uint64_t last_load_update_us = 0;
+static unsigned long load_averages[3];
+static uint64_t context_switch_count = 0;
+static uint64_t processes_created = 0;
+static uint64_t timer_interrupt_count = 0;
+static pid_t last_created_pid = 0;
+
+static pid_t alloc_pid_locked(void) {
+    for (int tries = 0; tries < PID_MAX; tries++) {
+        pid_t pid = next_pid++;
+        if (next_pid >= PID_MAX) next_pid = 1;
+        bool used = false;
+        for (int i = 0; i < MAX_TASKS; i++) {
+            if (tasks[i] != dead_task && tasks[i]->state != TASK_DEAD && tasks[i]->pid == pid) { used = true; break; }
+        }
+        if (!used) return pid;
+    }
+    return -EAGAIN;
+}
+
+static bool alloc_task_slot(int i) {
+    if (tasks[i] != dead_task) {
+        memset(tasks[i], 0, sizeof(*tasks[i]));
+        return true;
+    }
+    task_t *task = malloc(sizeof(*task));
+    if (!task) return false;
+    memset(task, 0, sizeof(*task));
+    tasks[i] = task;
+    return true;
+}
+
+task_t *task_by_pid(pid_t pid) {
+    int idx = task_index_by_pid(pid);
+    return idx < 0 ? NULL : tasks[idx];
+}
+
+int task_index_by_pid(pid_t pid) {
+    for (int i = 0; i < MAX_TASKS; i++) if (tasks[i] != dead_task && tasks[i]->state != TASK_DEAD && tasks[i]->pid == pid) return i;
+    return -1;
+}
+
+void release_task_slot(int task_idx) {
+    if (task_idx < 0 || task_idx >= MAX_TASKS || tasks[task_idx] == dead_task) return;
+    if (tasks[task_idx]->kernel_stack && tasks[task_idx]->ring != 0) vfree(tasks[task_idx]->kernel_stack);
+    if (tasks[task_idx]->fpu_area) vfree(tasks[task_idx]->fpu_area);
+    free(tasks[task_idx]);
+    tasks[task_idx] = dead_task;
+}
+
+static unsigned long calc_load(unsigned long load, unsigned long exp, unsigned long active) {
+    return (load * exp + active * (LOAD_FIXED_1 - exp)) >> 11;
+}
+
+static unsigned long count_runnable_tasks(void) {
+    unsigned long count = 0;
+    for (int i = 1; i < MAX_TASKS; i++) if (tasks[i]->state == TASK_READY || tasks[i]->state == TASK_RUNNING) count++;
+    return count;
+}
+
+static void update_load_averages(void) {
+    uint64_t now = hpet_elapsed_us();
+    if (!last_load_update_us) { last_load_update_us = now; return; }
+    while (now - last_load_update_us >= LOAD_UPDATE_US) {
+        unsigned long active = count_runnable_tasks() * LOAD_FIXED_1;
+        load_averages[0] = calc_load(load_averages[0], LOAD_EXP_1, active);
+        load_averages[1] = calc_load(load_averages[1], LOAD_EXP_5, active);
+        load_averages[2] = calc_load(load_averages[2], LOAD_EXP_15, active);
+        last_load_update_us += LOAD_UPDATE_US;
+    }
+}
+
+uint64_t get_idle_time_us(void) {
+    uint64_t idle = idle_time_us;
+    uint64_t now = hpet_elapsed_us();
+    if (current_task == 0 && now >= last_account_us) idle += now - last_account_us;
+    return idle;
+}
+
+uint64_t get_context_switch_count(void) { return context_switch_count; }
+uint64_t get_processes_created(void) { return processes_created; }
+uint64_t get_timer_interrupt_count(void) { return __atomic_load_n(&timer_interrupt_count, __ATOMIC_RELAXED); }
+pid_t get_last_created_pid(void) { return last_created_pid; }
+void record_timer_interrupt(void) { __atomic_add_fetch(&timer_interrupt_count, 1, __ATOMIC_RELAXED); }
+
+uint32_t get_runnable_task_count(void) {
+    uint32_t count = 0;
+    for (int i = 1; i < MAX_TASKS; i++) if (tasks[i]->state == TASK_READY || tasks[i]->state == TASK_RUNNING) count++;
+    return count;
+}
+
+uint16_t get_process_count(void) {
+    uint16_t count = 0;
+    for (int i = 0; i < MAX_TASKS; i++) if (tasks[i]->state != TASK_DEAD) count++;
+    return count;
+}
+
+void get_load_averages(unsigned long loads[3]) {
+    update_load_averages();
+    loads[0] = load_averages[0] << 5;
+    loads[1] = load_averages[1] << 5;
+    loads[2] = load_averages[2] << 5;
+}
+
+bool is_sched_ready(void) {
+    return sched_ready;
+}
 
 const vma_table_t *task_vma_table(int pid_idx) {
     if (pid_idx < 0 || pid_idx >= MAX_TASKS) return NULL;
-    if (tasks[pid_idx].state == TASK_DEAD) return NULL;
-    return &tasks[pid_idx].vmas;
+    if (tasks[pid_idx]->state == TASK_DEAD) return NULL;
+    return &tasks[pid_idx]->vmas;
 }
 
 // Let's keep this public and not private, other functions change it.
@@ -40,16 +153,23 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
     spin_lock_irqsave(&task_lock, &flags);
 
     for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].state == TASK_DEAD) {
+        if (tasks[i]->state == TASK_DEAD) {
+            if (!alloc_task_slot(i)) { spin_unlock_irqrestore(&task_lock, flags); return -ENOMEM; }
             uint64_t cs, ss;
             void *stack;
+            tasks[i]->ring = ring;
 
             if (ring == 0) {
                 cs = 0x08;
                 ss = 0x10;
                 stack = vmalloc(KERNEL_STACK_SIZE);
-                tasks[i].ctx = ctx ? ctx : &kernel_context;
-                tasks[i].kernel_stack = stack;
+                if (!stack) {
+                    release_task_slot(i);
+                    spin_unlock_irqrestore(&task_lock, flags);
+                    return -ENOMEM;
+                }
+                tasks[i]->ctx = ctx ? ctx : &kernel_context;
+                tasks[i]->kernel_stack = stack;
             } else {
                 cs = 0x23;
                 ss = 0x1B;
@@ -58,54 +178,64 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
                 } else {
                     stack = vmalloc_user_ex(ctx, USER_STACK_SIZE);
                     if (!stack) {
+                        release_task_slot(i);
                         spin_unlock_irqrestore(&task_lock, flags);
-                        return -1;
+                        return -ENOMEM;
                     }
                 }
-                tasks[i].ctx = ctx;
-                tasks[i].kernel_stack = vmalloc(KERNEL_STACK_SIZE);
+                tasks[i]->ctx = ctx;
+                tasks[i]->kernel_stack = vmalloc(KERNEL_STACK_SIZE);
+                if (!tasks[i]->kernel_stack) {
+                    release_task_slot(i);
+                    spin_unlock_irqrestore(&task_lock, flags);
+                    return -ENOMEM;
+                }
             }
 
-            tasks[i].stack_base = stack;
-            tasks[i].ring = ring;
-            tasks[i].ctx = ctx ? ctx : &kernel_context;
-            tasks[i].uid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->uid;
-            tasks[i].euid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->euid;
-            tasks[i].gid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->gid;
-            tasks[i].egid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->egid;
-            tasks[i].fs_base = 0;
-            tasks[i].gs_base = 0;
-            tasks[i].ctty_idx = current_task_ptr ? current_task_ptr->ctty_idx : 0;
+            tasks[i]->stack_base = stack;
+            tasks[i]->ring = ring;
+            tasks[i]->ctx = ctx ? ctx : &kernel_context;
+            tasks[i]->uid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->uid;
+            tasks[i]->euid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->euid;
+            tasks[i]->fsuid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->fsuid;
+            tasks[i]->gid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->gid;
+            tasks[i]->egid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->egid;
+            tasks[i]->fsgid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->fsgid;
+            tasks[i]->fs_base = 0;
+            tasks[i]->gs_base = 0;
+            tasks[i]->ctty_idx = current_task_ptr ? current_task_ptr->ctty_idx : 0;
 
-            init_fd_table(&tasks[i].fd_table);
-            strcpy(tasks[i].cwd, "/");
-            tasks[i].exe[0] = '\0';
-            tasks[i].name[0] = '\0';
-            init_vma_table(&tasks[i].vmas);
-            memset(tasks[i].sigactions, 0, sizeof(tasks[i].sigactions));
-            tasks[i].pgid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->pgid;
-            tasks[i].sid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->sid;
-            tasks[i].term_sig = 0;
-            tasks[i].pending_signals = 0;
-            tasks[i].blocked_signals = 0;
-            tasks[i].real_timer_deadline_us = 0;
-            tasks[i].real_timer_interval_us = 0;
-            tasks[i].on_altstack = false;
-            tasks[i].sas_ss_sp = NULL;
-            tasks[i].sas_ss_size = 0;
-            tasks[i].sas_ss_flags = 0;
-            tasks[i].robust_list_head = NULL;
-            tasks[i].rseq     = NULL;
-            tasks[i].rseq_len = 0;
-            tasks[i].rseq_sig = 0;
+            init_fd_table(&tasks[i]->fd_table);
+            strcpy(tasks[i]->cwd, "/");
+            tasks[i]->exe[0] = '\0';
+            tasks[i]->name[0] = '\0';
+            init_vma_table(&tasks[i]->vmas);
+            memset(tasks[i]->sigactions, 0, sizeof(tasks[i]->sigactions));
+            tasks[i]->pgid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->pgid;
+            tasks[i]->sid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->sid;
+            tasks[i]->term_sig = 0;
+            tasks[i]->stop_reported = 0;
+            tasks[i]->stopped_by_signal = 0;
+            tasks[i]->pending_signals = 0;
+            tasks[i]->blocked_signals = 0;
+            tasks[i]->real_timer_deadline_us = 0;
+            tasks[i]->real_timer_interval_us = 0;
+            tasks[i]->on_altstack = false;
+            tasks[i]->sas_ss_sp = NULL;
+            tasks[i]->sas_ss_size = 0;
+            tasks[i]->sas_ss_flags = 0;
+            tasks[i]->robust_list_head = NULL;
+            tasks[i]->rseq     = NULL;
+            tasks[i]->rseq_len = 0;
+            tasks[i]->rseq_sig = 0;
 
             // Per-task FPU area: freshly initialized to a clean state so the
             // new task starts with sane x87/SSE registers rather than the
             // previous owner's.  Kernel tasks (ring 0) also get one so any
             // FP use inside the kernel doesn't leak across tasks.
-            tasks[i].fpu_area = vmalloc(get_fpu_state_size());
-            if (tasks[i].fpu_area) {
-                init_fpu_area(tasks[i].fpu_area);
+            tasks[i]->fpu_area = vmalloc(get_fpu_state_size());
+            if (tasks[i]->fpu_area) {
+                init_fpu_area(tasks[i]->fpu_area);
             }
 
             uint64_t v_rsp;
@@ -115,7 +245,7 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
                 v_rsp = initial_rsp ? initial_rsp : ((uint64_t)stack + USER_STACK_SIZE);
             }
 
-            uint64_t k_rsp = (uint64_t)tasks[i].kernel_stack + KERNEL_STACK_SIZE;
+            uint64_t k_rsp = (uint64_t)tasks[i]->kernel_stack + KERNEL_STACK_SIZE;
 
             #define PUSH(val) do { \
                 k_rsp -= 8; \
@@ -140,14 +270,16 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
 
             #undef PUSH
 
-            tasks[i].rsp = k_rsp;
-            tasks[i].pid = next_pid++;
-            tasks[i].ppid = current_task_ptr ? current_task_ptr->pid : 0;
-            tasks[i].state = TASK_READY;
-            tasks[i].priority = 1;
+            tasks[i]->rsp = k_rsp;
+            tasks[i]->pid = alloc_pid_locked();
+            tasks[i]->ppid = current_task_ptr ? current_task_ptr->pid : 0;
+            tasks[i]->state = TASK_READY;
+            tasks[i]->priority = 1;
 
+            processes_created++;
+            last_created_pid = tasks[i]->pid;
             spin_unlock_irqrestore(&task_lock, flags);
-            return tasks[i].pid;
+            return tasks[i]->pid;
         }
     }
     spin_unlock_irqrestore(&task_lock, flags);
@@ -159,25 +291,28 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
     spin_lock_irqsave(&task_lock, &flags);
 
     for (int i = 1; i < MAX_TASKS; i++) {
-        if (tasks[i].state == TASK_DEAD) {
-            tasks[i].stack_base = current_task_ptr->stack_base;
-            tasks[i].ring = current_task_ptr->ring;
-            tasks[i].ctx = child_ctx;
-            strcpy(tasks[i].cwd, current_task_ptr->cwd);
-            strcpy(tasks[i].exe, current_task_ptr->exe);
-            strcpy(tasks[i].name, current_task_ptr->name);
+        if (tasks[i]->state == TASK_DEAD) {
+            if (!alloc_task_slot(i)) { spin_unlock_irqrestore(&task_lock, flags); return -ENOMEM; }
+            tasks[i]->stack_base = current_task_ptr->stack_base;
+            tasks[i]->ring = current_task_ptr->ring;
+            tasks[i]->ctx = child_ctx;
+            strcpy(tasks[i]->cwd, current_task_ptr->cwd);
+            strcpy(tasks[i]->exe, current_task_ptr->exe);
+            strcpy(tasks[i]->name, current_task_ptr->name);
             // A forked child shares an identical address space, so its VMA
             // layout is a copy of the parent's at this instant.
-            memcpy(&tasks[i].vmas, &current_task_ptr->vmas, sizeof(vma_table_t));
-            tasks[i].ppid = current_task_ptr->pid;
-            tasks[i].pgid = current_task_ptr->pgid;
-            tasks[i].uid = current_task_ptr->uid;
-            tasks[i].euid = current_task_ptr->euid;
-            tasks[i].gid = current_task_ptr->gid;
-            tasks[i].egid = current_task_ptr->egid;
-            tasks[i].fs_base = current_task_ptr->fs_base;
-            tasks[i].gs_base = current_task_ptr->gs_base;
-            tasks[i].ctty_idx = current_task_ptr->ctty_idx;
+            memcpy(&tasks[i]->vmas, &current_task_ptr->vmas, sizeof(vma_table_t));
+            tasks[i]->ppid = current_task_ptr->pid;
+            tasks[i]->pgid = current_task_ptr->pgid;
+            tasks[i]->uid = current_task_ptr->uid;
+            tasks[i]->euid = current_task_ptr->euid;
+            tasks[i]->fsuid = current_task_ptr->fsuid;
+            tasks[i]->gid = current_task_ptr->gid;
+            tasks[i]->egid = current_task_ptr->egid;
+            tasks[i]->fsgid = current_task_ptr->fsgid;
+            tasks[i]->fs_base = current_task_ptr->fs_base;
+            tasks[i]->gs_base = current_task_ptr->gs_base;
+            tasks[i]->ctty_idx = current_task_ptr->ctty_idx;
 
             // A forked child gets a FRESH canonical line buffer.  The task
             // slot may have been reused from a previously-dead task whose
@@ -185,47 +320,50 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
             // the child's first read() returns stale garbage instead of
             // blocking for real input, which wedges getty/login/bash at the
             // login prompt after a stray boot keypress.
-            tasks[i].stdin_buf_len = 0;
-            tasks[i].stdin_buf_pos = 0;
+            tasks[i]->stdin_buf_len = 0;
+            tasks[i]->stdin_buf_pos = 0;
 
             // Inherit signal dispositions from parent (POSIX fork semantics)
-            memcpy(tasks[i].sigactions, current_task_ptr->sigactions, sizeof(tasks[i].sigactions));
-            tasks[i].blocked_signals = current_task_ptr->blocked_signals;
-            tasks[i].pending_signals = 0;
-            tasks[i].real_timer_deadline_us = 0;
-            tasks[i].real_timer_interval_us = 0;
-            tasks[i].sid = current_task_ptr->sid;
-            tasks[i].term_sig = 0;
-            tasks[i].on_altstack = false;
-            tasks[i].sas_ss_sp = current_task_ptr->sas_ss_sp;
-            tasks[i].sas_ss_size = current_task_ptr->sas_ss_size;
-            tasks[i].sas_ss_flags = current_task_ptr->sas_ss_flags;            // Robust list is per-thread and not inherited across fork.
-            tasks[i].robust_list_head = NULL;
-            tasks[i].rseq            = NULL;
-            tasks[i].rseq_len        = 0;
-            tasks[i].rseq_sig        = 0;
+            memcpy(tasks[i]->sigactions, current_task_ptr->sigactions, sizeof(tasks[i]->sigactions));
+            tasks[i]->blocked_signals = current_task_ptr->blocked_signals;
+            tasks[i]->pending_signals = 0;
+            tasks[i]->real_timer_deadline_us = 0;
+            tasks[i]->real_timer_interval_us = 0;
+            tasks[i]->sid = current_task_ptr->sid;
+            tasks[i]->term_sig = 0;
+            tasks[i]->stop_reported = 0;
+            tasks[i]->stopped_by_signal = 0;
+            tasks[i]->on_altstack = false;
+            tasks[i]->sas_ss_sp = current_task_ptr->sas_ss_sp;
+            tasks[i]->sas_ss_size = current_task_ptr->sas_ss_size;
+            tasks[i]->sas_ss_flags = current_task_ptr->sas_ss_flags;            // Robust list is per-thread and not inherited across fork.
+            tasks[i]->robust_list_head = NULL;
+            tasks[i]->rseq            = NULL;
+            tasks[i]->rseq_len        = 0;
+            tasks[i]->rseq_sig        = 0;
             // Per-task FPU area.  The child inherits the parent's current FP
             // state (POSIX fork: child sees a snapshot of the parent's FPU).
             // We save the live state into the child's fresh buffer.
-            tasks[i].fpu_area = vmalloc(get_fpu_state_size());
-            if (tasks[i].fpu_area) {
-                init_fpu_area(tasks[i].fpu_area);
+            tasks[i]->fpu_area = vmalloc(get_fpu_state_size());
+            if (tasks[i]->fpu_area) {
+                init_fpu_area(tasks[i]->fpu_area);
                 // Copy the parent's last-saved FPU state into the child.
                 if (current_task_ptr->fpu_area) {
-                    memcpy(tasks[i].fpu_area, current_task_ptr->fpu_area, get_fpu_state_size());
+                    memcpy(tasks[i]->fpu_area, current_task_ptr->fpu_area, get_fpu_state_size());
                 }
             }
 
             void *kstack = vmalloc(KERNEL_STACK_SIZE);
             if (!kstack) {
+                release_task_slot(i);
                 spin_unlock_irqrestore(&task_lock, flags);
-                return -1;
+                return -ENOMEM;
             }
-            tasks[i].kernel_stack = kstack;
+            tasks[i]->kernel_stack = kstack;
 
-            memcpy(&tasks[i].fd_table, &current_task_ptr->fd_table, sizeof(fd_table_t));
+            memcpy(&tasks[i]->fd_table, &current_task_ptr->fd_table, sizeof(fd_table_t));
             for (int fd = 0; fd < FD_MAX; fd++) {
-                if (tasks[i].fd_table.entries[fd].open) retain_fd_entry(&tasks[i].fd_table.entries[fd]);
+                if (tasks[i]->fd_table.entries[fd].open) retain_fd_entry(&tasks[i]->fd_table.entries[fd]);
             }
 
             uint64_t v_rsp = (uint64_t)kstack + KERNEL_STACK_SIZE;
@@ -238,9 +376,9 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
 
             PUSH(0x1B);
             PUSH(frame->rsp);
-            PUSH(frame->r11);
+            PUSH(frame->rflags);
             PUSH(0x23);
-            PUSH(frame->rcx);
+            PUSH(frame->rip);
 
             PUSH(0);
             PUSH(frame->rbx);
@@ -263,102 +401,108 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
 
             #undef PUSH
 
-            tasks[i].rsp      = v_rsp;
-            tasks[i].pid      = next_pid++;
-            tasks[i].state    = TASK_READY;
-            tasks[i].priority = 1;
+            tasks[i]->rsp      = v_rsp;
+            tasks[i]->pid      = alloc_pid_locked();
+            tasks[i]->state    = TASK_READY;
+            tasks[i]->priority = 1;
 
+            processes_created++;
+            last_created_pid = tasks[i]->pid;
             spin_unlock_irqrestore(&task_lock, flags);
-            return tasks[i].pid;
+            return tasks[i]->pid;
         }
     }
     spin_unlock_irqrestore(&task_lock, flags);
     return -EAGAIN;
 }
 
-pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *ctx, uint64_t flags,
-                       uint64_t new_rsp, int *parent_tidptr, int *child_tidptr,
-                       uint64_t new_fs_base) {
+pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *ctx, uint64_t flags, uint64_t new_rsp, int *parent_tidptr, int *child_tidptr, uint64_t new_fs_base) {
     uint64_t iflags;
     spin_lock_irqsave(&task_lock, &iflags);
 
     for (int i = 1; i < MAX_TASKS; i++) {
-        if (tasks[i].state != TASK_DEAD) continue;
+        if (tasks[i]->state != TASK_DEAD) continue;
+        if (!alloc_task_slot(i)) { spin_unlock_irqrestore(&task_lock, iflags); return -ENOMEM; }
 
-        tasks[i].stack_base = current_task_ptr->stack_base;
-        tasks[i].ring       = current_task_ptr->ring;
-        tasks[i].ctx        = ctx;
-        strcpy(tasks[i].cwd, current_task_ptr->cwd);
-        strcpy(tasks[i].exe, current_task_ptr->exe);
-        strcpy(tasks[i].name, current_task_ptr->name);
+        tasks[i]->stack_base = current_task_ptr->stack_base;
+        tasks[i]->ring       = current_task_ptr->ring;
+        tasks[i]->ctx        = ctx;
+        strcpy(tasks[i]->cwd, current_task_ptr->cwd);
+        strcpy(tasks[i]->exe, current_task_ptr->exe);
+        strcpy(tasks[i]->name, current_task_ptr->name);
 
         // VMA layout is only meaningful when not sharing VM; for CLONE_VM the
         // child inherits the same regions.
-        memcpy(&tasks[i].vmas, &current_task_ptr->vmas, sizeof(vma_table_t));
+        memcpy(&tasks[i]->vmas, &current_task_ptr->vmas, sizeof(vma_table_t));
 
         // CLONE_PARENT and CLONE_THREAD both make the new task's parent the
         // same as the caller's parent (i.e. the sibling/leader relationship);
         // otherwise the caller is the parent.
-        tasks[i].ppid     = (flags & (CLONE_PARENT | CLONE_THREAD)) ? current_task_ptr->ppid : current_task_ptr->pid;
+        tasks[i]->ppid     = (flags & (CLONE_PARENT | CLONE_THREAD)) ? current_task_ptr->ppid : current_task_ptr->pid;
         // Newly created clone children belong to the same process group as the caller.
-        tasks[i].pgid     = current_task_ptr->pgid;
-        tasks[i].uid      = current_task_ptr->uid;
-        tasks[i].euid     = current_task_ptr->euid;
-        tasks[i].gid      = current_task_ptr->gid;
-        tasks[i].egid     = current_task_ptr->egid;
-        tasks[i].ctty_idx = current_task_ptr->ctty_idx;
-        tasks[i].sid      = current_task_ptr->sid;
+        tasks[i]->pgid     = current_task_ptr->pgid;
+        tasks[i]->uid      = current_task_ptr->uid;
+        tasks[i]->euid     = current_task_ptr->euid;
+        tasks[i]->fsuid    = current_task_ptr->fsuid;
+        tasks[i]->gid      = current_task_ptr->gid;
+        tasks[i]->egid     = current_task_ptr->egid;
+        tasks[i]->fsgid    = current_task_ptr->fsgid;
+        tasks[i]->ctty_idx = current_task_ptr->ctty_idx;
+        tasks[i]->sid      = current_task_ptr->sid;
         // CLONE_SETTLS installs the requested TLS pointer for the child;
         // otherwise it inherits the parent's.
-        tasks[i].fs_base  = (flags & CLONE_SETTLS) ? new_fs_base : current_task_ptr->fs_base;
-        tasks[i].gs_base  = current_task_ptr->gs_base;
+        tasks[i]->fs_base  = (flags & CLONE_SETTLS) ? new_fs_base : current_task_ptr->fs_base;
+        tasks[i]->gs_base  = current_task_ptr->gs_base;
 
         // Fresh canonical line buffer for the child (see clone_task): the
         // task slot may be reused from a dead task with stale stdin_buf
         // state, which would otherwise leak through to the child's reads.
-        tasks[i].stdin_buf_len = 0;
-        tasks[i].stdin_buf_pos = 0;
+        tasks[i]->stdin_buf_len = 0;
+        tasks[i]->stdin_buf_pos = 0;
 
-        memcpy(tasks[i].sigactions, current_task_ptr->sigactions, sizeof(tasks[i].sigactions));
-        tasks[i].blocked_signals = current_task_ptr->blocked_signals;
+        memcpy(tasks[i]->sigactions, current_task_ptr->sigactions, sizeof(tasks[i]->sigactions));
+        tasks[i]->blocked_signals = current_task_ptr->blocked_signals;
         // CLONE_THREAD shares the pending signal set with the parent, but since
         // our model keeps a per-task bitmap we start clean (the group signal
         // semantic is approximated by kill targeting the thread).
-        tasks[i].pending_signals  = 0;
-        tasks[i].real_timer_deadline_us = 0;
-        tasks[i].real_timer_interval_us = 0;
-        tasks[i].term_sig         = 0;
-        tasks[i].on_altstack      = false;
-        tasks[i].sas_ss_sp        = current_task_ptr->sas_ss_sp;
-        tasks[i].sas_ss_size      = current_task_ptr->sas_ss_size;
-        tasks[i].sas_ss_flags     = current_task_ptr->sas_ss_flags;
+        tasks[i]->pending_signals  = 0;
+        tasks[i]->real_timer_deadline_us = 0;
+        tasks[i]->real_timer_interval_us = 0;
+        tasks[i]->term_sig         = 0;
+        tasks[i]->stop_reported    = 0;
+        tasks[i]->stopped_by_signal = 0;
+        tasks[i]->on_altstack      = false;
+        tasks[i]->sas_ss_sp        = current_task_ptr->sas_ss_sp;
+        tasks[i]->sas_ss_size      = current_task_ptr->sas_ss_size;
+        tasks[i]->sas_ss_flags     = current_task_ptr->sas_ss_flags;
         // Robust list is per-thread and not inherited across fork.
-        tasks[i].robust_list_head = NULL;
-        tasks[i].rseq             = NULL;
-        tasks[i].rseq_len         = 0;
-        tasks[i].rseq_sig         = 0;
+        tasks[i]->robust_list_head = NULL;
+        tasks[i]->rseq             = NULL;
+        tasks[i]->rseq_len         = 0;
+        tasks[i]->rseq_sig         = 0;
 
-        tasks[i].fpu_area = vmalloc(get_fpu_state_size());
-        if (tasks[i].fpu_area) {
-            init_fpu_area(tasks[i].fpu_area);
+        tasks[i]->fpu_area = vmalloc(get_fpu_state_size());
+        if (tasks[i]->fpu_area) {
+            init_fpu_area(tasks[i]->fpu_area);
             if (current_task_ptr->fpu_area)
-                memcpy(tasks[i].fpu_area, current_task_ptr->fpu_area, get_fpu_state_size());
+                memcpy(tasks[i]->fpu_area, current_task_ptr->fpu_area, get_fpu_state_size());
         }
 
         void *kstack = vmalloc(KERNEL_STACK_SIZE);
         if (!kstack) {
+            release_task_slot(i);
             spin_unlock_irqrestore(&task_lock, iflags);
             return -ENOMEM;
         }
-        tasks[i].kernel_stack = kstack;
+        tasks[i]->kernel_stack = kstack;
 
         // CLONE_FILES shares the file descriptor table.  We do not implement
         // reference-counted shared tables, so we always copy.  This is
         // behaviourally identical to the historical fork() here.
-        memcpy(&tasks[i].fd_table, &current_task_ptr->fd_table, sizeof(fd_table_t));
+        memcpy(&tasks[i]->fd_table, &current_task_ptr->fd_table, sizeof(fd_table_t));
         for (int fd = 0; fd < FD_MAX; fd++) {
-            if (tasks[i].fd_table.entries[fd].open)
-                retain_fd_entry(&tasks[i].fd_table.entries[fd]);
+            if (tasks[i]->fd_table.entries[fd].open)
+                retain_fd_entry(&tasks[i]->fd_table.entries[fd]);
         }
 
         // Write the child's pid into the parent's tidptr now (parent can read
@@ -370,60 +514,62 @@ pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *ctx, uint64_t flag
 
         uint64_t v_rsp = (uint64_t)kstack + KERNEL_STACK_SIZE;
 
-        #define PUSH2(val) do { \
+        #define PUSH(val) do { \
             v_rsp -= 8; \
             uint64_t _pv = (uint64_t)(val); \
             write_vmm(&kernel_context, v_rsp, &_pv, 8); \
         } while(0)
 
         // iretq frame
-        PUSH2(0x1B);                          // ss
-        PUSH2(new_rsp ? new_rsp : frame->rsp); // user rsp
-        PUSH2(frame->r11);                    // rflags
-        PUSH2(0x23);                          // cs
-        PUSH2(frame->rcx);                    // user rip (return point)
+        PUSH(0x1B);                          // ss
+        PUSH(new_rsp ? new_rsp : frame->rsp); // user rsp
+        PUSH(frame->rflags);                 // rflags
+        PUSH(0x23);                          // cs
+        PUSH(frame->rip);                    // user rip (return point)
 
         // general purpose registers (rax comes first, == 0 for the child)
-        PUSH2(0);                              // rax -> child sees clone() == 0
-        PUSH2(frame->rbx);
-        PUSH2(frame->rcx);
-        PUSH2(frame->rdx);
-        PUSH2(frame->rsi);
-        PUSH2(frame->rdi);
-        PUSH2(frame->rbp);
-        PUSH2(frame->r8);
-        PUSH2(frame->r9);
-        PUSH2(frame->r10);
-        PUSH2(frame->r11);
-        PUSH2(frame->r12);
-        PUSH2(frame->r13);
-        PUSH2(frame->r14);
-        PUSH2(frame->r15);
+        PUSH(0);                              // rax -> child sees clone() == 0
+        PUSH(frame->rbx);
+        PUSH(frame->rcx);
+        PUSH(frame->rdx);
+        PUSH(frame->rsi);
+        PUSH(frame->rdi);
+        PUSH(frame->rbp);
+        PUSH(frame->r8);
+        PUSH(frame->r9);
+        PUSH(frame->r10);
+        PUSH(frame->r11);
+        PUSH(frame->r12);
+        PUSH(frame->r13);
+        PUSH(frame->r14);
+        PUSH(frame->r15);
 
-        PUSH2(0x1B);
-        PUSH2(0x1B);
+        PUSH(0x1B);
+        PUSH(0x1B);
 
-        #undef PUSH2
+        #undef PUSH
 
-        tasks[i].rsp            = v_rsp;
-        tasks[i].pid            = next_pid++;
-        tasks[i].state          = TASK_READY;
-        tasks[i].priority       = 1;
-        tasks[i].clear_child_tid = (flags & CLONE_CHILD_CLEARTID) ? child_tidptr : NULL;
+        tasks[i]->rsp            = v_rsp;
+        tasks[i]->pid            = alloc_pid_locked();
+        tasks[i]->state          = TASK_READY;
+        tasks[i]->priority       = 1;
+        tasks[i]->clear_child_tid = (flags & CLONE_CHILD_CLEARTID) ? child_tidptr : NULL;
 
         // Stamp the real pid into parent_tidptr now that it is known.
         if ((flags & CLONE_PARENT_SETTID) && parent_tidptr) {
-            int pid = tasks[i].pid;
+            int pid = tasks[i]->pid;
             write_vmm(current_task_ptr->ctx, (uint64_t)parent_tidptr, &pid, sizeof(int));
         }
         // CLONE_CHILD_SETTID: child itself observes its pid at child_tidptr.
         if ((flags & CLONE_CHILD_SETTID) && child_tidptr) {
-            int pid = tasks[i].pid;
+            int pid = tasks[i]->pid;
             write_vmm(ctx, (uint64_t)child_tidptr, &pid, sizeof(int));
         }
 
+        processes_created++;
+        last_created_pid = tasks[i]->pid;
         spin_unlock_irqrestore(&task_lock, iflags);
-        return tasks[i].pid;
+        return tasks[i]->pid;
     }
     spin_unlock_irqrestore(&task_lock, iflags);
     return -EAGAIN;
@@ -433,7 +579,7 @@ void update_interval_timers(void) {
     uint64_t now = time_get_realtime_us();
 
     for (int i = 0; i < MAX_TASKS; i++) {
-        task_t *task = &tasks[i];
+        task_t *task = tasks[i];
         if (task->state == TASK_DEAD || task->state == TASK_ZOMBIE ||
             task->real_timer_deadline_us == 0 || now < task->real_timer_deadline_us) {
             continue;
@@ -453,79 +599,82 @@ void update_interval_timers(void) {
 }
 
 void schedule(void) {
+    uint64_t now = hpet_elapsed_us();
+    if (current_task == 0 && now >= last_account_us) idle_time_us += now - last_account_us;
+    last_account_us = now;
+    update_load_averages();
     update_interval_timers();
     check_futex_timeouts();
 
     int old_task = current_task;
 
-    if (tasks[old_task].state == TASK_RUNNING) {
-        tasks[old_task].state = TASK_READY;
+    if (tasks[old_task]->state == TASK_RUNNING) {
+        tasks[old_task]->state = TASK_READY;
     }
 
     int next = old_task;
     int found = 0;
     for (int i = 0; i < MAX_TASKS; i++) {
         next = (next + 1) % MAX_TASKS;
-        if (tasks[next].state == TASK_READY) {
+        if (tasks[next]->state == TASK_READY) {
             found = 1;
             break;
         }
     }
 
-    if (tasks[old_task].state == TASK_ZOMBIE && tasks[old_task].ppid == 0) {
-        if (tasks[old_task].stack_base) {
-            vfree(tasks[old_task].stack_base);
-            tasks[old_task].stack_base = NULL;
+    if (tasks[old_task]->state == TASK_ZOMBIE && tasks[old_task]->ppid == 0) {
+        if (tasks[old_task]->stack_base) {
+            vfree(tasks[old_task]->stack_base);
+            tasks[old_task]->stack_base = NULL;
         }
-        if (tasks[old_task].kernel_stack && tasks[old_task].ring != 0) {
-            vfree(tasks[old_task].kernel_stack);
-            tasks[old_task].kernel_stack = NULL;
+        if (tasks[old_task]->kernel_stack && tasks[old_task]->ring != 0) {
+            vfree(tasks[old_task]->kernel_stack);
+            tasks[old_task]->kernel_stack = NULL;
         }
-        if (tasks[old_task].fpu_area) {
-            vfree(tasks[old_task].fpu_area);
-            tasks[old_task].fpu_area = NULL;
+        if (tasks[old_task]->fpu_area) {
+            vfree(tasks[old_task]->fpu_area);
+            tasks[old_task]->fpu_area = NULL;
         }
-        tasks[old_task].state = TASK_DEAD;
-        tasks[old_task].pid = 0;
+        release_task_slot(old_task);
     }
 
     if (found) {
         // Eager FPU save of the outgoing task (before its registers are
         // clobbered by the incoming task).  Skip if the outgoing task is a
         // zombie being reaped above — its fpu_area is already gone.
-        if (old_task != next && tasks[old_task].fpu_area &&
-            tasks[old_task].state != TASK_DEAD) {
-            save_fpu_state(tasks[old_task].fpu_area);
+        if (old_task != next && tasks[old_task]->fpu_area && tasks[old_task]->state != TASK_DEAD) {
+            save_fpu_state(tasks[old_task]->fpu_area);
         }
 
         current_task = next;
-        tasks[current_task].state = TASK_RUNNING;
-        current_task_ptr = &tasks[current_task];
+        tasks[current_task]->state = TASK_RUNNING;
+        current_task_ptr = tasks[current_task];
+        if (old_task != next) context_switch_count++;
 
         // Ensure TSS.RSP0 is updated so Ring 3 -> Ring 0 interrupts use the correct stack!
         // Use get_cpu_index() so APs update their own TSS, not always CPU 0's.
-        if (tasks[next].kernel_stack) {
+        if (tasks[next]->kernel_stack) {
             set_tss_kernel_stack_for_cpu(get_cpu_index(),
-                (void*)((uint64_t)tasks[next].kernel_stack + KERNEL_STACK_SIZE));
+                (void*)((uint64_t)tasks[next]->kernel_stack + KERNEL_STACK_SIZE));
         }
 
-        if (tasks[next].ctx && tasks[next].ctx != tasks[old_task].ctx) {
-            switch_vmm_context(tasks[next].ctx);
+        if (tasks[next]->ctx && tasks[next]->ctx != tasks[old_task]->ctx) {
+            switch_vmm_context(tasks[next]->ctx);
         }
 
-        write_msr(MSR_FS_BASE, tasks[next].fs_base);
+        write_msr(MSR_FS_BASE, tasks[next]->fs_base);
         // MSR_GS_BASE holds the user's gs_base (visible in ring 3 via GS).
         // MSR_KERNEL_GS_BASE holds current_task_ptr so that swapgs in
         // syscall_entry swaps in the kernel's task pointer, not user GS.
-        write_msr(MSR_GS_BASE, tasks[next].gs_base);
+        write_msr(MSR_GS_BASE, tasks[next]->gs_base);
         write_msr(MSR_KERNEL_GS_BASE, (uint64_t)current_task_ptr);
 
         // Eager FPU restore of the incoming task.  clts first so the
         // xrstor/fxrstor doesn't #NM (TS should already be clear in our
         // eager model, but be defensive against any path that set it).
-        if (old_task != next && tasks[next].fpu_area) {
+        if (old_task != next && tasks[next]->fpu_area) {
             __asm__ volatile("clts");
-            restore_fpu_state(tasks[next].fpu_area);
+            restore_fpu_state(tasks[next]->fpu_area);
         }
     }
 }
@@ -540,8 +689,8 @@ void exit_task(int status) {
 
     // status encodes the exit code; term_sig was already set if killed by signal.
     // For a voluntary exit (sys_exit/sys_exit_group), term_sig stays 0.
-    tasks[current_task].exit_status = status;
-    tasks[current_task].state = TASK_ZOMBIE;
+    tasks[current_task]->exit_status = status;
+    tasks[current_task]->state = TASK_ZOMBIE;
     current_task_ptr->exit_status = status;
 
     pid_t my_pid  = current_task_ptr->pid;
@@ -549,11 +698,11 @@ void exit_task(int status) {
 
     // Re-parent children and clean up zombies
     for (int i = 1; i < MAX_TASKS; i++) {
-        if (tasks[i].state != TASK_DEAD && tasks[i].ppid == my_pid) {
-            if (tasks[i].state == TASK_ZOMBIE) {
-                tasks[i].state = TASK_DEAD;
+        if (tasks[i]->state != TASK_DEAD && tasks[i]->ppid == my_pid) {
+            if (tasks[i]->state == TASK_ZOMBIE) {
+                release_task_slot(i);
             } else {
-                tasks[i].ppid = 1; // re-parent to init
+                tasks[i]->ppid = 1; // re-parent to init
             }
         }
     }
@@ -576,21 +725,21 @@ void exit_task(int status) {
 
     // Notify parent with SIGCHLD and wake it if it is waiting
     for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].state != TASK_DEAD && tasks[i].pid == my_ppid) {
-            tasks[i].pending_signals |= (1ULL << SIGCHLD);
+        if (tasks[i]->state != TASK_DEAD && tasks[i]->pid == my_ppid) {
+            tasks[i]->pending_signals |= (1ULL << SIGCHLD);
             // Wake parent if it was sleeping in wait4 (it will re-check)
-            if (tasks[i].state == TASK_STOPPED && tasks[i].waiting_for != 0) {
-            } else if (tasks[i].state == TASK_STOPPED || tasks[i].state == TASK_READY) {
-                tasks[i].state = TASK_READY;
+            if (tasks[i]->state == TASK_STOPPED && tasks[i]->waiting_for != 0) {
+            } else if (tasks[i]->state == TASK_STOPPED || tasks[i]->state == TASK_READY) {
+                tasks[i]->state = TASK_READY;
             }
             break;
         }
     }
 
     for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].waiting_for == my_pid) {
-            tasks[i].waiting_for = 0;
-            tasks[i].state = TASK_READY;
+        if (tasks[i]->waiting_for == my_pid) {
+            tasks[i]->waiting_for = 0;
+            tasks[i]->state = TASK_READY;
             break;
         }
     }
@@ -613,12 +762,20 @@ bool signal_pending(void) {
 }
 
 void init_sched(void) {
-    for (int i = 0; i < MAX_TASKS; i++) tasks[i].state = TASK_DEAD;
+    dead_task = malloc(sizeof(*dead_task));
+    if (!dead_task) panic("unable to allocate dead task");
+    memset(dead_task, 0, sizeof(*dead_task));
+    for (int i = 0; i < MAX_TASKS; i++) tasks[i] = dead_task;
     // Create the idle task at tasks[0] (PID 0)
     create_task(idle_task, 0, &kernel_context, 0);
 
     current_task = 0;
-    current_task_ptr = &tasks[0];
+    current_task_ptr = tasks[0];
+    idle_time_us = 0;
+    last_account_us = hpet_elapsed_us();
+    last_load_update_us = last_account_us;
+    memset(load_averages, 0, sizeof(load_averages));
+    sched_ready = true;
 
-    printf("sched: initialized sched\n");
+    log("sched: initialized sched\n");
 }

@@ -1,5 +1,5 @@
+#include <main/log.h>
 #include <main/idt.h>
-#include <io/terminal.h>
 __attribute__((aligned(0x10)))
 static struct idt_entry idt[256];
 static struct idt_ptr idtr;
@@ -93,5 +93,5 @@ void init_idt(void) {
 #undef SET_MSI
 
     __asm__ volatile("lidt %0" : : "m"(idtr));
-    printf("idt: initialized idt\n");
+    log("idt: initialized idt\n");
 }
