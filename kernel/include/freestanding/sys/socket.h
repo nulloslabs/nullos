@@ -8,6 +8,7 @@
 #define AF_LOCAL  AF_UNIX
 #define AF_INET   2
 #define AF_INET6  10
+#define AF_NETLINK 16
 #define AF_PACKET 17
 
 #define PF_UNSPEC AF_UNSPEC
@@ -15,6 +16,7 @@
 #define PF_LOCAL  AF_LOCAL
 #define PF_INET   AF_INET
 #define PF_INET6  AF_INET6
+#define PF_NETLINK AF_NETLINK
 #define PF_PACKET AF_PACKET
 
 #define SOCK_STREAM    1

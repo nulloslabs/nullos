@@ -9,6 +9,7 @@
 void* pmalloc(void);
 void* pmalloc_dma32(void);
 void* prealloc(uint64_t count);
+void* prealloc_dma32(uint64_t count);
 void pfree(void *phys_addr);
 void pfree_range(void *phys_addr, uint64_t size);
 void pref(void *phys_addr);

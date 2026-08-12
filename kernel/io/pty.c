@@ -5,79 +5,14 @@
 #include <main/string.h>
 #include <main/spinlocks.h>
 #include <main/sched.h>
+#include <main/signal.h>
 #include <io/devtmpfs.h>
-#include <io/ptys.h>
-#include <io/ttys.h>
+#include <io/pty.h>
+#include <io/tty.h>
+
 pty_t ptys[NUM_PTYS];
+int keyboard_pty = -1;
 spinlock_t pty_lock = SPINLOCK_INIT;
-
-int pty_signal_pgrp(int pty_idx, int sig) {
-    if (sig < 1 || sig > 31) return 0;
-    pty_t *p = get_pty(pty_idx);
-    int delivered = 0;
-    if (!p || p->fg_pgrp == 0) {
-        if (current_task_ptr) {
-            deliver_sig_to_task(current_task, sig);
-            delivered = 1;
-        }
-        return delivered;
-    }
-    pid_t fpgrp = p->fg_pgrp;
-    int target_ctty = 100 + pty_idx;
-    for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i]->state == TASK_DEAD) continue;
-        if (tasks[i]->ctty_idx != target_ctty) continue;
-        if (tasks[i]->pgid != fpgrp) continue;
-        delivered++;
-        deliver_sig_to_task(i, sig);
-    }
-    return delivered;
-}
-
-uint64_t read_pts(int idx, void *buf, uint64_t count, uint64_t offset) {
-    (void)offset;
-    if (idx < 0 || idx >= NUM_PTYS) return (uint64_t)-EINVAL;
-    pty_t *p = &ptys[idx];
-    char *b = (char *)buf; int got = 0;
-    while (got == 0) {
-        uint64_t irq; spin_lock_irqsave(&pty_lock, &irq);
-        if (!p->allocated || p->master_refs == 0) {
-            spin_unlock_irqrestore(&pty_lock, irq);
-            return 0;
-        }
-        got = read_tty_ring(&p->m2s, b, (int)count);
-        spin_unlock_irqrestore(&pty_lock, irq);
-
-        if (got == 0) {
-            if (signal_pending()) return (uint64_t)-EINTR;
-            // Release sched_lock so the timer ISR (isr32) is actually
-            // allowed to: (1) poll the USB keyboard, and (2) switch to
-            // another task. Without this release, syscall_entry holds
-            // sched_lock across the whole read() and isr32 bails out at
-            // its .skip_switch check, so the USB HCDs are never polled
-            // and NO keys (arrows or letters) ever reach userspace.
-            current_task_ptr->state = TASK_READY;
-            spin_unlock(&sched_lock);
-            __asm__ volatile("int $32");
-            spin_lock(&sched_lock);
-        }
-    }
-    return (uint64_t)got;
-}
-
-uint64_t write_pts(int idx, const void *buf, uint64_t count, uint64_t offset) {
-    (void)offset;
-    if (idx < 0 || idx >= NUM_PTYS) return (uint64_t)-EINVAL;
-    pty_t *p = &ptys[idx];
-    uint64_t irq; spin_lock_irqsave(&pty_lock, &irq);
-    if (!p->allocated || p->master_refs == 0) {
-        spin_unlock_irqrestore(&pty_lock, irq);
-        return (uint64_t)-EIO;
-    }
-    int w = write_tty_ring(&p->s2m, (const char *)buf, (int)count);
-    spin_unlock_irqrestore(&pty_lock, irq);
-    return (uint64_t)w;
-}
 
 pty_t *get_pty(int idx) { if (idx < 0 || idx >= NUM_PTYS) return NULL; return &ptys[idx]; }
 
@@ -112,7 +47,7 @@ int alloc_pty(void) {
     return -ENOSPC;
 }
 
-static void destroy_pty(int idx) {
+void destroy_pty(int idx) {
     if (idx < 0 || idx >= NUM_PTYS) return;
 
     uint64_t irq;
@@ -144,8 +79,7 @@ void release_pty_master(int idx) {
     if (ptys[idx].allocated && ptys[idx].master_refs > 0) { ptys[idx].master_refs--; destroy = (ptys[idx].master_refs == 0 && ptys[idx].slave_refs == 0); }
     spin_unlock_irqrestore(&pty_lock, irq);
 
-    if (destroy)
-        destroy_pty(idx);
+    if (destroy) destroy_pty(idx);
 }
 
 int open_pty_slave(int idx) {
@@ -177,8 +111,7 @@ void release_pty_slave(int idx) {
     if (ptys[idx].slave_refs > 0) { ptys[idx].slave_refs--; destroy = (ptys[idx].master_refs == 0 && ptys[idx].slave_refs == 0); }
     spin_unlock_irqrestore(&pty_lock, irq);
 
-    if (destroy)
-        destroy_pty(idx);
+    if (destroy) destroy_pty(idx);
 }
 
 int pty_slave_path_idx(const char *path) {
@@ -194,6 +127,29 @@ int pty_slave_path_idx(const char *path) {
     while (*p >= '0' && *p <= '9') { idx = idx * 10 + (*p - '0'); p++; }
     if (*p != '\0' || idx >= NUM_PTYS) return -1;
     return idx;
+}
+
+int signal_pty_pgrp(int pty_idx, int sig) {
+    if (sig < 1 || sig > 31) return 0;
+    pty_t *p = get_pty(pty_idx);
+    int delivered = 0;
+    if (!p || p->fg_pgrp == 0) {
+        if (current_task_ptr) {
+            send_task_signal(current_task, sig);
+            delivered = 1;
+        }
+        return delivered;
+    }
+    pid_t fpgrp = p->fg_pgrp;
+    int target_ctty = 100 + pty_idx;
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (tasks[i]->state == TASK_DEAD) continue;
+        if (tasks[i]->ctty_idx != target_ctty) continue;
+        if (tasks[i]->pgid != fpgrp) continue;
+        delivered++;
+        send_task_signal(i, sig);
+    }
+    return delivered;
 }
 
 int read_pty_master(int idx, char *buf, int len) {
@@ -238,7 +194,7 @@ int write_pty_master(int idx, const char *buf, int len) {
         else if ((lflags & ISIG) && vsusp && c == (char)vsusp) sig = SIGTSTP;
         
         if (sig) {
-            pty_signal_pgrp(idx, sig);
+            signal_pty_pgrp(idx, sig);
             // Flush the master-to-slave ring buffer on signal (unless NOFLSH).
             // Matches Linux __isig() behaviour.
             if (!(lflags & NOFLSH)) {
@@ -265,6 +221,18 @@ int write_pty_master(int idx, const char *buf, int len) {
     return w;
 }
 
+void set_keyboard_pty(int pty_idx) {
+    if (pty_idx >= 0 && pty_idx < NUM_PTYS) {
+        keyboard_pty = pty_idx;
+    }
+}
+
+void clear_keyboard_pty(int pty_idx) {
+    if (keyboard_pty == pty_idx) {
+        keyboard_pty = -1;
+    }
+}
+
 void init_ptys(void) {
     for (int i = 0; i < NUM_PTYS; i++) {
         ptys[i].allocated = false;
@@ -272,5 +240,5 @@ void init_ptys(void) {
         ptys[i].master_refs = 0;
         ptys[i].slave_refs = 0;
     }
-    log("ptys: initialized ptys\n");
+    log("pty: initialized ptys\n");
 }

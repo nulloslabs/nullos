@@ -1,12 +1,13 @@
 #include <stdint.h>
+#include <main/panic.h>
 #include <main/log.h>
 #include <io/hpet.h>
 #include <mm/vmm.h>
 #include <uacpi/acpi.h>
 #include <uacpi/tables.h>
 
-static uintptr_t hpet_base;
-static uint32_t hpet_period;
+static uintptr_t hpet_base = 0;
+static uint32_t hpet_period = 0;
 
 void sleep(uint64_t ms) {
     if (!hpet_base || !hpet_period) return;
@@ -48,21 +49,21 @@ void stop_hpet(void) {
 
 void init_hpet(void) {
     uacpi_table table;
-    if (uacpi_table_find_by_signature(ACPI_HPET_SIGNATURE, &table) != UACPI_STATUS_OK) return;
+    if (uacpi_table_find_by_signature(ACPI_HPET_SIGNATURE, &table) != UACPI_STATUS_OK) panic("no hpet timer available");
     struct acpi_hpet *hpet = table.ptr;
     if (hpet->address.address_space_id != 0 || !hpet->address.address) {
         uacpi_table_unref(&table);
-        return;
+        panic("invalid hpet address");
     }
     hpet_base = (uintptr_t)vmap_mmio(hpet->address.address, 1);
     uacpi_table_unref(&table);
-    if (!hpet_base) return;
+    if (!hpet_base) panic("no hpet timer available");
     volatile uint64_t *capabilities = (volatile uint64_t *)hpet_base;
     volatile uint64_t *config = (volatile uint64_t *)(hpet_base + 0x10);
     hpet_period = (uint32_t)(*capabilities >> 32);
     if (!hpet_period) {
         hpet_base = 0;
-        return;
+        panic("invalid hpet period");
     }
     *config |= 1;
     log("hpet: initialized hpet\n");

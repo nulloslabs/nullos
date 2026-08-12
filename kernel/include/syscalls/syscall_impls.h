@@ -3,12 +3,12 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <main/sched.h>
+#include <io/vfs.h>
 #include <syscalls/syscalls.h>
 
 #define USER_ADDR_MAX 0x0000800000000000ULL
 #define MAX_BRK_SIZE (256ULL * 1024ULL * 1024ULL)
 #define MAX_IOV 1024
-#define MAX_MOUNTS 16
 #define MAX_IO_COUNT (16 * 1024 * 1024)
 #define MAX_FUTEX_WAITERS 256
 
@@ -34,23 +34,10 @@ typedef struct {
     uint64_t blocked_signals;
 } __attribute__((packed)) signal_stack_frame_t;
 
-typedef struct {
-    uint64_t id;
-    char source[65];
-    char path[64];
-    char filesystemtype[32];
-    unsigned long flags;
-    bool active;
-} mount_t;
-
 // Some public helpers
 void wake_clear_child_tid(task_t *task);
 int copy_from_user(void *kdest, const void *usrc, size_t size);
 int copy_to_user(const void *udest, const void *ksrc, size_t size);
-bool is_mounted_under(const char* path, const char* fstype, char* relative_out);
-bool is_devtmpfs_device_path(const char *path);
-void register_vfs_mount(const char *path, const char *fstype);
-int enumerate_vfs_mounts(int index, char *out_line, size_t line_size);
 void check_signals(syscall_frame_t *frame);
 void check_signals_from_user_exception(syscall_frame_t *frame);
 void check_futex_timeouts(void);

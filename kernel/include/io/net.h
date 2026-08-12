@@ -23,6 +23,8 @@ extern uint32_t net_subnet_mask;
 #define IP_PROTO_TCP    6
 
 #define NET_MAX_FRAME_SIZE 1514
+#define NET_LOOPBACK_INTERFACE_INDEX 1
+#define NET_ETHERNET_INTERFACE_INDEX 2
 
 // TCP flags
 #define TCP_FIN  0x01

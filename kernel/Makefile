@@ -25,7 +25,7 @@ SUBDIRS = main io mm syscalls
 all: kernel
 
 limine_header: config.mk Makefile
-	@if [ ! -f include/limine/limine.h ] || [ "config.mk" -nt "include/limine/limine.h" ] || [ "Makefile" -nt "include/limine/limine.h" ]; then \
+	@if [ ! -f include/limine/limine.h ]; then \
 		printf "  %-7s %s\n" "FETCH" "$(SUBDIR)/include/limine/limine.h" && \
 		mkdir -p include/limine && \
 		curl -sLo include/limine/limine.h https://raw.githubusercontent.com/limine-bootloader/limine-protocol/refs/heads/trunk/include/limine.h; \
@@ -34,15 +34,14 @@ limine_header: config.mk Makefile
 	fi
 
 uacpi: config.mk Makefile
-	@if [ ! -e "uacpi/.git" ] || [ ! -f "$(UACPI_OUTFILE)" ] || [ "config.mk" -nt "$(UACPI_OUTFILE)" ] || [ "Makefile" -nt "$(UACPI_OUTFILE)" ]; then \
+	@if [ ! -e "uacpi/.git" ]; then \
 		printf "  %-7s %s\n" "FETCH" "$(SUBDIR)/uacpi/" && \
-		git submodule update --init --depth 1 -- uacpi; \
+		git submodule update --init --depth 1 -- uacpi > /dev/null 2>&1; \
 	else \
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/uacpi/ is already up to date"; \
 	fi
-	@$(MAKE) uacpi_build
 
-uacpi_build: $(UACPI_OUTFILE)
+uacpi_build: uacpi $(UACPI_OUTFILE)
 
 $(UACPI_OUTFILE): $(UACPI_OBJ) FORCE
 	@needs_archive=0; \
@@ -68,10 +67,14 @@ $(UACPI_BUILD)/%.o: uacpi/source/%.c config.mk Makefile
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/$@"
 	@$(CC) $(UACPI_CFLAGS) -c $< -o $@
 
-$(SUBDIRS): config.mk Makefile limine_header
+$(SUBDIRS): config.mk Makefile
 	@$(MAKE) -C $@
 
-kernel: $(SUBDIRS) config.mk Makefile linker.ld uacpi
+kernel: config.mk Makefile linker.ld
+	@$(MAKE) limine_header
+	@$(MAKE) uacpi
+	@$(MAKE) $(SUBDIRS)
+	@$(MAKE) uacpi_build
 	@needs_link=0; \
 	for obj in $(OBJ); do \
 		if [ ! -f "$(OUTFILE)" ] || [ "$(UACPI_OUTFILE)" -nt "$(OUTFILE)" ] || [ "config.mk" -nt "$(OUTFILE)" ] || [ "linker.ld" -nt "$(OUTFILE)" ] || [ "Makefile" -nt "$(OUTFILE)" ] || [ "$$obj" -nt "$(OUTFILE)" ]; then \

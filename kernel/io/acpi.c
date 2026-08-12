@@ -2,15 +2,16 @@
 #include <stddef.h>
 #include <ctype.h>
 #include <main/log.h>
-#include <main/acpi.h>
 #include <main/limine_req.h>
 #include <main/spinlocks.h>
 #include <main/sched.h>
 #include <main/idt.h>
 #include <main/panic.h>
+#include <io/acpi.h>
 #include <io/apic.h>
 #include <io/ec.h>
 #include <io/hpet.h>
+#include <io/power_button.h>
 #include <io/io.h>
 #include <io/ioapic.h>
 #include <io/pci.h>
@@ -410,5 +411,6 @@ void init_acpi_namespace(void) {
         log("acpi: namespace initialization failed: %s\n", uacpi_status_to_string(status));
         return;
     }
+    init_power_button();
     log("acpi: initialized acpi namespace\n");
 }

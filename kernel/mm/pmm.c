@@ -98,6 +98,33 @@ void* prealloc(uint64_t count) {
     return NULL;
 }
 
+void* prealloc_dma32(uint64_t count) {
+    if (count == 0 || count > (1ULL << 20)) return NULL;
+    uint64_t flags;
+    spin_lock_irqsave(&pmm_lock, &flags);
+    uint64_t dma32_pages = max_pages;
+    if (dma32_pages > (1ULL << 20)) dma32_pages = 1ULL << 20;
+    for (uint64_t idx = 0; idx + count <= dma32_pages; idx++) {
+        bool available = true;
+        for (uint64_t page = 0; page < count; page++) {
+            if (bitmap[(idx + page) / 8] & (1 << ((idx + page) % 8))) { available = false; break; }
+        }
+        if (!available) continue;
+        for (uint64_t page = 0; page < count; page++) {
+            bitmap[(idx + page) / 8] |= 1 << ((idx + page) % 8);
+            ref_counts[idx + page] = 1;
+        }
+        free_pages -= count;
+        last_index = idx + count;
+        uint64_t phys = idx * PAGE_SIZE;
+        spin_unlock_irqrestore(&pmm_lock, flags);
+        memset((void *)(phys + hhdm_req.response->offset), 0, count * PAGE_SIZE);
+        return (void *)phys;
+    }
+    spin_unlock_irqrestore(&pmm_lock, flags);
+    return NULL;
+}
+
 void pfree(void *phys_addr) {
     uint64_t flags;
     spin_lock_irqsave(&pmm_lock, &flags);

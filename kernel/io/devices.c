@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <errno.h>
+#include <sys/stat.h>
 #include <main/log.h>
 #include <main/string.h>
 #include <main/limine_req.h>
@@ -9,8 +10,8 @@
 #include <io/terminal.h>
 #include <io/devices.h>
 #include <io/devtmpfs.h>
-#include <io/ttys.h>
-#include <io/ptys.h>
+#include <io/tty.h>
+#include <io/pty.h>
 #include <io/keyboard.h>
 #include <io/ide.h>
 #include <io/pata.h>
@@ -85,6 +86,30 @@ int get_block_device_size(const char *name, uint64_t *size) {
             return -ESPIPE;
         }
         *size = devtmpfs_devices[i].size;
+        spin_unlock_irqrestore(&devtmpfs_lock, irq);
+        return 0;
+    }
+    spin_unlock_irqrestore(&devtmpfs_lock, irq);
+    return -ENOENT;
+}
+
+int get_device_mode(const char *name, mode_t *mode) {
+    if (!name || !mode) return -EINVAL;
+    const char *dev_name = name;
+    while (*dev_name == '.' || *dev_name == '/') dev_name++;
+    if (strncmp(dev_name, "dev/", 4) == 0) dev_name += 4;
+
+    uint64_t irq;
+    spin_lock_irqsave(&devtmpfs_lock, &irq);
+    for (int i = 0; i < MAX_DEVTMPFS_DEVICES; i++) {
+        if (!devtmpfs_devices[i].active || strcmp(devtmpfs_devices[i].name, dev_name) != 0) continue;
+        if (devtmpfs_devices[i].block) {
+            *mode = S_IFBLK | 0600;
+        } else if (strncmp(dev_name, "fb", 2) == 0) {
+            *mode = S_IFCHR | 0600;
+        } else {
+            *mode = S_IFCHR | 0666;
+        }
         spin_unlock_irqrestore(&devtmpfs_lock, irq);
         return 0;
     }
@@ -284,7 +309,7 @@ void init_devices(void) {
     register_device("zero", zero_read, zero_write);
 
     if (fb_req.response && fb_req.response->framebuffer_count > 0) {
-        for (int i = 0; i < fb_req.response->framebuffer_count; i++) {
+        for (uint64_t i = 0; i < fb_req.response->framebuffer_count; i++) {
             if (i == 0) register_device("fb0", fb0_read, fb0_write);
             else if (i == 1) register_device("fb1", fb1_read, fb1_write);
             else if (i == 2) register_device("fb2", fb2_read, fb2_write);

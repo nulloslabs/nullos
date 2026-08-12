@@ -492,7 +492,8 @@ static int64_t unix_op_sendto(socket_t *sock, const void *buf, size_t len, int f
 }
 
 static int64_t unix_op_recvfrom(socket_t *sock, void *buf, size_t len, int flags, void *src_addr, socklen_t *addrlen) {
-    (void)flags; (void)src_addr; (void)addrlen;
+    (void)flags; (void)src_addr;
+    if (addrlen) *addrlen = 0;
     return read_unix_handle((unix_handle_t *)sock->priv, buf, len, sock->flags);
 }
 

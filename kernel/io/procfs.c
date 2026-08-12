@@ -11,9 +11,9 @@
 #include <io/devtmpfs.h>
 #include <io/hpet.h>
 #include <io/procfs.h>
+#include <io/vfs.h>
 #include <mm/pmm.h>
 #include <mm/vma.h>
-#include <syscalls/syscall_impls.h>
 
 const proc_static_node_t proc_nodes[] = {
     { "",              PROC_NODE_DIR,     PROC_DIR_ROOT         },
@@ -196,7 +196,7 @@ static size_t build_mounts(char *out) {
     size_t pos = 0; out[0] = '\0';
     for (int i = 0; ; i++) {
         char line[160];
-        if (enumerate_vfs_mounts(i, line, sizeof(line)) <= 0) break;
+        if (list_vfs_mount(i, line, sizeof(line)) <= 0) break;
         buf_append(out, &pos, PROCFS_MAX_CONTENT, line);
         buf_append(out, &pos, PROCFS_MAX_CONTENT, "\n");
     }

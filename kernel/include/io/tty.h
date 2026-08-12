@@ -21,16 +21,15 @@ typedef struct {
     pid_t fg_pgrp;  // foreground process group for this tty (0 = none)
 } tty_t;
 
+extern tty_t ttys[NUM_TTYS];
+extern int keyboard_tty;
 extern spinlock_t tty_lock;
 
-void deliver_sig_to_task(int i, int sig);
 tty_t *get_tty(int idx);
 int read_tty_ring(tty_ring_t *r, char *buf, int len);
 int write_tty_ring(tty_ring_t *r, const char *buf, int len);
 int get_tty_ring_count(tty_ring_t *r);
 void tty_process_scancode(uint8_t sc);
-int tty_signal_pgrp(int tty_idx, int sig);
+int signal_tty_pgrp(int tty_idx, int sig);
 void set_keyboard_tty(int tty_idx);
-void set_keyboard_pty(int pty_idx);
-void clear_keyboard_pty(int pty_idx);
 void init_ttys(void);

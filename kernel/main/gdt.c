@@ -1,6 +1,9 @@
 #include <main/log.h>
 #include <main/gdt.h>
 #include <main/string.h>
+#include <main/panic.h>
+#include <mm/pmm.h>
+#include <mm/vmm.h>
 
 cpu_gdt_t cpu_gdts[MAX_CPUS];
 
@@ -29,7 +32,12 @@ static void write_tss(cpu_gdt_t *g) {
 
     memset(&g->tss, 0, sizeof(struct tss));
     g->tss.iopb_offset = sizeof(struct tss);
-    g->tss.ist1 = (uint64_t)&g->df_stack[sizeof(g->df_stack)]; // IST1 for #DF
+    if (!g->df_stack) {
+        void *stack_phys = pmalloc();
+        if (!stack_phys) panic("unable to allocate double-fault stack");
+        g->df_stack = phys_to_virt((uint64_t)stack_phys);
+    }
+    g->tss.ist1 = (uint64_t)g->df_stack + 4096;
 }
 
 void init_gdt_for_cpu(int cpu_index) {

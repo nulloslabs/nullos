@@ -36,7 +36,7 @@ struct gdt_ptr {
 typedef struct {
     uint64_t entries[7];
     struct tss tss;
-    uint8_t df_stack[4096];
+    uint8_t *df_stack;
 } __attribute__((aligned(16))) cpu_gdt_t;
 
 extern cpu_gdt_t cpu_gdts[MAX_CPUS];

@@ -1,11 +1,12 @@
 #include <stdint.h>
 #include <stdbool.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <sys/epoll.h>
 #include <main/fd.h>
 #include <main/string.h>
 #include <main/sched.h>
-#include <io/ptys.h>
+#include <io/pty.h>
 #include <io/sockets.h>
 #include <io/unix_sockets.h>
 #include <mm/mm.h>
@@ -139,7 +140,7 @@ void init_fd_table(fd_table_t *table) {
         table->entries[i].path[0] = '\0';
     }
 
-    alloc_fd(table, "stdin",  FD_STREAM, 0); // Becomes FD 0
-    alloc_fd(table, "stdout", FD_STREAM, 0); // Becomes FD 1
-    alloc_fd(table, "stderr", FD_STREAM, 0); // Becomes FD 2
+    alloc_fd(table, "stdin",  FD_STREAM, O_RDONLY); // Becomes FD 0
+    alloc_fd(table, "stdout", FD_STREAM, O_WRONLY); // Becomes FD 1
+    alloc_fd(table, "stderr", FD_STREAM, O_WRONLY); // Becomes FD 2
 }

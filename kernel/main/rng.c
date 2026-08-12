@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdbool.h>
+#include <cpuid.h>
 #include <main/log.h>
 #include <main/rng.h>
 #include <main/string.h>
@@ -12,6 +13,74 @@
 static uint32_t rng_state[16];
 static spinlock_t rng_lock = SPINLOCK_INIT;
 static bool rng_seeded = false;
+
+static bool try_rdseed64(uint64_t *value) {
+    unsigned char ok;
+    __asm__ volatile("rdseed %0; setc %1" : "=r"(*value), "=qm"(ok));
+    return ok != 0;
+}
+
+static bool try_rdrand64(uint64_t *value) {
+    unsigned char ok;
+    __asm__ volatile("rdrand %0; setc %1" : "=r"(*value), "=qm"(ok));
+    return ok != 0;
+}
+
+static size_t collect_cpu_entropy(uint64_t *out, size_t capacity) {
+    uint32_t eax, ebx, ecx, edx;
+    uint32_t max_leaf;
+    __cpuid(0, max_leaf, ebx, ecx, edx);
+
+    bool have_rdrand = false;
+    bool have_rdseed = false;
+    if (max_leaf >= 1) {
+        __cpuid(1, eax, ebx, ecx, edx);
+        have_rdrand = (ecx & (1U << 30)) != 0;
+    }
+    if (max_leaf >= 7) {
+        __cpuid_count(7, 0, eax, ebx, ecx, edx);
+        have_rdseed = (ebx & (1U << 18)) != 0;
+    }
+
+    size_t count = 0;
+    if (have_rdseed) {
+        for (size_t i = 0; i < capacity; i++) {
+            uint64_t value;
+            bool ok = false;
+            for (int retry = 0; retry < 64 && !ok; retry++) ok = try_rdseed64(&value);
+            if (!ok) break;
+            out[count++] = value;
+        }
+    }
+    if (have_rdrand) {
+        while (count < capacity) {
+            uint64_t value;
+            bool ok = false;
+            for (int retry = 0; retry < 16 && !ok; retry++) ok = try_rdrand64(&value);
+            if (!ok) break;
+            out[count++] = value;
+        }
+    }
+    return count;
+}
+
+static void collect_jitter_entropy(uint64_t out[16]) {
+    uint64_t previous = read_tsc();
+    uint64_t mix = previous ^ read_hpet_counter() ^ (uint64_t)read_pit_counter();
+    for (int i = 0; i < 16; i++) {
+        for (int sample = 0; sample < 32; sample++) {
+            uint64_t now = read_tsc();
+            uint64_t delta = now - previous;
+            previous = now;
+            mix ^= delta + 0x9E3779B97F4A7C15ULL + (mix << 6) + (mix >> 2);
+            mix ^= read_hpet_counter() + ((uint64_t)read_pit_counter() << 32);
+            for (uint64_t pause = 0; pause < ((mix & 0x1f) + 1); pause++) {
+                __asm__ volatile("pause");
+            }
+        }
+        out[i] = mix ^ (previous << (i & 31));
+    }
+}
 
 void regen_rng(void) {
     // Get entropy from timers
@@ -143,6 +212,16 @@ bool is_rng_seeded(void) {
 
 void init_rng(void) {
     regen_rng();
+    uint64_t jitter[16];
+    collect_jitter_entropy(jitter);
+    add_entropy_bytes(jitter, sizeof(jitter));
+
+    uint64_t cpu_entropy[16];
+    size_t cpu_words = collect_cpu_entropy(cpu_entropy, 16);
+    if (cpu_words) add_entropy_bytes(cpu_entropy, cpu_words * sizeof(uint64_t));
+
+    memset(jitter, 0, sizeof(jitter));
+    memset(cpu_entropy, 0, sizeof(cpu_entropy));
     rng_seeded = true;
-    log("rng: initialized rng\n");
+    log("rng: initialized rng%s\n", cpu_words ? " with CPU entropy" : " with jitter entropy");
 }

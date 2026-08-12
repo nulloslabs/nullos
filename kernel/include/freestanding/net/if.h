@@ -7,6 +7,7 @@
 
 #define IFF_UP          0x0001
 #define IFF_BROADCAST   0x0002
+#define IFF_LOOPBACK    0x0008
 #define IFF_RUNNING     0x0040
 #define IFF_MULTICAST   0x1000
 
@@ -24,6 +25,8 @@
 #define SIOCSIFMTU      0x8922
 #define SIOCGIFHWADDR   0x8927
 #define SIOCGIFINDEX    0x8933
+#define SIOCGIFTXQLEN   0x8942
+#define SIOCSIFTXQLEN   0x8943
 
 #define SIOCADDRT       0x890b
 #define SIOCDELRT       0x890c
@@ -53,6 +56,7 @@ struct ifreq {
         short ifru_flags;
         int ifru_ivalue;
         int ifru_mtu;
+        int ifru_qlen;
         struct ifmap ifru_map;
         char ifru_slave[IFNAMSIZ];
         char ifru_newname[IFNAMSIZ];
@@ -67,6 +71,7 @@ struct ifreq {
 #define ifr_flags     ifr_ifru.ifru_flags
 #define ifr_ifindex   ifr_ifru.ifru_ivalue
 #define ifr_mtu       ifr_ifru.ifru_mtu
+#define ifr_qlen      ifr_ifru.ifru_qlen
 
 struct ifconf {
     int ifc_len;

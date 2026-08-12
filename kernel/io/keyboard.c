@@ -1,9 +1,14 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <signal.h>
 #include <main/halt.h>
+#include <main/sched.h>
+#include <main/signal.h>
 #include <io/keyboard.h>
+#include <io/power.h>
 #include <io/ps2_keyboard.h>
+#include <io/tty.h>
 #include <io/usb_keyboard.h>
 
 uint8_t key_buffer[128] = {0};
@@ -14,9 +19,33 @@ static bool shift_pressed = false;
 static bool caps_lock = false;
 static bool ctrl_pressed = false;
 static bool alt_pressed = false;
+static bool cad_ctrl_pressed = false;
+static bool cad_alt_pressed = false;
+static bool cad_extended_pending = false;
+static bool cad_reboot_enabled = false;
 static uint8_t lock_leds = 0;
 
 bool kbd_alt_pressed(void) { return alt_pressed; }
+
+void set_keyboard_cad_reboot(bool enabled) { cad_reboot_enabled = enabled; }
+
+void handle_keyboard_cad_scancode(uint8_t sc) {
+    if (sc == 0xE0) { cad_extended_pending = true; return; }
+    bool released = (sc & 0x80) != 0;
+    uint8_t key = sc & 0x7F;
+    if (key == 0x1D) cad_ctrl_pressed = !released;
+    if (key == 0x38) cad_alt_pressed = !released;
+    bool is_delete = !released && ((cad_extended_pending && key == 0x53) || key == 0x69);
+    cad_extended_pending = false;
+    if (!is_delete || !cad_ctrl_pressed || !cad_alt_pressed) return;
+    if (cad_reboot_enabled) reboot();
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (tasks[i] && tasks[i]->state != TASK_DEAD && tasks[i]->pid == 1) {
+            send_task_signal(i, SIGINT);
+            break;
+        }
+    }
+}
 
 uint8_t get_keyboard_led_state(void) { return lock_leds; }
 

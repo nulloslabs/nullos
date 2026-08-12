@@ -4,7 +4,7 @@
 #include <io/ps2_keyboard.h>
 #include <io/keyboard.h>
 #include <io/io.h>
-#include <io/ttys.h>
+#include <io/tty.h>
 static uint8_t ps2_repeat_key = 0;
 static int ps2_repeat_timer = 0;
 static bool ps2_key_held[128] = { false };

@@ -3,6 +3,7 @@
 #include <main/log.h>
 #include <main/panic.h>
 #include <main/sched.h>
+#include <main/signal.h>
 #include <mm/mm.h>
 #include <mm/vma.h>
 #include <mm/oom.h>
@@ -37,7 +38,7 @@ void kill_oom(void) {
         for (int i = 0; i < MAX_TASKS; i++) {
             if (tasks[i]->ring == 0) continue;
             if (tasks[i]->state == TASK_DEAD || tasks[i]->state == TASK_ZOMBIE) continue;
-            if (tasks[i]->pgid == tasks[target_idx]->pgid) tasks[i]->pending_signals |= (1ULL << SIGKILL);
+            if (tasks[i]->pgid == tasks[target_idx]->pgid) send_task_signal(i, SIGKILL);
         }
     } else {
         panic("out of memory");

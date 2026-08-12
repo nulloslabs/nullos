@@ -7,6 +7,7 @@
 #include <io/ac97.h>
 #include <io/io.h>
 #include <io/hpet.h>
+#include <mm/pmm.h>
 #include <mm/vmm.h>
 
 uint16_t nam_base = 0;
@@ -14,8 +15,8 @@ uint16_t nabm_base = 0;
 static bool ac97_ready = false;
 static spinlock_t audio_lock = SPINLOCK_INIT;
 
-static ac97_bd_t bdl[AC97_BDL_SIZE] __attribute__((aligned(8)));
-static uint8_t audio_buf[AC97_BDL_SIZE][AC97_BUF_SIZE] __attribute__((aligned(4)));
+static ac97_bd_t *bdl;
+static uint8_t (*audio_buf)[AC97_BUF_SIZE];
 static uint8_t *audio_src = NULL;
 static size_t audio_size = 0;
 static size_t audio_offset = 0;
@@ -123,6 +124,13 @@ void set_ac97_volume(uint8_t left, uint8_t right) {
 void init_ac97(pci_device_t *dev) {
     if (!dev) return;
 
+    uint64_t dma_pages = 1 + ((uint64_t)AC97_BDL_SIZE * AC97_BUF_SIZE + PAGE_SIZE - 1) / PAGE_SIZE;
+    void *dma_phys = prealloc_dma32(dma_pages);
+    if (!dma_phys) { log("ac97: unable to allocate dma memory\n"); return; }
+    uint8_t *dma_virt = phys_to_virt((uint64_t)dma_phys);
+    bdl = (ac97_bd_t *)dma_virt;
+    audio_buf = (uint8_t (*)[AC97_BUF_SIZE])(dma_virt + PAGE_SIZE);
+
     uint32_t bar0 = read_pci(dev->bus, dev->dev, dev->func, 0x10);
     uint32_t bar1 = read_pci(dev->bus, dev->dev, dev->func, 0x14);
 
@@ -179,4 +187,3 @@ void init_ac97(pci_device_t *dev) {
 
     ac97_ready = true;
 }
-

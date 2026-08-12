@@ -3,17 +3,11 @@
 #include <errno.h>
 #include <main/log.h>
 #include <main/string.h>
-#include <main/sched.h>
 #include <main/limine_req.h>
 #include <main/halt.h>
-#include <io/initrd.h>
-#include <io/tmpfs.h>
-#include <io/ext4.h>
 #include <io/fonts.h>
 #include <io/terminal.h>
-#include <io/devtmpfs.h>
-#include <io/procfs.h>
-#include <syscalls/syscall_impls.h>
+#include <io/vfs.h>
 #include <mm/mm.h>
 #include <limine.h>
 
@@ -689,105 +683,36 @@ static uint8_t builtin_8x16_font[] = {
     0x00, 0x00, 0x00, 0x00
 };
 
-// Resolve a font through the same filesystem split used by the syscall layer.
-// proc_buf owns generated procfs contents for the lifetime of change_font().
-static int read_font_file(const char *path, const void **data, uint64_t *size,
-                          char proc_buf[PROCFS_MAX_CONTENT], bool *owned,
-                          int link_depth) {
-    if (link_depth >= 40) return -ELOOP;
-    if (is_devtmpfs_device_path(path)) return -EEXIST;
-
-    if (is_procfs_path(path)) {
-        proc_node_t node;
-        int self = current_task_ptr ? current_task : -1;
-        if (self < 0 || !resolve_procfs(path, self, &node)) return -ENOENT;
-        if (is_procfs_dir(&node)) return -EISDIR;
-
-        if (node.type == PROC_NODE_SYMLINK) {
-            char target[256];
-            int len = read_procfs_link(&node, self, target, sizeof(target));
-            if (len < 0) return -ENOENT;
-
-            char resolved[256];
-            resolve_link_target(path, target, resolved, sizeof(resolved));
-            return read_font_file(resolved, data, size, proc_buf, owned,
-                                  link_depth + 1);
-        }
-
-        *size = get_procfs_content(&node, proc_buf);
-        *data = proc_buf;
-        return 0;
-    }
-
-    if (is_tmpfs_dir(path)) {
-        tmpfs_file_t file = read_tmpfs(path);
-        if (!file.mode) return -ENOENT;
-        if (S_ISDIR(file.mode)) return -EISDIR;
-        *data = file.data;
-        *size = file.size;
-        return 0;
-    }
-
-    if (check_ext4_path(path)) {
-        struct stat st;
-        int status = stat_ext4(path, &st, true);
-        if (status < 0) return status;
-        if (S_ISDIR(st.st_mode)) return -EISDIR;
-        if (!S_ISREG(st.st_mode) || st.st_size <= 0 ||
-            (uint64_t)st.st_size > sizeof(current_font)) return -EFBIG;
-
-        void *buffer = malloc((size_t)st.st_size);
-        if (!buffer) return -ENOMEM;
-        int64_t count = read_ext4(path, buffer, (uint64_t)st.st_size, 0);
-        if (count < 0 || count != st.st_size) {
-            free(buffer);
-            return count < 0 ? (int)count : -EIO;
-        }
-        *data = buffer;
-        *size = (uint64_t)st.st_size;
-        *owned = true;
-        return 0;
-    }
-
-    initrd_file_t file = read_initrd(path);
-    if (!file.mode) return -ENOENT;
-    if (S_ISDIR(file.mode)) return -EISDIR;
-    *data = file.data;
-    *size = file.size;
-    return 0;
-}
-
 int change_font(const char *path, uint8_t w, uint8_t h) {
     if (!path) return -EINVAL;
     if (!w || !h) return -EINVAL; // Sanity check if width or height is 0
 
     char abs_path[256];
-    get_absolute_path(path, abs_path, sizeof(abs_path));
+    build_vfs_path(path, abs_path, sizeof(abs_path));
 
-    const void *font_data = NULL;
+    void *font_data = NULL;
     uint64_t font_size = 0;
-    char proc_buf[PROCFS_MAX_CONTENT];
-    bool owned = false;
-    int r = read_font_file(abs_path, &font_data, &font_size, proc_buf, &owned, 0);
+    int r = load_vfs(abs_path, &font_data, &font_size,
+                          sizeof(current_font));
     if (r < 0) return r;
 
     if (!font_data || font_size == 0 || font_size > sizeof(current_font)) {
-        if (owned) free((void *)font_data);
+        free(font_data);
         return -ENOENT;
     }
     if ((uint64_t)256 * h * w / 8 != font_size) {
-        if (owned) free((void *)font_data);
+        free(font_data);
         return -EFBIG;
     }
     if (memcmp(current_font, font_data, font_size) == 0) {
-        if (owned) free((void *)font_data);
+        free(font_data);
         return 0;
     }
 
     clrscr(); // Clear the screen so there isn't any weird shenanigans
 
     memcpy(current_font, font_data, font_size);
-    if (owned) free((void *)font_data);
+    free(font_data);
     current_font_w = w;
     current_font_h = h;
     return 0;

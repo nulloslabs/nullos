@@ -6,50 +6,17 @@
 #include <main/string.h>
 #include <main/spinlocks.h>
 #include <main/sched.h>
-#include <io/ttys.h>
+#include <main/signal.h>
+#include <io/tty.h>
 #include <io/keyboard.h>
-#include <io/ptys.h>
+#include <io/pty.h>
 #include <io/terminal.h>
 
-static tty_t ttys[NUM_TTYS];
+tty_t ttys[NUM_TTYS];
+int keyboard_tty = 0;
 spinlock_t tty_lock = SPINLOCK_INIT;
 
-// Track which TTY receives keyboard input (no VT switching yet, so we use the last active TTY)
-static int keyboard_tty = 0;
-static int keyboard_pty = -1;
 static bool extended_pending = false;
-
-void deliver_sig_to_task(int i, int sig) {
-    uint64_t handler = tasks[i]->sigactions[sig * 4];
-    bool unblockable = sig == SIGKILL || sig == SIGSTOP;
-    bool blocked = !unblockable && (tasks[i]->blocked_signals & (1ULL << (sig - 1)));
-    bool ignored = handler == (uint64_t)SIG_IGN || (handler == (uint64_t)SIG_DFL && (sig == SIGCHLD || sig == SIGCONT || sig == SIGURG || sig == SIGWINCH));
-
-    if (sig == SIGCONT) {
-        bool was_stopped = tasks[i]->state == TASK_STOPPED && tasks[i]->stopped_by_signal;
-        if (tasks[i]->state == TASK_STOPPED) tasks[i]->state = TASK_READY;
-        tasks[i]->stopped_by_signal = 0;
-        tasks[i]->stop_reported = 0;
-        tasks[i]->pending_signals &= ~((1ULL << SIGSTOP) |
-                                      (1ULL << SIGTSTP) |
-                                      (1ULL << SIGTTIN) |
-                                      (1ULL << SIGTTOU));
-        if (was_stopped) {
-            for (int j = 0; j < MAX_TASKS; j++) {
-                if (tasks[j]->state != TASK_DEAD && tasks[j]->pid == tasks[i]->ppid) {
-                    tasks[j]->pending_signals |= (1ULL << SIGCHLD);
-                    break;
-                }
-            }
-        }
-        if (!ignored) tasks[i]->pending_signals |= (1ULL << sig);
-        return;
-    }
-
-    if (!ignored) tasks[i]->pending_signals |= (1ULL << sig);
-
-    if (tasks[i]->state == TASK_STOPPED && (sig == SIGKILL || (!tasks[i]->stopped_by_signal && !blocked && !ignored))) tasks[i]->state = TASK_READY;
-}
 
 int get_tty_ring_count(tty_ring_t *r) { return (int)((r->head - r->tail + TTY_BUF_SIZE) % TTY_BUF_SIZE); }
 
@@ -90,6 +57,7 @@ static void write_tty_input_str(const char *s) {
 }
 
 void tty_process_scancode(uint8_t sc) {
+    handle_keyboard_cad_scancode(sc);
     // --- Alt key tracking ---
     if (sc == 0x38) return;   // Alt press - already tracked in keyboard.c
     if (sc == 0xB8) return;   // Alt release - already tracked in keyboard.c
@@ -203,7 +171,7 @@ void tty_process_scancode(uint8_t sc) {
         // Keyboard input goes to the PTY master's s2m ring (simulates a
         // terminal emulator writing to the master side).
         if (sig) {
-            pty_signal_pgrp(keyboard_pty, sig);
+            signal_pty_pgrp(keyboard_pty, sig);
             if (!(lflags & NOFLSH)) {
                 ptys[keyboard_pty].m2s.head = ptys[keyboard_pty].m2s.tail = 0;
             }
@@ -217,7 +185,7 @@ void tty_process_scancode(uint8_t sc) {
             echo = (lflags & ECHO) != 0;
         }
     } else if (sig) {
-        tty_signal_pgrp(keyboard_tty, sig);
+        signal_tty_pgrp(keyboard_tty, sig);
         if (!(lflags & NOFLSH)) {
             t->input.head = t->input.tail = 0;
         }
@@ -238,7 +206,7 @@ void tty_process_scancode(uint8_t sc) {
     }
 }
 
-int tty_signal_pgrp(int tty_idx, int sig) {
+int signal_tty_pgrp(int tty_idx, int sig) {
     if (sig < 1 || sig > 31) return 0;
     tty_t *t = get_tty(tty_idx);
     if (!t) return 0;
@@ -252,7 +220,7 @@ int tty_signal_pgrp(int tty_idx, int sig) {
         for (int i = 0; i < MAX_TASKS; i++) {
             if (tasks[i]->state == TASK_DEAD) continue;
             if (tasks[i]->pgid != fpgrp) continue;
-            deliver_sig_to_task(i, sig);
+            send_task_signal(i, sig);
             delivered++;
         }
         return delivered;
@@ -264,7 +232,7 @@ int tty_signal_pgrp(int tty_idx, int sig) {
     for (int i = 0; i < MAX_TASKS; i++) {
         if (tasks[i]->state == TASK_DEAD) continue;
         if (tasks[i]->ctty_idx != tty_idx) continue;
-        deliver_sig_to_task(i, sig);
+        send_task_signal(i, sig);
         delivered++;
     }
     return delivered;
@@ -278,18 +246,6 @@ void set_keyboard_tty(int tty_idx) {
         spin_lock_irqsave(&tty_lock, &irq);
         ttys[tty_idx].input.head = ttys[tty_idx].input.tail = 0;
         spin_unlock_irqrestore(&tty_lock, irq);
-    }
-}
-
-void set_keyboard_pty(int pty_idx) {
-    if (pty_idx >= 0 && pty_idx < NUM_PTYS) {
-        keyboard_pty = pty_idx;
-    }
-}
-
-void clear_keyboard_pty(int pty_idx) {
-    if (keyboard_pty == pty_idx) {
-        keyboard_pty = -1;
     }
 }
 
@@ -310,5 +266,5 @@ void init_ttys(void) {
         ttys[i].termios.c_cc[VEOF]   = 0x04;
         ttys[i].termios.c_cc[VSUSP]  = 0x1A;
     }
-    log("ttys: initialized ttys\n");
+    log("tty: initialized ttys\n");
 }

@@ -5,6 +5,7 @@
 #include <io/sockets.h>
 #include <io/unix_sockets.h>
 #include <io/net_sockets.h>
+#include <io/netlink_sockets.h>
 #include <io/packet_sockets.h>
 #include <mm/mm.h>
 
@@ -24,6 +25,8 @@ int create_socket(int domain, int type, int protocol, socket_t **out) {
         return 0;
     } else if (domain == AF_INET) {
         return create_inet_socket_obj(type, protocol, out);
+    } else if (domain == AF_NETLINK) {
+        return create_netlink_socket(type, protocol, out);
     } else if (domain == AF_PACKET) {
         return create_packet_socket_obj(type, protocol, out);
     }

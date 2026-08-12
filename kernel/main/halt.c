@@ -8,7 +8,7 @@ void cli(void) { __asm__ volatile("cli" : : : "memory"); }
 
 void sti(void) { __asm__ volatile("sti" : : : "memory"); }
 
-static void halt_other_cpus(void) {
+void halt_other_cpus(void) {
     if (current_apic_mode == APIC_NONE || cpu_count <= 1)
         return;
 

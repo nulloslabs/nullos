@@ -40,7 +40,7 @@ void net_packet_tap_rx(const uint8_t *packet, uint16_t len) {
         spin_lock(&curr->lock);
         uint16_t frame_protocol = 0;
         if (len >= 14) memcpy(&frame_protocol, packet + 12, sizeof(frame_protocol));
-        if (len >= 14 && (!curr->protocol || curr->protocol == frame_protocol) && (!curr->ifindex || curr->ifindex == 1) && curr->count < PACKET_RING_SIZE) {
+        if (len >= 14 && (!curr->protocol || curr->protocol == frame_protocol) && (!curr->ifindex || curr->ifindex == NET_ETHERNET_INTERFACE_INDEX) && curr->count < PACKET_RING_SIZE) {
             raw_frame_t *f = &curr->ring[curr->tail];
             const uint8_t *data = curr->type == SOCK_DGRAM ? packet + 14 : packet;
             uint16_t data_len = curr->type == SOCK_DGRAM ? len - 14 : len;
@@ -61,7 +61,7 @@ static int packet_op_bind(socket_t *sock, const void *addr, socklen_t addrlen) {
     const sockaddr_ll_t *sll = (const sockaddr_ll_t *)addr;
     packet_socket_t *pkt = (packet_socket_t *)sock->priv;
     if (!pkt) return -EINVAL;
-    if (sll->sll_ifindex != 0 && sll->sll_ifindex != 1) return -ENODEV;
+    if (sll->sll_ifindex != 0 && sll->sll_ifindex != NET_ETHERNET_INTERFACE_INDEX) return -ENODEV;
 
     pkt->protocol = sll->sll_protocol;
     pkt->ifindex = sll->sll_ifindex;
@@ -94,7 +94,7 @@ static int64_t packet_op_sendto(socket_t *sock, const void *buf, size_t len, int
     }
     if (!dest_addr || addrlen < sizeof(sockaddr_ll_t) || len > PACKET_MAX_LEN - 14) return -EINVAL;
     const sockaddr_ll_t *sll = (const sockaddr_ll_t *)dest_addr;
-    if (sll->sll_ifindex != 0 && sll->sll_ifindex != 1) return -ENODEV;
+    if (sll->sll_ifindex != 0 && sll->sll_ifindex != NET_ETHERNET_INTERFACE_INDEX) return -ENODEV;
     uint8_t frame[PACKET_MAX_LEN];
     memcpy(frame, sll->sll_addr, 6);
     memcpy(frame + 6, net_current_device->mac, 6);
@@ -130,7 +130,7 @@ static int64_t packet_op_recvfrom(socket_t *sock, void *buf, size_t len, int fla
         memset(sll, 0, sizeof(*sll));
         sll->sll_family = AF_PACKET;
         sll->sll_protocol = pkt->protocol;
-        sll->sll_ifindex = 1;
+        sll->sll_ifindex = NET_ETHERNET_INTERFACE_INDEX;
         *addrlen = sizeof(*sll);
     }
     return (int64_t)copy_len;

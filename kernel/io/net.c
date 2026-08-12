@@ -190,7 +190,8 @@ void handle_icmp_packet(const uint8_t *frame, uint16_t len) {
     uint16_t ip_hlen;
     uint16_t ip_total;
     if (!parse_ipv4_packet(frame, len, IP_PROTO_ICMP, &ip, &ip_hlen, &ip_total)) return;
-    if (ip_total - ip_hlen < sizeof(icmp_hdr_t)) return;
+    uint16_t ip_payload_len = ip_total - ip_hlen;
+    if (ip_payload_len < (uint16_t)sizeof(icmp_hdr_t)) return;
     const icmp_hdr_t *icmp = (const icmp_hdr_t *)(frame + 14 + ip_hlen);
     if (icmp->type != 0) return;
     if (ntohs(icmp->id) != icmp_ping_id || ntohs(icmp->seq) != icmp_ping_seq) return;
@@ -253,11 +254,12 @@ void handle_udp_packet(const uint8_t *frame, uint16_t len) {
     uint16_t ip_hlen;
     uint16_t ip_total;
     if (!parse_ipv4_packet(frame, len, IP_PROTO_UDP, &ip, &ip_hlen, &ip_total)) return;
-    if (ip_total - ip_hlen < sizeof(udp_hdr_t)) return;
+    uint16_t ip_payload_len = ip_total - ip_hlen;
+    if (ip_payload_len < (uint16_t)sizeof(udp_hdr_t)) return;
     const udp_hdr_t *udp = (const udp_hdr_t *)(frame + 14 + ip_hlen);
     uint16_t udp_total = ntohs(udp->length);
-    if (udp_total < sizeof(udp_hdr_t) || udp_total > ip_total - ip_hlen) return;
-    uint16_t data_len = udp_total - sizeof(udp_hdr_t);
+    if (udp_total < (uint16_t)sizeof(udp_hdr_t) || udp_total > ip_payload_len) return;
+    uint16_t data_len = udp_total - (uint16_t)sizeof(udp_hdr_t);
     const uint8_t *payload = (const uint8_t *)(udp + 1);
     
     uint64_t irq;

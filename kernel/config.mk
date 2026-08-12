@@ -12,7 +12,7 @@ else
 endif
 
 CC = $(CROSS)gcc
-CFLAGS = -Wall -m64 -I../include/ -I../include/freestanding/ -I../include/limine/ -I../uacpi/include/ -ffreestanding -nostdlib -nostdinc -fno-builtin -nodefaultlibs -nostartfiles -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie -no-pie -fno-lto -fno-stack-check -mno-red-zone -mcmodel=kernel -mabi=sysv -MMD -MP -std=c23 -mfpmath=sse -march=x86-64 -mtune=generic
+CFLAGS = -O2 -m64 -std=c23 -Wall -Wextra -I../include/ -I../include/freestanding/ -I../include/limine/ -I../uacpi/include/ -ffreestanding -nostdlib -nostdinc -fno-builtin -nodefaultlibs -nostartfiles -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie -no-pie -fno-lto -fno-stack-check -mno-red-zone -mcmodel=kernel -mabi=sysv -march=x86-64 -mtune=generic -mno-sse -mno-sse2 -mno-mmx -mno-80387 -MMD -MP
 UACPI_CFLAGS = $(filter-out -I../include/ -I../include/freestanding/ -I../include/limine/ -I../uacpi/include/,$(CFLAGS)) -I./include/ -I./include/freestanding/ -I./include/limine/ -I./uacpi/include
 ifeq ($(DEBUG),1)
 	CFLAGS := -g $(CFLAGS)

@@ -23,7 +23,9 @@ static int archive_entry_count = 0;
 // One byte per sorted archive entry. Deleted archive-backed paths are hidden
 // without consuming one of the fixed-size overlay slots.
 static uint8_t *archive_tombstone_bits = NULL;
-static modified_file_t modified_files[MAX_MODIFIED_FILES];
+static modified_file_t *modified_files;
+static int modified_capacity;
+static modified_file_t *last_overlay_entry;
 // newc inode numbers are 32-bit. Keep dynamically-created overlay inodes in
 // a disjoint range while preserving archive inode numbers (and hard links).
 static ino_t next_overlay_ino = 0x100000000ULL;
@@ -181,7 +183,7 @@ static bool find_archive_symlink(const char *abs_path, char *resolved_abs, size_
     normalize_path(abs_path, norm, sizeof(norm));
 
     // Check overlay symlinks first (created via symlink_initrd)
-    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+    for (int i = 0; i < modified_capacity; i++) {
         if (modified_files[i].is_active && !modified_files[i].is_tombstone &&
             (modified_files[i].mode & 0xF000) == 0xA000 &&
             compare_archive_names(modified_files[i].path, norm) == 0) {
@@ -293,8 +295,8 @@ static void set_modified_times(modified_file_t *file, int archive_idx, bool new_
     if (change == INITRD_TIME_CHANGE) file->ctime = now;
 }
 
-static void add_modified_file(const char *path, void *data, size_t size, size_t capacity, uint32_t mode, uid_t uid, gid_t gid, initrd_time_change_t change) {
-    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+static int add_modified_file(const char *path, void *data, size_t size, size_t capacity, uint32_t mode, uid_t uid, gid_t gid, initrd_time_change_t change) {
+    for (int i = 0; i < modified_capacity; i++) {
         if (modified_files[i].is_active && strcmp(modified_files[i].path, path) == 0) {
             if (modified_files[i].data) free(modified_files[i].data);
             modified_files[i].data = data;
@@ -309,35 +311,49 @@ static void add_modified_file(const char *path, void *data, size_t size, size_t 
             // tombstone, otherwise the new overlay entry would never be seen
             // (callers consult the tombstone bitmap directly via
             archive_tombstone_clear(path);
-            return;
+            return 0;
         }
     }
 
-    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+    int free_index = -1;
+    for (int i = 0; i < modified_capacity; i++) {
         if (!modified_files[i].is_active) {
-            int archive_idx = archive_entry_idx(path);
-            ino_t inode = next_overlay_ino++;
-            // Promoting an existing archive entry into the writable overlay
-            // must not change its inode. Re-creating a tombstoned path is a
-            // genuinely new file and therefore receives a new inode.
-            if (archive_idx >= 0 && !archive_tombstone_get(path))
-                inode = archive_entries[archive_idx].ino;
-            modified_files[i].is_active = true;
-            strncpy(modified_files[i].path, path, sizeof(modified_files[i].path) - 1);
-            modified_files[i].path[sizeof(modified_files[i].path) - 1] = '\0';
-            modified_files[i].inode = inode;
-            modified_files[i].data = data;
-            modified_files[i].size = size;
-            modified_files[i].capacity = capacity;
-            modified_files[i].mode = mode;
-            modified_files[i].uid = uid;
-            modified_files[i].gid = gid;
-            modified_files[i].is_tombstone = false;
-            set_modified_times(&modified_files[i], archive_idx, true, change);
-            archive_tombstone_clear(path);
-            return;
+            free_index = i;
+            break;
         }
     }
+    if (free_index < 0) {
+        if (modified_capacity >= MAX_MODIFIED_FILES) { free(data); return -ENOSPC; }
+        int old_capacity = modified_capacity;
+        int new_capacity = old_capacity ? old_capacity * 2 : 8;
+        if (new_capacity > MAX_MODIFIED_FILES) new_capacity = MAX_MODIFIED_FILES;
+        modified_file_t *new_files = realloc(modified_files, (size_t)new_capacity * sizeof(*new_files));
+        if (!new_files) { free(data); return -ENOMEM; }
+        modified_files = new_files;
+        memset(modified_files + old_capacity, 0, (size_t)(new_capacity - old_capacity) * sizeof(*modified_files));
+        modified_capacity = new_capacity;
+        last_overlay_entry = NULL;
+        free_index = old_capacity;
+    }
+
+    int archive_idx = archive_entry_idx(path);
+    ino_t inode = next_overlay_ino++;
+    if (archive_idx >= 0 && !archive_tombstone_get(path)) inode = archive_entries[archive_idx].ino;
+    modified_file_t *file = &modified_files[free_index];
+    file->is_active = true;
+    strncpy(file->path, path, sizeof(file->path) - 1);
+    file->path[sizeof(file->path) - 1] = '\0';
+    file->inode = inode;
+    file->data = data;
+    file->size = size;
+    file->capacity = capacity;
+    file->mode = mode;
+    file->uid = uid;
+    file->gid = gid;
+    file->is_tombstone = false;
+    set_modified_times(file, archive_idx, true, change);
+    archive_tombstone_clear(path);
+    return 0;
 }
 
 static void touch_parent_times(const char *norm_path) {
@@ -353,7 +369,7 @@ static void touch_parent_times(const char *norm_path) {
 
     struct timespec now = time_get_realtime_ts();
     modified_file_t *overlay = NULL;
-    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+    for (int i = 0; i < modified_capacity; i++) {
         if (modified_files[i].is_active && strcmp(modified_files[i].path, parent) == 0) { overlay = &modified_files[i]; break; }
     }
     if (overlay) { overlay->mtime = overlay->ctime = now; return; }
@@ -435,7 +451,7 @@ initrd_file_t read_initrd(const char *path) {
         // 1. Check overlay (live entries only; tombstones live in the bitmap
         //    so modified_files[] never carries an is_tombstone marker anymore).
         bool found_link = false;
-        for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+        for (int i = 0; i < modified_capacity; i++) {
             if (modified_files[i].is_active && strcmp(modified_files[i].path, norm) == 0) {
                 if ((modified_files[i].mode & 0xF000) == 0xA000) {
                     char current_abs[256];
@@ -498,7 +514,7 @@ static initrd_file_t stat_initrd_ex(const char *path, bool follow_final) {
     get_norm_path_ex(path, norm, sizeof(norm), follow_final);
 
     // check overlay first
-    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+    for (int i = 0; i < modified_capacity; i++) {
         if (modified_files[i].is_active && strcmp(modified_files[i].path, norm) == 0) {
             initrd_file_t result = {
                 .inode = modified_files[i].inode,
@@ -558,6 +574,8 @@ initrd_file_t stat_initrd_nofollow(const char *path) {
 }
 
 int write_initrd(const char *path, const void *data, uint64_t size, uint32_t mode, uid_t uid, gid_t gid) {
+    if (size > INITRD_MAX_FILE_SIZE) return -EFBIG;
+
     char norm[256];
     get_norm_path(path, norm, sizeof(norm));
     bool existed = stat_initrd(path).mode != 0;
@@ -569,18 +587,21 @@ int write_initrd(const char *path, const void *data, uint64_t size, uint32_t mod
         memcpy(copy, data, (size_t)size);
     }
 
-    add_modified_file(norm, copy, (size_t)size, (size_t)size, mode, uid, gid, INITRD_TIME_CONTENT);
+    int status = add_modified_file(norm, copy, (size_t)size, (size_t)size, mode, uid, gid, INITRD_TIME_CONTENT);
+    if (status < 0) return status;
     if (!existed) touch_parent_times(norm);
     return 0;
 }
 
 // Find an active (non-tombstone) overlay entry for `norm`, or NULL.
 static modified_file_t *find_overlay_entry(const char *norm) {
-    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+    if (last_overlay_entry && last_overlay_entry->is_active && !last_overlay_entry->is_tombstone && strcmp(last_overlay_entry->path, norm) == 0) return last_overlay_entry;
+    for (int i = 0; i < modified_capacity; i++) {
         if (modified_files[i].is_active &&
             !modified_files[i].is_tombstone &&
             strcmp(modified_files[i].path, norm) == 0) {
-            return &modified_files[i];
+            last_overlay_entry = &modified_files[i];
+            return last_overlay_entry;
         }
     }
     return NULL;
@@ -597,13 +618,12 @@ static modified_file_t *find_overlay_entry(const char *norm) {
 // O(off+count) amortized, not O(file_size).  When no overlay entry exists
 // yet (first write on a tar-backed or brand-new file), it snapshots the
 // current contents, applies the patch, and stores a fresh overlay entry.
-int write_initrd_partial(const char *path, const void *data, uint64_t off, uint64_t count, uint32_t mode, uid_t uid, gid_t gid) {
+int write_initrd_partial(const char *path, const void *data, uint64_t off, uint64_t count) {
     if (count == 0) return 0;
+    if (off > INITRD_MAX_FILE_SIZE || count > INITRD_MAX_FILE_SIZE - off) return -EFBIG;
 
     char norm[256];
     get_norm_path(path, norm, sizeof(norm));
-
-    if (off + count < count) return -EINVAL; // overflow guard
 
     modified_file_t *ent = find_overlay_entry(norm);
     if (ent) {
@@ -612,8 +632,15 @@ int write_initrd_partial(const char *path, const void *data, uint64_t off, uint6
             // Grow geometrically (1.5x) to absorb future small writes
             // without a realloc each time.  Never shrink; the goal is to
             // stabilise large-file copy loops like dd/tar.
-            uint64_t grow = ent->capacity * 2;
-            if (grow < new_size) grow = new_size + (new_size >> 1);
+            uint64_t grow = ent->capacity <= INITRD_MAX_FILE_SIZE / 2
+                                ? ent->capacity * 2
+                                : INITRD_MAX_FILE_SIZE;
+            if (grow < new_size) {
+                uint64_t slack = new_size >> 1;
+                grow = slack <= INITRD_MAX_FILE_SIZE - new_size
+                           ? new_size + slack
+                           : INITRD_MAX_FILE_SIZE;
+            }
             if (grow < 512) grow = 512;
             uint64_t cap = grow;
             void *realloced = realloc(ent->data, (size_t)cap);
@@ -636,9 +663,6 @@ int write_initrd_partial(const char *path, const void *data, uint64_t off, uint6
             ent->size = new_size;
         }
         memcpy((uint8_t *)ent->data + off, data, (size_t)count);
-        ent->mode = mode ? mode : (ent->mode ? ent->mode : 0100644);
-        ent->uid  = uid;
-        ent->gid  = gid;
         ent->mtime = ent->ctime = time_get_realtime_ts();
         return 0;
     }
@@ -647,6 +671,7 @@ int write_initrd_partial(const char *path, const void *data, uint64_t off, uint6
     // apply the patch into a fresh buffer, and store it as a new overlay entry.
     initrd_file_t cur = read_initrd(path);
     uint64_t base_size = cur.size;
+    if (base_size > INITRD_MAX_FILE_SIZE) return -EFBIG;
     uint64_t need = off + count;
     uint64_t alloc = (base_size > need) ? base_size : need;
 
@@ -661,8 +686,9 @@ int write_initrd_partial(const char *path, const void *data, uint64_t off, uint6
     // Apply the patch.
     memcpy((uint8_t *)buf + off, data, (size_t)count);
 
-    uint32_t final_mode = mode ? mode : (cur.mode ? cur.mode : 0100644);
-    add_modified_file(norm, buf, (size_t)need, (size_t)alloc, final_mode, uid, gid, INITRD_TIME_CONTENT);
+    uint32_t final_mode = cur.mode ? cur.mode : 0100644;
+    int status = add_modified_file(norm, buf, (size_t)need, (size_t)alloc, final_mode, cur.uid, cur.gid, INITRD_TIME_CONTENT);
+    if (status < 0) return status;
     if (!cur.mode) touch_parent_times(norm);
     return 0;
 }
@@ -678,7 +704,8 @@ int mkdir_initrd(const char *path, mode_t mode, uid_t uid, gid_t gid) {
     initrd_file_t existing = read_initrd(path);
     if (existing.data || existing.mode) return -EEXIST;
 
-    add_modified_file(norm, NULL, 0, 0, mode | 0040000, uid, gid, INITRD_TIME_CREATE);
+    int status = add_modified_file(norm, NULL, 0, 0, mode | 0040000, uid, gid, INITRD_TIME_CREATE);
+    if (status < 0) return status;
     touch_parent_times(norm);
     return 0;
 }
@@ -693,7 +720,7 @@ int delete_initrd(const char *path) {
 
     // If it lives in the overlay, just drop that entry. Re-creating the path
     // later will clear the slot via add_modified_file().
-    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+    for (int i = 0; i < modified_capacity; i++) {
         if (modified_files[i].is_active && strcmp(modified_files[i].path, norm) == 0) {
             if (modified_files[i].data) free(modified_files[i].data);
             modified_files[i].is_active = false;
@@ -729,7 +756,7 @@ int rmdir_initrd(const char *path) {
 
     // check it's empty — scan modified_files for any live (non-tombstone) children
     size_t norm_len = strlen(norm);
-    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+    for (int i = 0; i < modified_capacity; i++) {
         if (!modified_files[i].is_active) continue;
         if (modified_files[i].is_tombstone) continue;
         if (strcmp(modified_files[i].path, norm) == 0) continue; // itself
@@ -782,7 +809,7 @@ int rmdir_initrd(const char *path) {
     // Remove it. If it's an overlay entry, drop the entry and leave a tombstone
     // if a tar original sits below it (so it doesn't resurface). If it's
     // tar-backed only, a tombstone is the only way to hide the original.
-    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+    for (int i = 0; i < modified_capacity; i++) {
         if (modified_files[i].is_active && strcmp(modified_files[i].path, norm) == 0) {
             if (modified_files[i].data) free(modified_files[i].data);
             modified_files[i].is_active = false;
@@ -814,7 +841,8 @@ int symlink_initrd(const char *target, const char *path, uid_t uid, gid_t gid) {
     if (!copy) return -ENOMEM;
     strcpy(copy, target);
 
-    add_modified_file(norm, copy, len, len + 1, 0xA000 | 0777, uid, gid, INITRD_TIME_CREATE);
+    int status = add_modified_file(norm, copy, len, len + 1, 0xA000 | 0777, uid, gid, INITRD_TIME_CREATE);
+    if (status < 0) return status;
     touch_parent_times(norm);
     return 0;
 }
@@ -828,7 +856,7 @@ int chmod_initrd(const char *path, mode_t mode) {
     // read_initrd returns the same data pointer stored in the overlay,
     // and add_modified_file would free(old_data) then store the
     // now-dangling pointer back — use-after-free.
-    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+    for (int i = 0; i < modified_capacity; i++) {
         if (modified_files[i].is_active && strcmp(modified_files[i].path, norm) == 0) {
             mode_t type_bits = (modified_files[i].mode & 0xF000);
             modified_files[i].mode = (mode & 0777) | type_bits;
@@ -854,15 +882,14 @@ int chmod_initrd(const char *path, mode_t mode) {
         memcpy(data_copy, file.data, file.size);
     }
 
-    add_modified_file(norm, data_copy, file.size, file.size, new_mode, file.uid, file.gid, INITRD_TIME_CHANGE);
-    return 0;
+    return add_modified_file(norm, data_copy, file.size, file.size, new_mode, file.uid, file.gid, INITRD_TIME_CHANGE);
 }
 
 int chown_initrd(const char *path, uid_t uid, gid_t gid, bool follow) {
     char norm[256];
     get_norm_path_ex(path, norm, sizeof(norm), follow);
 
-    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+    for (int i = 0; i < modified_capacity; i++) {
         if (modified_files[i].is_active && strcmp(modified_files[i].path, norm) == 0) {
             if (uid != (uid_t)-1) modified_files[i].uid = uid;
             if (gid != (gid_t)-1) modified_files[i].gid = gid;
@@ -885,15 +912,14 @@ int chown_initrd(const char *path, uid_t uid, gid_t gid, bool follow) {
 
     uid_t new_uid = uid == (uid_t)-1 ? file.uid : uid;
     gid_t new_gid = gid == (gid_t)-1 ? file.gid : gid;
-    add_modified_file(norm, data_copy, file.size, alloc_size, file.mode, new_uid, new_gid, INITRD_TIME_CHANGE);
-    return 0;
+    return add_modified_file(norm, data_copy, file.size, alloc_size, file.mode, new_uid, new_gid, INITRD_TIME_CHANGE);
 }
 
 int set_initrd_times(const char *path, struct timespec atime, bool set_atime, struct timespec mtime, bool set_mtime, bool follow) {
     char norm[256];
     get_norm_path_ex(path, norm, sizeof(norm), follow);
 
-    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+    for (int i = 0; i < modified_capacity; i++) {
         if (!modified_files[i].is_active || strcmp(modified_files[i].path, norm) != 0) continue;
         if (set_atime) modified_files[i].atime = atime;
         if (set_mtime) modified_files[i].mtime = mtime;
@@ -930,7 +956,7 @@ int get_initrd_entry(int index, directory_entry_t *entry) {
 
     // Phase 2: overlay (modified_files[]) entries. Tombstones are deletion
     // markers, not real entries — skip them so they never appear in listings.
-    for (int i = 0; i < MAX_MODIFIED_FILES; i++) {
+    for (int i = 0; i < modified_capacity; i++) {
         if (!modified_files[i].is_active) continue;
         if (modified_files[i].is_tombstone) continue;
 
@@ -1013,7 +1039,7 @@ int next_initrd_child(int *index, const char *dir_norm, char *child_name, size_t
 
     // Phase 2: overlay entries
     int overlay_start = (*index >= archive_entry_count) ? *index - archive_entry_count : 0;
-    for (int i = overlay_start; i < MAX_MODIFIED_FILES; i++) {
+    for (int i = overlay_start; i < modified_capacity; i++) {
         if (!modified_files[i].is_active || modified_files[i].is_tombstone) continue;
 
         const char *path = modified_files[i].path;

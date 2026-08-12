@@ -3,7 +3,7 @@
 #include <main/log.h>
 #include <main/sched.h>
 #include <main/msr.h>
-#include <io/ttys.h>
+#include <io/tty.h>
 #include <syscalls/syscalls.h>
 #include <syscalls/syscall_impls.h>
 
@@ -166,7 +166,7 @@ void dispatch_syscall(syscall_frame_t *frame) {
     current_task_ptr->orig_rax = frame->rax;
 
     uint64_t saved_rip = frame->rip;
-    check_signals(frame);
+    if (current_task_ptr->pending_signals) check_signals(frame);
 
     if (frame->rip != saved_rip) return;
     if (frame->rax < (sizeof(syscall_table) / sizeof(syscall_table[0])) && syscall_table[frame->rax]) {
@@ -174,7 +174,7 @@ void dispatch_syscall(syscall_frame_t *frame) {
     } else {
         frame->rax = (uint64_t)-ENOSYS;
     }
-    check_signals(frame);
+    if (current_task_ptr->pending_signals) check_signals(frame);
 }
 
 void init_syscalls_for_cpu(void) {

@@ -5,7 +5,6 @@
 #include <main/idt.h>
 #include <main/sched.h>
 #include <main/limine_req.h>
-#include <main/acpi.h>
 // Are we there yet?
 #include <main/boot_args.h>
 #include <main/sse.h>
@@ -19,6 +18,8 @@
 // Please, let this stop...
 #include <main/rng.h>
 #include <main/stack_protector.h>
+#include <main/workqueue.h>
+#include <io/acpi.h>
 #include <io/terminal.h>
 #include <io/fb.h>
 #include <io/initrd.h>
@@ -31,9 +32,10 @@
 #include <io/pci.h>
 #include <io/pic.h>
 #include <io/pit.h>
+#include <io/power_button.h>
 #include <io/apic.h>
-#include <io/ttys.h>
-#include <io/ptys.h>
+#include <io/tty.h>
+#include <io/pty.h>
 #include <io/serial.h>
 #include <io/tmpfs.h>
 #include <io/ps2_keyboard.h>
@@ -54,10 +56,10 @@ __attribute__((noreturn)) void kmain(void) {
     show_cursor(true); // Show cursor as soon as possible
     if (!LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision)) panic("base revision not supported");
     init_sse();
+    init_pmm();
     init_gdt();
     init_idt();
     remap_pic();
-    init_pmm();
     init_vmm();
     init_mm();
     init_terminal_backbuffer();
@@ -98,6 +100,7 @@ __attribute__((noreturn)) void kmain(void) {
     char *init_envp[] = { NULL };
     int init = execute_elf(init_path, init_argv, init_envp);
     if (init < 0) panic("init process didn't run due to an error");
+    start_kernel_workqueue();
 
     idle();
 }

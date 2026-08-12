@@ -10,7 +10,7 @@
 #include <io/initrd.h>
 #include <io/devtmpfs.h>
 #include <io/procfs.h>
-#include <syscalls/syscall_impls.h>
+#include <io/vfs.h>
 #include <mm/mm.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
@@ -281,7 +281,7 @@ static int load_elf_segments(vmm_context_t *ctx, const uint8_t *data, const elf6
 }
 
 int execute_elf(const char *path, char **argv, char **envp) {
-    if (is_devtmpfs_device_path(path)) return -EACCES;
+    if (check_vfs_device(path)) return -EACCES;
 
     initrd_file_t file = read_initrd(path);
     if (!file.data) return -ENOENT;
@@ -414,7 +414,7 @@ int execute_elf(const char *path, char **argv, char **envp) {
 int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     syscall_frame_t *frame = (syscall_frame_t *)raw_frame;
 
-    if (is_devtmpfs_device_path(path)) return -EACCES;
+    if (check_vfs_device(path)) return -EACCES;
     if (is_procfs_path(path)) return -EACCES;
 
     initrd_file_t file = read_initrd(path);

@@ -7,6 +7,7 @@
 #include <time.h>
 
 #define MAX_MODIFIED_FILES 1024
+#define INITRD_MAX_FILE_SIZE (256ULL * 1024 * 1024)
 
 #define FT_FILE 1
 #define FT_DIRECTORY 2
@@ -75,7 +76,7 @@ initrd_file_t read_initrd(const char *path);
 initrd_file_t stat_initrd(const char *path);
 initrd_file_t stat_initrd_nofollow(const char *path);
 int write_initrd(const char *path, const void *data, uint64_t size, uint32_t mode, uid_t uid, gid_t gid);
-int write_initrd_partial(const char *path, const void *data, uint64_t off, uint64_t count, uint32_t mode, uid_t uid, gid_t gid);
+int write_initrd_partial(const char *path, const void *data, uint64_t off, uint64_t count);
 int mkdir_initrd(const char *path, mode_t mode, uid_t uid, gid_t gid);
 int delete_initrd(const char *path);
 int rmdir_initrd(const char *path);

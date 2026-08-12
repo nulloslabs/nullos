@@ -28,13 +28,15 @@ initrd:
 		for n in $$cached_names; do \
 			echo "$$current_names" | grep -qxF "$$n" || { \
 				if [ -f packages/$$n.pkg.tar.zst ] && [ -d main ]; then \
-					tar --zstd -tf packages/$$n.pkg.tar.zst 2>/dev/null | grep -v '^\.' | while read f; do \
-						if [ -f "main/$$f" ] || [ -L "main/$$f" ]; then rm -f "main/$$f"; fi; \
+					tar --zstd -tf packages/$$n.pkg.tar.zst 2>/dev/null | while IFS= read -r f; do \
+						case "$$f" in .*) continue ;; */) continue ;; esac; \
+						if [ -f "main/$$f" ] || [ -L "main/$$f" ]; then rm -f -- "main/$$f"; fi; \
 					done; \
 				fi; \
 				rm -f packages/$$n.pkg.tar.zst; \
 			}; \
 		done; \
+		find main -depth -type d -empty -delete; \
 	fi; \
 	if [ ! -f $(OUTFILE) ] || ! gzip -t $(OUTFILE) 2>/dev/null || [ ! -d main ] || [ Makefile -nt $(OUTFILE) ] || [ config.mk -nt $(OUTFILE) ] || [ -n "$$missing" ] || [ -n "$$extra" ] || [ -n "$$invalid" ] || [ -n "$$(find main -newer $(OUTFILE) 2>/dev/null | head -1)" ]; then \
 		mkdir -p main packages && \
@@ -57,7 +59,7 @@ initrd:
 			'::shutdown:/bin/umount -a -r' \
 			> main/etc/inittab && \
 		printf '%s\n' \
-			'#!/bin/busybox sh' \
+			'#!/bin/sh' \
 			'' \
 			'/bin/busybox --install -s' \
 			'rm -rf /linuxrc' \
@@ -69,11 +71,17 @@ initrd:
 			'mount -t tmpfs tmpfs /tmp' \
 			'mount -t tmpfs run /run' \
 			'hostname -F /etc/hostname' \
-			'udhcpc -i eth0 -q -n' \
+			'interface_index=0' \
+			'while :; do' \
+			'    interface=eth$$interface_index' \
+			'    ip link show "$$interface" > /dev/null 2>&1 || break' \
+			'    udhcpc -i "$$interface" -q -n > /dev/null 2>&1' \
+			'    interface_index=$$((interface_index + 1))' \
+			'done' \
 			> main/etc/init.d/rcS && \
 		chmod +x main/etc/init.d/rcS && \
 		printf '%s\n' \
-			'#!/bin/busybox sh' \
+			'#!/bin/sh' \
 			'' \
 			'case "$$1" in' \
 			'    deconfig)' \
@@ -143,6 +151,7 @@ initrd:
 		done && \
 		find main -maxdepth 1 -type f -regextype posix-extended -regex 'main/\.[A-Z]+' -delete && \
 		(cd main && ln -sf /bin/busybox sbin/init && ln -sf sbin/init init) && \
+		(cd main && ln -sf /bin/busybox sh) && \
 		rm -f main/linuxrc && \
 		printf "  %-7s %s\n" "CPIO" "$(SUBDIR)/$(OUTFILE)" && \
 		(cd main && find . -print0 | $(CPIO) $(CPIOFLAGS) 2>/dev/null) | gzip -9 > $(OUTFILE) && gzip -t $(OUTFILE); \

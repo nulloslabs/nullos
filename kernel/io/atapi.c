@@ -46,7 +46,8 @@ static int send_atapi_packet_pio(const ide_device_t *device, const uint8_t packe
 
     uint16_t available = inb(device->io_base + IDE_REG_LBA_MID) | ((uint16_t)inb(device->io_base + IDE_REG_LBA_HIGH) << 8);
     uint8_t *output = data;
-    for (uint32_t i = 0; i < (available + 1) / 2; i++) {
+    uint32_t word_count = ((uint32_t)available + 1U) / 2U;
+    for (uint32_t i = 0; i < word_count; i++) {
         uint16_t word = inw(device->io_base + IDE_REG_DATA);
         uint32_t offset = i * 2;
         if (offset < size) output[offset] = word & 0xFF;

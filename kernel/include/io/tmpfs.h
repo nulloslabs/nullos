@@ -13,6 +13,7 @@
 #define TMPFS_MAX_CHILDREN  256   // per directory
 #define TMPFS_MAX_MOUNTS    8
 #define TMPFS_LINK_MAX      256
+#define TMPFS_MAX_FILE_SIZE (256ULL * 1024 * 1024)
 
 typedef enum {
     TMPFS_NONE = 0,
@@ -45,10 +46,11 @@ typedef struct {
     uint64_t     size;
     uint64_t     capacity;
     // TMPFS_DIR:
-    tmpfs_child_t children[TMPFS_MAX_CHILDREN];
+    tmpfs_child_t *children;
     int          child_count;
+    int          child_capacity;
     // TMPFS_LNK:
-    char         target[TMPFS_LINK_MAX];
+    char        *target;
     uint64_t     ino;
 } tmpfs_inode_t;
 
@@ -68,7 +70,7 @@ typedef struct {
 
 typedef struct { char name[128]; int type; } tmpfs_dirent_t;
 
-extern tmpfs_inode_t tmpfs_inodes[TMPFS_MAX_INODES];
+extern tmpfs_inode_t *tmpfs_inodes[TMPFS_MAX_INODES];
 extern spinlock_t    tmpfs_lock;
 
 // Mount management (used by sys_mount/sys_umount2 only)

@@ -404,11 +404,6 @@ vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
     vmm_context_t* child = create_vmm_context();
     if (!child) return NULL;
 
-    // Track allocated pages for rollback on failure
-    #define CLONE_MAX_PAGES 65536
-    static uint64_t rollback_virt[CLONE_MAX_PAGES];
-    int rollback_count = 0;
-
     // Traverse the parent's page tables and copy all user pages (indices 0-255)
     for (uint64_t pml4_i = 0; pml4_i < 256; pml4_i++) {
         if (!(parent->pml4[pml4_i] & VMM_PRESENT)) continue;
@@ -449,28 +444,24 @@ vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
 
                     void* new_phys = pmalloc();
                     if (!new_phys) {
-                        // Rollback: free all allocated pages and destroy child context
-                        for (int r = 0; r < rollback_count; r++) unmap_vmm(child, rollback_virt[r]);
                         destroy_vmm_context(child);
                         return NULL;
-                    }
-
-                    if (rollback_count < CLONE_MAX_PAGES) {
-                        rollback_virt[rollback_count] = virt;
-                        rollback_count++;
                     }
 
                     uint64_t old_phys = entry & 0x000ffffffffff000ULL;
                     memcpy(phys_to_virt((uint64_t)new_phys), phys_to_virt(old_phys), PAGE_SIZE);
 
                     uint64_t flags = entry & (0xFFFULL | VMM_NX);
-                    map_vmm(child, virt, (uint64_t)new_phys, flags & ~VMM_PRESENT);
+                    if (!map_vmm(child, virt, (uint64_t)new_phys, flags & ~VMM_PRESENT)) {
+                        pfree(new_phys);
+                        destroy_vmm_context(child);
+                        return NULL;
+                    }
                 }
             }
         }
     }
 
-    #undef CLONE_MAX_PAGES
     return child;
 }
 
