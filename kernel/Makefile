@@ -41,8 +41,6 @@ uacpi: config.mk Makefile
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/uacpi/ is already up to date"; \
 	fi
 
-uacpi_build: uacpi $(UACPI_OUTFILE)
-
 $(UACPI_OUTFILE): $(UACPI_OBJ) FORCE
 	@needs_archive=0; \
 	for obj in $(UACPI_OBJ); do \
@@ -74,7 +72,7 @@ kernel: config.mk Makefile linker.ld
 	@$(MAKE) limine_header
 	@$(MAKE) uacpi
 	@$(MAKE) $(SUBDIRS)
-	@$(MAKE) uacpi_build
+	@$(MAKE) $(UACPI_OUTFILE)
 	@needs_link=0; \
 	for obj in $(OBJ); do \
 		if [ ! -f "$(OUTFILE)" ] || [ "$(UACPI_OUTFILE)" -nt "$(OUTFILE)" ] || [ "config.mk" -nt "$(OUTFILE)" ] || [ "linker.ld" -nt "$(OUTFILE)" ] || [ "Makefile" -nt "$(OUTFILE)" ] || [ "$$obj" -nt "$(OUTFILE)" ]; then \
@@ -109,4 +107,4 @@ mrproper: clean
 	@printf "  %-7s %s\n" "CLEAN" "include/limine/"
 	@rm -rf include/limine
 
-.PHONY: all limine_header uacpi uacpi_build $(SUBDIRS) kernel FORCE clean mrproper
+.PHONY: all limine_header uacpi $(SUBDIRS) kernel FORCE clean mrproper

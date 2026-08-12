@@ -12,12 +12,7 @@ include config.mk
 all: initrd
 
 initrd:
-	@command -v pacman >/dev/null 2>&1 || { echo "error: pacman is required to resolve Arch package dependencies" >&2; exit 1; }; \
-	resolver_db="$$(mktemp -d)" || exit 1; \
-	mkdir -p "$$resolver_db/sync"; \
-	cp /var/lib/pacman/sync/*.db "$$resolver_db/sync/" 2>/dev/null || { echo "error: no pacman sync databases found; run 'sudo pacman -Sy' first" >&2; rm -rf -- "$$resolver_db"; exit 1; }; \
-	resolved_packages="$$(pacman --dbpath "$$resolver_db" --noconfirm -Sp --print-format '%r/%n' $(PACKAGE_NAMES))" || { rm -rf -- "$$resolver_db"; exit 1; }; \
-	rm -rf -- "$$resolver_db"; \
+	resolved_packages="$$(../scripts/resolve_packages.sh $(PACKAGE_NAMES))"; \
 	resolved_packages="$$(printf '%s\n' "$$resolved_packages" | sed '/^core\/filesystem$$/d; /^core\/linux-api-headers$$/d')"; \
 	current_names="$$(for p in $$resolved_packages; do basename $$p; done)"; \
 	cached_names="$$(ls packages/*.pkg.tar.zst 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.pkg\.tar\.zst$$//')"; \
