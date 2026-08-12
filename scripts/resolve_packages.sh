@@ -10,7 +10,7 @@ for repository in core extra; do
 
     curl -fsSL \
         "https://geo.mirror.pkgbuild.com/$repository/os/x86_64/$repository.db" |
-        bsdtar -xf - -C "$temporary_directory/$repository"
+        tar -xf - -C "$temporary_directory/$repository"
 done
 
 requested=$(printf '%s\n' "$@")
