@@ -3,6 +3,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
+#include <time.h>
 
 #define VFS_MAX_MOUNTS 16
 #define VFS_SOURCE_MAX 256
@@ -17,6 +19,20 @@ typedef struct {
     unsigned long flags;
     bool active;
 } vfs_mount_t;
+
+// Generic VFS file structure matching initrd_file_t and tmpfs_file_t
+typedef struct {
+    ino_t inode;
+    void *data;
+    uint64_t size;
+    mode_t mode;
+    uid_t uid;
+    gid_t gid;
+    struct timespec atime;
+    struct timespec btime;
+    struct timespec mtime;
+    struct timespec ctime;
+} vfs_file_t;
 
 int register_vfs_mount(const char *source, const char *path, const char *fs_type, unsigned long flags);
 int unregister_vfs_mount(const char *path, vfs_mount_t *removed);
@@ -33,3 +49,11 @@ bool find_vfs_submount(const char *parent_path, int index, char *name, size_t na
 uint64_t get_vfs_id(const char *path, bool *is_mount_root);
 
 int list_vfs_mount(int index, char *out_line, size_t line_size);
+
+// VFS file operations mirroring initrd/tmpfs
+vfs_file_t read_vfs_file(const char *path);
+vfs_file_t stat_vfs_file(const char *path);
+int write_vfs_file(const char *path, const void *data, uint64_t size, mode_t mode, uid_t uid, gid_t gid);
+int mkdir_vfs(const char *path, mode_t mode, uid_t uid, gid_t gid);
+int unlink_vfs(const char *path);
+int rmdir_vfs(const char *path);

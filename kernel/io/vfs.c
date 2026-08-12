@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <main/sched.h>
 #include <main/spinlocks.h>
 #include <main/string.h>
@@ -395,4 +396,161 @@ int list_vfs_mount(int index, char *out_line, size_t line_size) {
     }
     spin_unlock_irqrestore(&mount_lock, irq);
     return 0;
+}
+
+// VFS file operations mirroring initrd/tmpfs APIs
+// These functions route to the appropriate filesystem backend
+
+vfs_file_t read_vfs_file(const char *path) {
+    vfs_file_t result = {0};
+    vfs_mount_t mount;
+    char relative[VFS_PATH_MAX];
+    
+    if (resolve_vfs_path(path, &mount, relative, sizeof(relative))) {
+        if (strcmp(mount.fs_type, "tmpfs") == 0) {
+            tmpfs_file_t tmpfs_result = read_tmpfs(relative);
+            result.inode = tmpfs_result.inode;
+            result.data = tmpfs_result.data;
+            result.size = tmpfs_result.size;
+            result.mode = tmpfs_result.mode;
+            result.uid = tmpfs_result.uid;
+            result.gid = tmpfs_result.gid;
+            result.atime = tmpfs_result.atime;
+            result.mtime = tmpfs_result.mtime;
+            result.ctime = tmpfs_result.ctime;
+        } else if (strcmp(mount.fs_type, "initrd") == 0) {
+            initrd_file_t initrd_result = read_initrd(relative);
+            result.inode = initrd_result.inode;
+            result.data = initrd_result.data;
+            result.size = initrd_result.size;
+            result.mode = initrd_result.mode;
+            result.uid = initrd_result.uid;
+            result.gid = initrd_result.gid;
+            result.atime = initrd_result.atime;
+            result.mtime = initrd_result.mtime;
+            result.ctime = initrd_result.ctime;
+            result.btime = initrd_result.btime;
+        }
+    } else {
+        initrd_file_t initrd_result = read_initrd(path);
+        if (initrd_result.mode) {
+            result.inode = initrd_result.inode;
+            result.data = initrd_result.data;
+            result.size = initrd_result.size;
+            result.mode = initrd_result.mode;
+            result.uid = initrd_result.uid;
+            result.gid = initrd_result.gid;
+            result.atime = initrd_result.atime;
+            result.mtime = initrd_result.mtime;
+            result.ctime = initrd_result.ctime;
+            result.btime = initrd_result.btime;
+        }
+    }
+    
+    return result;
+}
+
+vfs_file_t stat_vfs_file(const char *path) {
+    vfs_file_t result = {0};
+    vfs_mount_t mount;
+    char relative[VFS_PATH_MAX];
+    
+    if (resolve_vfs_path(path, &mount, relative, sizeof(relative))) {
+        if (strcmp(mount.fs_type, "tmpfs") == 0) {
+            tmpfs_file_t tmpfs_result = stat_tmpfs(relative);
+            result.inode = tmpfs_result.inode;
+            result.data = tmpfs_result.data;
+            result.size = tmpfs_result.size;
+            result.mode = tmpfs_result.mode;
+            result.uid = tmpfs_result.uid;
+            result.gid = tmpfs_result.gid;
+            result.atime = tmpfs_result.atime;
+            result.mtime = tmpfs_result.mtime;
+            result.ctime = tmpfs_result.ctime;
+        } else if (strcmp(mount.fs_type, "initrd") == 0) {
+            initrd_file_t initrd_result = stat_initrd(relative);
+            result.inode = initrd_result.inode;
+            result.data = initrd_result.data;
+            result.size = initrd_result.size;
+            result.mode = initrd_result.mode;
+            result.uid = initrd_result.uid;
+            result.gid = initrd_result.gid;
+            result.atime = initrd_result.atime;
+            result.mtime = initrd_result.mtime;
+            result.ctime = initrd_result.ctime;
+            result.btime = initrd_result.btime;
+        }
+    } else {
+        initrd_file_t initrd_result = stat_initrd(path);
+        if (initrd_result.mode) {
+            result.inode = initrd_result.inode;
+            result.data = initrd_result.data;
+            result.size = initrd_result.size;
+            result.mode = initrd_result.mode;
+            result.uid = initrd_result.uid;
+            result.gid = initrd_result.gid;
+            result.atime = initrd_result.atime;
+            result.mtime = initrd_result.mtime;
+            result.ctime = initrd_result.ctime;
+            result.btime = initrd_result.btime;
+        }
+    }
+    
+    return result;
+}
+
+int write_vfs_file(const char *path, const void *data, uint64_t size, mode_t mode, uid_t uid, gid_t gid) {
+    vfs_mount_t mount;
+    char relative[VFS_PATH_MAX];
+    
+    if (resolve_vfs_path(path, &mount, relative, sizeof(relative))) {
+        if (strcmp(mount.fs_type, "tmpfs") == 0) {
+            return write_tmpfs(relative, data, size, mode, uid, gid);
+        } else if (strcmp(mount.fs_type, "initrd") == 0) {
+            return write_initrd(relative, data, size, mode, uid, gid);
+        }
+    }
+    return write_initrd(path, data, size, mode, uid, gid);
+}
+
+int mkdir_vfs(const char *path, mode_t mode, uid_t uid, gid_t gid) {
+    vfs_mount_t mount;
+    char relative[VFS_PATH_MAX];
+    
+    if (resolve_vfs_path(path, &mount, relative, sizeof(relative))) {
+        if (strcmp(mount.fs_type, "tmpfs") == 0) {
+            return mkdir_tmpfs(relative, mode, uid, gid);
+        } else if (strcmp(mount.fs_type, "initrd") == 0) {
+            return mkdir_initrd(relative, mode, uid, gid);
+        }
+    }
+    return mkdir_initrd(path, mode, uid, gid);
+}
+
+int unlink_vfs(const char *path) {
+    vfs_mount_t mount;
+    char relative[VFS_PATH_MAX];
+    
+    if (resolve_vfs_path(path, &mount, relative, sizeof(relative))) {
+        if (strcmp(mount.fs_type, "tmpfs") == 0) {
+            return delete_tmpfs(relative);
+        } else if (strcmp(mount.fs_type, "initrd") == 0) {
+            return delete_initrd(relative);
+        }
+    }
+    return delete_initrd(path);
+}
+
+int rmdir_vfs(const char *path) {
+    vfs_mount_t mount;
+    char relative[VFS_PATH_MAX];
+    
+    if (resolve_vfs_path(path, &mount, relative, sizeof(relative))) {
+        if (strcmp(mount.fs_type, "tmpfs") == 0) {
+            return rmdir_tmpfs(relative);
+        } else if (strcmp(mount.fs_type, "initrd") == 0) {
+            return rmdir_initrd(relative);
+        }
+    }
+    return rmdir_initrd(path);
 }

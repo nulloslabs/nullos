@@ -90,12 +90,11 @@ static void normalize_abs_components(const char *in_abs, char *out_abs, size_t o
 
 static void normalize_path(const char *in_abs, char *out, size_t out_size) {
     if (strcmp(in_abs, "/") == 0) {
-        strcpy(out, "./");
+        strlcpy(out, "./", out_size);
     } else {
         out[0] = '.';
-        strncpy(out + 1, in_abs, out_size - 2);
+        strlcpy(out + 1, in_abs, out_size - 1);
     }
-    out[out_size - 1] = '\0';
 }
 
 void resolve_link_target(const char *base_path_abs, const char *link_target, char *out_abs, size_t out_size) {
@@ -427,14 +426,17 @@ static void get_norm_path_ex(const char *path, char *out_norm, size_t out_size, 
 }
 
 void get_absolute_path(const char *in, char *out_abs, size_t out_size) {
-    if (in[0] == '/') { strncpy(out_abs, in, out_size - 1); } else {
+    if (in[0] == '/') {
+        strlcpy(out_abs, in, out_size);
+    } else {
         if (current_task_ptr) {
-            strncpy(out_abs, current_task_ptr->cwd, out_size - 1);
-            if (strcmp(out_abs, "/") != 0) strncat(out_abs, "/", out_size - strlen(out_abs) - 1);
-        } else { strcpy(out_abs, "/"); }
-        strncat(out_abs, in, out_size - strlen(out_abs) - 1);
+            strlcpy(out_abs, current_task_ptr->cwd, out_size);
+            if (strcmp(out_abs, "/") != 0) strlcat(out_abs, "/", out_size);
+        } else {
+            strlcpy(out_abs, "/", out_size);
+        }
+        strlcat(out_abs, in, out_size);
     }
-    out_abs[out_size - 1] = '\0';
 }
 
 initrd_file_t read_initrd(const char *path) {
@@ -992,9 +994,8 @@ int next_initrd_child(int *index, const char *dir_norm, char *child_name, size_t
     }
 
     char prefix[258];
-    strncpy(prefix, dir_norm, sizeof(prefix) - 2);
-    prefix[sizeof(prefix) - 2] = '\0';
-    if (strcmp(dir_norm, "/") != 0) strcat(prefix, "/");
+    strlcpy(prefix, dir_norm, sizeof(prefix));
+    if (strcmp(dir_norm, "/") != 0) strlcat(prefix, "/", sizeof(prefix));
     size_t prefix_len = strlen(prefix);
 
     // Phase 1: archive entries.
@@ -1146,8 +1147,8 @@ void init_initrd(void) {
             uint8_t *name = ptr + 110;
             uint8_t *data = align_cpio(name + namesize, end);
             struct initrd_archive_entry *entry = &archive_entries[i];
-            strncpy(entry->path, (char *)name, sizeof(entry->path) - 1);
-            if (strcmp(entry->path, ".") == 0) strcpy(entry->path, "./");
+            strlcpy(entry->path, (char *)name, sizeof(entry->path));
+            if (strcmp(entry->path, ".") == 0) strlcpy(entry->path, "./", sizeof(entry->path));
             parse_cpio_hex(ptr + 14, (uint32_t *)&entry->mode);
             parse_cpio_hex(ptr + 22, (uint32_t *)&entry->uid);
             parse_cpio_hex(ptr + 30, (uint32_t *)&entry->gid);

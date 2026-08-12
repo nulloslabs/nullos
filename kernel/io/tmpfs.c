@@ -680,7 +680,7 @@ int read_tmpfs_link(const char *path, char *out, size_t out_size) {
     }
     size_t len = strlen(tmpfs_inodes[inode]->target);
     if (out_size <= len) { spin_unlock_irqrestore(&tmpfs_lock, irq); return -ERANGE; }
-    strcpy(out, tmpfs_inodes[inode]->target);
+    strlcpy(out, tmpfs_inodes[inode]->target, out_size);
     tmpfs_inodes[inode]->atime = time_get_realtime_ts();
     spin_unlock_irqrestore(&tmpfs_lock, irq);
     return (int)len;

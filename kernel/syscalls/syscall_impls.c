@@ -165,10 +165,9 @@ static bool can_access_stat_mode(const struct stat *st, int want_read, int want_
     return true;
 }
 
-static void normalize_path_str(char *path) {
+static void normalize_path_str(char *path, size_t path_size) {
     char tmp[256];
-    strncpy(tmp, path, sizeof(tmp) - 1);
-    tmp[sizeof(tmp) - 1] = '\0';
+    strlcpy(tmp, path, sizeof(tmp));
 
     const char *parts[64];
     int depth = 0;
@@ -191,16 +190,15 @@ static void normalize_path_str(char *path) {
         else break;
     }
 
-    if (depth == 0) { strcpy(path, "/"); return; }
+    if (depth == 0) { strlcpy(path, "/", 256); return; }
 
     char out[256];
     out[0] = '\0';
     for (int i = 0; i < depth; i++) {
-        strcat(out, "/");
-        strncat(out, parts[i], sizeof(out) - strlen(out) - 1);
+        strlcat(out, "/", sizeof(out));
+        strlcat(out, parts[i], sizeof(out));
     }
-    strncpy(path, out, 255);
-    path[255] = '\0';
+    strlcpy(path, out, path_size);
 }
 
 static int proc_self_idx(void) {
@@ -288,7 +286,7 @@ static void resolve_path_symlinks_ex(const char *path, char *out, size_t out_siz
                 size_t cur_len = strlen(rebuilt);
                 strncat(rebuilt, work + end, sizeof(rebuilt) - cur_len - 1);
             }
-            normalize_path_str(rebuilt);
+            normalize_path_str(rebuilt, sizeof(rebuilt));
             strncpy(work, rebuilt, sizeof(work) - 1);
             work[sizeof(work) - 1] = '\0';
 
@@ -323,7 +321,7 @@ static int build_abs_path_at(int dirfd, const char *path, char *out, size_t out_
         strncat(out, path, out_size - strlen(out) - 1);
     }
     out[out_size - 1] = '\0';
-    normalize_path_str(out);
+    normalize_path_str(out, out_size);
 
     return 0;
 }
@@ -538,7 +536,7 @@ static int check_parent_access(const char *path, bool modify) {
         if (status < 0) return status;
         if (strcmp(parent, "/") == 0) break;
         slash = strrchr(parent, '/');
-        if (!slash || slash == parent) strcpy(parent, "/");
+        if (!slash || slash == parent) strlcpy(parent, "/", sizeof(parent));
         else *slash = '\0';
         immediate = false;
     }
@@ -897,7 +895,7 @@ static void resolve_dir_for_readdir(const char *fd_path, char *prefix_out, size_
         resolved[sizeof(resolved) - 1] = '\0';
 
         // Normalize the resolved path
-        normalize_path_str(resolved);
+        normalize_path_str(resolved, sizeof(resolved));
     }
 
     // Hand back the absolute path (next_initrd_child builds its own prefix).
@@ -3027,7 +3025,7 @@ void sys_rt_sigprocmask(syscall_frame_t *frame) {
 void sys_rt_sigreturn(syscall_frame_t *frame) {
     uint64_t user_rsp = frame->rsp;
     signal_stack_frame_t saved;
-    if (user_rsp > USER_ADDR_MAX - 16 || copy_from_user(&saved, (const void *)(user_rsp + 16), sizeof(saved)) < 0) {
+    if (user_rsp >= USER_ADDR_MAX - 16 || copy_from_user(&saved, (const void *)(user_rsp + 16), sizeof(saved)) < 0) {
         frame->rax = (uint64_t)-EFAULT;
         return;
     }
@@ -6744,7 +6742,7 @@ void sys_mount(syscall_frame_t *frame) {
     char fs_type_buf[VFS_FS_TYPE_MAX];
     char source_buf[VFS_SOURCE_MAX];
     char data_buf[64];
-    strcpy(source_buf, "none");
+    strlcpy(source_buf, "none", sizeof(source_buf));
     data_buf[0] = '\0';
     if (copy_string_from_user(target_buf, target, sizeof(target_buf)) < 0 || copy_string_from_user(fs_type_buf, fs_type, sizeof(fs_type_buf)) < 0) {
         frame->rax = (uint64_t)-EFAULT; return;

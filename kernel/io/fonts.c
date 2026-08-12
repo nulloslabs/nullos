@@ -692,8 +692,7 @@ int change_font(const char *path, uint8_t w, uint8_t h) {
 
     void *font_data = NULL;
     uint64_t font_size = 0;
-    int r = load_vfs(abs_path, &font_data, &font_size,
-                          sizeof(current_font));
+    int r = load_vfs(abs_path, &font_data, &font_size, sizeof(current_font));
     if (r < 0) return r;
 
     if (!font_data || font_size == 0 || font_size > sizeof(current_font)) {

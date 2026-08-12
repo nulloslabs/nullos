@@ -371,8 +371,7 @@ static int splice_extfs_symlink(char work[EXTFS_MAX_PATH], size_t component_star
     memcpy(next + prefix_len, target, target_len);
     memcpy(next + prefix_len + target_len, work + component_end,
            suffix_len + 1);
-    strncpy(work, next, EXTFS_MAX_PATH - 1);
-    work[EXTFS_MAX_PATH - 1] = '\0';
+    strlcpy(work, next, EXTFS_MAX_PATH);
     return 0;
 }
 
@@ -380,7 +379,7 @@ static int resolve_extfs_inode(const extfs_mount_t *mnt, const char *relative, b
     char work[EXTFS_MAX_PATH];
     if (strlen(relative) + 2 > sizeof(work)) return -ENAMETOOLONG;
     work[0] = '/';
-    strcpy(work + 1, relative);
+    strlcpy(work + 1, relative, sizeof(work) - 1);
 
     int symlinks = 0;
 restart: {
@@ -442,7 +441,7 @@ int mount_extfs(const char *source, const char *target) {
 
     extfs_mount_t probe;
     memset(&probe, 0, sizeof(probe));
-    strncpy(probe.device, dev, sizeof(probe.device) - 1);
+    strlcpy(probe.device, dev, sizeof(probe.device));
     probe.device_size = device_size;
     uint8_t super[EXTFS_SUPER_SIZE];
     status = read_checked_device(&probe, super, sizeof(super), EXTFS_SUPER_OFFSET);
@@ -493,12 +492,11 @@ int mount_extfs(const char *source, const char *target) {
     probe.gdt_offset = probe.block_size == 1024 ? 2048 : probe.block_size;
 
     char normalized[64];
-    strncpy(normalized, target, sizeof(normalized) - 1);
-    normalized[sizeof(normalized) - 1] = '\0';
+    strlcpy(normalized, target, sizeof(normalized));
     size_t target_len = strlen(normalized);
     while (target_len > 1 && normalized[target_len - 1] == '/')
         normalized[--target_len] = '\0';
-    strncpy(probe.target, normalized, sizeof(probe.target) - 1);
+    strlcpy(probe.target, normalized, sizeof(probe.target));
 
     extfs_inode_t root;
     status = read_extfs_inode(&probe, EXTFS_ROOT_INO, &root);
@@ -529,7 +527,7 @@ int unmount_extfs(const char *target) {
     if (!target) return -EINVAL;
     char normalized[64];
     if (strlen(target) >= sizeof(normalized)) return -ENAMETOOLONG;
-    strcpy(normalized, target);
+    strlcpy(normalized, target, sizeof(normalized));
     size_t length = strlen(normalized);
     while (length > 1 && normalized[length - 1] == '/')
         normalized[--length] = '\0';

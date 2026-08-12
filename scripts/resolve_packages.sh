@@ -8,9 +8,7 @@ trap 'rm -rf -- "$temporary_directory"' EXIT HUP INT TERM
 for repository in core extra; do
     mkdir -p "$temporary_directory/$repository"
 
-    curl -fsSL \
-        "https://geo.mirror.pkgbuild.com/$repository/os/x86_64/$repository.db" |
-        tar -xf - -C "$temporary_directory/$repository"
+    curl -fsSL "https://geo.mirror.pkgbuild.com/$repository/os/x86_64/$repository.db" | zstd -dc | tar -xf - -C "$temporary_directory/$repository"
 done
 
 requested=$(printf '%s\n' "$@")
