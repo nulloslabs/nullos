@@ -62,7 +62,7 @@
 #include <io/keyboard.h>
 #include <io/tty.h>
 #include <io/pty.h>
-#include <io/hpet.h>
+#include <io/time.h>
 #include <io/power.h>
 #include <io/sockets.h>
 #include <io/net.h>
@@ -1204,7 +1204,7 @@ static int64_t do_select(int nfds, uint8_t *k_read, uint8_t *k_write, uint8_t *k
     }
 
     // Blocking loop
-    uint64_t start = hpet_elapsed_us();
+    uint64_t start = get_monotonic_time_us();
     while (1) {
         if (signal_pending()) return -EINTR;
 
@@ -1236,7 +1236,7 @@ static int64_t do_select(int nfds, uint8_t *k_read, uint8_t *k_write, uint8_t *k
         if (count > 0) {
             return count;
         }
-        if (timeout_us > 0 && (int64_t)(hpet_elapsed_us() - start) >= timeout_us) {
+        if (timeout_us > 0 && (int64_t)(get_monotonic_time_us() - start) >= timeout_us) {
             return 0;
         }
 
@@ -1454,7 +1454,7 @@ static int do_epoll_wait(syscall_frame_t *frame, int64_t timeout_us, uint64_t si
     }
 
     // Blocking loop
-    uint64_t start = hpet_elapsed_us();
+    uint64_t start = get_monotonic_time_us();
     while (1) {
         if (signal_pending()) {
             current_task_ptr->blocked_signals = old_blocked;
@@ -1472,7 +1472,7 @@ static int do_epoll_wait(syscall_frame_t *frame, int64_t timeout_us, uint64_t si
             return 0;
         }
 
-        if (timeout_us > 0 && (int64_t)(hpet_elapsed_us() - start) >= timeout_us) {
+        if (timeout_us > 0 && (int64_t)(get_monotonic_time_us() - start) >= timeout_us) {
             current_task_ptr->blocked_signals = old_blocked;
             free(k_events);
             frame->rax = 0;
@@ -2034,9 +2034,7 @@ void sys_write(syscall_frame_t *frame) {
             uint64_t chunk = count - processed;
             if (chunk > sizeof(local_buf)) chunk = sizeof(local_buf);
             read_vmm(current_task_ptr->ctx, local_buf, (uint64_t)buf + processed, chunk);
-            for (uint64_t i = 0; i < chunk; i++) {
-                if (local_buf[i] != '\0') putchar(local_buf[i]);
-            }
+            write_terminal((const char *)local_buf, chunk, false);
             processed += chunk;
         }
         frame->rax = !processed && signal_pending() ? (uint64_t)-EINTR : processed;
@@ -2556,7 +2554,7 @@ void sys_poll(syscall_frame_t *frame) {
     EVAL_FDS(events);
 
     if (events == 0 && timeout != 0) {
-        uint64_t start_time = hpet_elapsed_us();
+        uint64_t start_time = get_monotonic_time_us();
         uint64_t total_us = (timeout > 0) ? (uint64_t)timeout * 1000ULL : UINT64_MAX;
         while (1) {
             if (signal_pending()) {
@@ -2566,7 +2564,7 @@ void sys_poll(syscall_frame_t *frame) {
             }
             EVAL_FDS(events);
             if (events > 0) break;
-            if (timeout > 0 && hpet_elapsed_us() - start_time >= total_us) break;
+            if (timeout > 0 && get_monotonic_time_us() - start_time >= total_us) break;
             __asm__ volatile("int $32");
         }
     }
@@ -3897,7 +3895,7 @@ static int sleep_clock_status(int clock_id) {
 }
 
 static ktime_t sleep_clock_now_ns(int clock_id) {
-    uint64_t now_us = clock_id == CLOCK_REALTIME ? time_get_realtime_us() : hpet_elapsed_us();
+    uint64_t now_us = clock_id == CLOCK_REALTIME ? time_get_realtime_us() : get_monotonic_time_us();
     if (now_us >= (uint64_t)INT64_MAX / 1000ULL) return INT64_MAX;
     return (ktime_t)(now_us * 1000ULL);
 }
@@ -6002,7 +6000,7 @@ void sys_getrusage(syscall_frame_t *frame) {
 
     struct rusage ru = {0};
     if (who == RUSAGE_SELF) {
-        uint64_t usec = hpet_elapsed_us();
+        uint64_t usec = get_monotonic_time_us();
         ru.ru_stime.tv_sec = (time_t)(usec / 1000000ULL);
         ru.ru_stime.tv_usec = (suseconds_t)(usec % 1000000ULL);
     }
@@ -6016,7 +6014,7 @@ void sys_sysinfo(syscall_frame_t *frame) {
     if (!user_info || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_info, sizeof(*user_info))) { frame->rax = (uint64_t)-EFAULT; return; }
 
     struct sysinfo info = {0};
-    info.uptime = (long)(hpet_elapsed_us() / 1000000ULL);
+    info.uptime = (long)(get_monotonic_time_us() / 1000000ULL);
     get_load_averages(info.loads);
     info.totalram = get_total_pmm_memory();
     info.freeram = get_free_pmm_memory();
@@ -6029,7 +6027,7 @@ void sys_sysinfo(syscall_frame_t *frame) {
 
 void sys_times(syscall_frame_t *frame) {
     tms_t *buf = (tms_t *)frame->rdi;
-    uint64_t ticks = hpet_elapsed_us() / 10000ULL;
+    uint64_t ticks = get_monotonic_time_us() / 10000ULL;
 
     if (buf) {
         tms_t t = {0};
@@ -6448,7 +6446,7 @@ void sys_rt_sigtimedwait(syscall_frame_t *frame) {
         timeout_us = (int64_t)ts.tv_sec * 1000000LL + (int64_t)(ts.tv_nsec / 1000);
     }
 
-    uint64_t start_us = hpet_elapsed_us();
+    uint64_t start_us = get_monotonic_time_us();
 
     for (;;) {
         // pending_signals is 1-indexed: bit i <=> signal i. Scan signals in @want.
@@ -6478,7 +6476,7 @@ void sys_rt_sigtimedwait(syscall_frame_t *frame) {
 
         // Timeout expired?
         if (timeout_us >= 0) {
-            uint64_t elapsed = hpet_elapsed_us() - start_us;
+            uint64_t elapsed = get_monotonic_time_us() - start_us;
             if ((int64_t)elapsed >= timeout_us) {
                 frame->rax = (uint64_t)-EAGAIN;
                 return;
@@ -7469,7 +7467,7 @@ void sys_clock_gettime(syscall_frame_t *frame) {
     case CLOCK_MONOTONIC:
     case CLOCK_MONOTONIC_RAW:
     case CLOCK_BOOTTIME:
-        us = hpet_elapsed_us();
+        us = get_monotonic_time_us();
         break;
     default:
         frame->rax = (uint64_t)-EINVAL;
@@ -8285,14 +8283,14 @@ void sys_epoll_pwait(syscall_frame_t *frame) {
     }
 
     int count = epoll_collect(epi, k_events, maxevents);
-    uint64_t start = hpet_elapsed_us();
+    uint64_t start = get_monotonic_time_us();
 
     while (count == 0 && timeout_us != 0) {
         if (signal_pending()) {
             count = -EINTR;
             break;
         }
-        if (timeout_us > 0 && (int64_t)(hpet_elapsed_us() - start) >= timeout_us) {
+        if (timeout_us > 0 && (int64_t)(get_monotonic_time_us() - start) >= timeout_us) {
             count = 0;
             break;
         }
@@ -8605,14 +8603,14 @@ void sys_epoll_pwait2(syscall_frame_t *frame) {
     }
 
     int count = epoll_collect(epi, k_events, maxevents);
-    uint64_t start = hpet_elapsed_us();
+    uint64_t start = get_monotonic_time_us();
 
     while (count == 0 && timeout_us != 0) {
         if (signal_pending()) {
             count = -EINTR;
             break;
         }
-        if (timeout_us > 0 && (int64_t)(hpet_elapsed_us() - start) >= timeout_us) {
+        if (timeout_us > 0 && (int64_t)(get_monotonic_time_us() - start) >= timeout_us) {
             count = 0;
             break;
         }

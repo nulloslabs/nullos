@@ -7,8 +7,8 @@
 #include <io/sockets.h>
 #include <io/net_sockets.h>
 #include <io/packet_sockets.h>
-#include <io/hpet.h>
 #include <io/io.h>
+#include <io/time.h>
 #include <mm/mm.h>
 
 uint16_t calculate_net_checksum(const void *data, size_t len) {
@@ -543,7 +543,7 @@ tcp_socket_t *connect_tcp(uint32_t remote_ip, uint16_t remote_port) {
     sock->remote_ip   = remote_ip;
     sock->remote_port = remote_port;
     sock->local_port  = allocate_tcp_port();
-    sock->local_seq   = (uint32_t)(read_hpet_counter() ^ (read_hpet_counter() >> 17)); // random ISN
+    sock->local_seq   = (uint32_t)(get_raw_time_counter() ^ (get_raw_time_counter() >> 17)); // random ISN
     if (sock->local_seq == 0) sock->local_seq = 1;
     sock->state       = TCP_SYN_SENT;
     sock->remote_window = 1024;

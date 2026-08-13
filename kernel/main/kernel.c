@@ -40,6 +40,7 @@
 #include <io/tmpfs.h>
 #include <io/ps2_keyboard.h>
 #include <mm/mm.h>
+#include <mm/kstack.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
 #include <mm/oom.h>
@@ -65,8 +66,8 @@ __attribute__((noreturn)) void kmain(void) {
     init_terminal_backbuffer();
     init_initrd();
     init_tmpfs();
-    init_ttys();
-    init_ptys();
+    init_tty();
+    init_pty();
     init_acpi_tables();
     parse_madt();
     detect_apic();
@@ -87,10 +88,10 @@ __attribute__((noreturn)) void kmain(void) {
     init_devices();
     init_syscalls();
 
-    if (current_apic_mode != APIC_NONE) { init_mp(); init_apic_timer(250); }
+    if (!current_task_ptr || !current_task_ptr->kernel_stack) panic("bsp kernel stack is unavailable");
+    set_tss_kernel_stack(kernel_stack_top(current_task_ptr->kernel_stack));
 
-    void* kernel_stack = malloc(32768);
-    set_tss_kernel_stack((void*)((uint64_t)kernel_stack + 32768));
+    if (current_apic_mode != APIC_NONE) { init_mp(); init_apic_timer(250); }
 
     sti();
 

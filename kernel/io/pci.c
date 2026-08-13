@@ -9,12 +9,16 @@
 #include <io/e1000.h>
 #include <io/svga_ii.h>
 #include <io/rtl8139.h>
+#include <io/virtio_gpu.h>
 #include <io/ide.h>
 #include <io/pata.h>
 #include <io/atapi.h>
+#include <io/ahci.h>
+#include <io/sata.h>
 #include <io/usb.h>
 #include <io/uhci.h>
 #include <io/ohci.h>
+#include <io/time.h>
 
 static void (*msi_handlers[256])(void) = { 0 };
 static intx_chain_t intx_chains[16] = { 0 }; // legacy IRQs 0..15
@@ -110,7 +114,6 @@ void set_pci_d0(pci_device_t *dev) {
         log("pci: transitioning %02x:%02x.%x from d%d to d0\n", dev->bus, dev->dev, dev->func, pmcsr & 0x03);
         pmcsr &= ~0x03;
         write_pci(dev->bus, dev->dev, dev->func, cap + 4, pmcsr);
-        extern void sleep(uint64_t ms);
         sleep(10);
     }
 }
@@ -215,6 +218,8 @@ void init_pci_drivers(void) {
         {"e1000",   E1000_VENDOR,   E1000_DEVICE,   init_e1000},
         {"svga ii", SVGA_II_VENDOR, SVGA_II_DEVICE, init_svga_ii},
         {"rtl8139", RTL8139_VENDOR, RTL8139_DEVICE, init_rtl8139},
+        {"virtio-gpu", VIRTIO_GPU_VENDOR, VIRTIO_GPU_DEVICE_MODERN, init_virtio_gpu},
+        {"virtio-gpu", VIRTIO_GPU_VENDOR, VIRTIO_GPU_DEVICE_TRANSITIONAL, init_virtio_gpu},
     };
 
     const struct {
@@ -226,15 +231,7 @@ void init_pci_drivers(void) {
         bool (*init)(pci_device_t*);
     } known_storage_controllers[] = {
         {"ide", IDE_CLASS, IDE_SUBCLASS, IDE_PROGIF_MASK, IDE_PROGIF_VALUE, init_ide},
-    };
-
-    const struct {
-        const char *name;
-        const bool *present;
-        void (*init)(void);
-    } known_storage_drivers[] = {
-        {"pata", &is_pata_present, init_pata},
-        {"atapi", &is_atapi_present, init_atapi},
+        {"ahci", AHCI_CLASS, AHCI_SUBCLASS, 0xFF, AHCI_PROGIF, init_ahci},
     };
 
     const struct {
@@ -264,10 +261,18 @@ void init_pci_drivers(void) {
 
             log("pci: found controller for %s\n", known_storage_controllers[i].name);
             if (known_storage_controllers[i].init(dev)) {
-                for (int k = 0; k < (int)(sizeof(known_storage_drivers) / sizeof(known_storage_drivers[0])); k++) {
-                    if (!*known_storage_drivers[k].present) continue;
-                    log("pci: found driver for %s\n", known_storage_drivers[k].name);
-                    known_storage_drivers[k].init();
+                if (dev->class == AHCI_CLASS && dev->subclass == AHCI_SUBCLASS && dev->progif == AHCI_PROGIF) {
+                    log("pci: found driver for sata\n");
+                    init_sata();
+                } else {
+                    if (is_pata_present) {
+                        log("pci: found driver for pata\n");
+                        init_pata();
+                    }
+                    if (is_atapi_present) {
+                        log("pci: found driver for atapi\n");
+                        init_atapi();
+                    }
                 }
             }
             break;

@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <main/spinlocks.h>
 #include <io/pci.h>
+#include <mm/pmm.h>
 
 #define IDE_CLASS        0x01
 #define IDE_SUBCLASS     0x01
@@ -63,7 +64,7 @@ typedef struct {
 extern bool is_pata_present;
 extern bool is_atapi_present;
 extern spinlock_t ide_lock;
-extern uint8_t ide_dma_data[IDE_DMA_BUFFER_SIZE] __attribute__((aligned(4096)));
+extern uint8_t ide_dma_data[IDE_DMA_BUFFER_SIZE] __attribute__((aligned(PAGE_SIZE)));
 
 void get_ide_device(uint8_t index, ide_device_t *device);
 void select_ide_device(const ide_device_t *device);

@@ -2,7 +2,7 @@
 #include <main/log.h>
 #include <main/spinlocks.h>
 #include <io/ec.h>
-#include <io/hpet.h>
+#include <io/time.h>
 #include <io/io.h>
 #include <uacpi/acpi.h>
 #include <uacpi/namespace.h>
@@ -14,10 +14,10 @@
 static ec_controller_t ec_controller;
 
 static uacpi_status ec_wait_status(ec_controller_t *ec, uint8_t mask, uint8_t expected) {
-    uint64_t start = hpet_elapsed_us();
+    uint64_t start = get_monotonic_time_us();
     uint64_t spins = 0;
     while ((inb(ec->command_port) & mask) != expected) {
-        if (start && hpet_elapsed_us() - start >= EC_TIMEOUT_US) return UACPI_STATUS_HARDWARE_TIMEOUT;
+        if (start && get_monotonic_time_us() - start >= EC_TIMEOUT_US) return UACPI_STATUS_HARDWARE_TIMEOUT;
         if (!start && ++spins >= EC_TIMEOUT_US * 16) return UACPI_STATUS_HARDWARE_TIMEOUT;
         __asm__ volatile("pause");
     }

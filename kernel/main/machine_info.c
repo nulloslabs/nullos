@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <cpuid.h>
 #include <main/log.h>
+#include <main/limine_req.h>
 #include <main/string.h>
 #include <main/machine_info.h>
 #include <io/hpet.h>
@@ -89,10 +90,14 @@ uint32_t get_cpu_threads(void) {
 }
 
 uint32_t get_cpu_freq(void) {
-    static uint32_t cached = 0.0f;
-    if (cached != 0) return cached;
+    static uint32_t cached = 0;
+    if (cached) return cached;
+    if (tsc_req.response && tsc_req.response->frequency) {
+        cached = (uint32_t)(tsc_req.response->frequency / 1000000ULL);
+        return cached;
+    }
     uint32_t freq_mhz = get_hpet_freq_mhz();
-    if (!freq_mhz) return 0.0f;
+    if (!freq_mhz) return 0;
     uint32_t samples[5];
     for (int i = 0; i < 5; i++) {
         uint64_t start = read_hpet_counter();

@@ -1,7 +1,7 @@
 #include <io/power.h>
 #include <main/halt.h>
-#include <io/hpet.h>
 #include <io/io.h>
+#include <io/time.h>
 #include <uacpi/sleep.h>
 
 static volatile int started_power_transition;

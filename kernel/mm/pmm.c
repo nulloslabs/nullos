@@ -6,133 +6,133 @@
 #include <main/sched.h>
 #include <mm/pmm.h>
 #include <mm/oom.h>
-static uint8_t* bitmap = NULL;
+
 static uint8_t* ref_counts = NULL;
+static int8_t *page_orders = NULL;
+static uint64_t free_heads[PMM_ZONE_COUNT][PMM_MAX_ORDER + 1];
 static uint64_t max_pages = 0;
-static uint64_t last_index = 0; // For optimization
 static uint64_t total_pages = 0;
 static uint64_t free_pages = 0;
 static spinlock_t pmm_lock = SPINLOCK_INIT;
 
-void* pmalloc(void) {
-    uint64_t flags;
-    spin_lock_irqsave(&pmm_lock, &flags);
+static pmm_zone_t page_zone(uint64_t page) { return page < PMM_DMA32_LIMIT_PAGES ? PMM_ZONE_DMA32 : PMM_ZONE_NORMAL; }
 
-    // Simple Next-Fit search for a free bit
-    for (uint64_t i = 0; i < max_pages; i++) {
-        uint64_t idx = (last_index + i) % max_pages;
-        if (!(bitmap[idx / 8] & (1 << (idx % 8)))) {
-            bitmap[idx / 8] |= (1 << (idx % 8)); // Mark used
-            ref_counts[idx] = 1;
-            free_pages--;
-            last_index = idx;
-            uint64_t phys = idx * PAGE_SIZE;
-            spin_unlock_irqrestore(&pmm_lock, flags);
-            memset((void*)(phys + hhdm_req.response->offset), 0, PAGE_SIZE);
-            return (void*)phys; // Returns PHYSICAL address
-        }
-    }
-    spin_unlock_irqrestore(&pmm_lock, flags);
-    if (!is_sched_ready()) panic("out of memory");
-    // sched_lock is held by syscall_entry across the whole syscall;
-    // kill_oom() needs to acquire it internally, so release it first.
-    spin_unlock(&sched_lock);
-    kill_oom();
-    spin_lock(&sched_lock);
-    return NULL; // OOM
+static pmm_buddy_links_t *buddy_links(uint64_t page) { return (void *)(page * PAGE_SIZE + hhdm_req.response->offset); }
+
+static uint8_t pages_order(uint64_t count) {
+    uint8_t order = 0;
+    uint64_t pages = 1;
+    while (pages < count && order < PMM_MAX_ORDER) { pages <<= 1; order++; }
+    return order;
 }
 
-void* pmalloc_dma32(void) {
-    uint64_t flags;
-    spin_lock_irqsave(&pmm_lock, &flags);
-
-    uint64_t dma32_pages = max_pages;
-    if (dma32_pages > (1ULL << 20)) dma32_pages = 1ULL << 20;
-    for (uint64_t idx = 0; idx < dma32_pages; idx++) {
-        if (!(bitmap[idx / 8] & (1 << (idx % 8)))) {
-            bitmap[idx / 8] |= (1 << (idx % 8));
-            ref_counts[idx] = 1;
-            free_pages--;
-            last_index = idx + 1;
-            uint64_t phys = idx * PAGE_SIZE;
-            spin_unlock_irqrestore(&pmm_lock, flags);
-            memset((void*)(phys + hhdm_req.response->offset), 0, PAGE_SIZE);
-            return (void*)phys;
-        }
-    }
-
-    spin_unlock_irqrestore(&pmm_lock, flags);
-    return NULL;
+static void insert_free_block(uint64_t page, uint8_t order, pmm_zone_t zone) {
+    pmm_buddy_links_t *links = buddy_links(page);
+    links->previous = PMM_INVALID_PAGE;
+    links->next = free_heads[zone][order];
+    if (links->next != PMM_INVALID_PAGE) buddy_links(links->next)->previous = page;
+    free_heads[zone][order] = page;
+    page_orders[page] = order;
 }
 
-void* prealloc(uint64_t count) {
-    if (count == 0) return NULL;
-    uint64_t flags;
-    spin_lock_irqsave(&pmm_lock, &flags);
-
-    // Search for `count` contiguous free pages starting at last_index
-    for (uint64_t i = 0; i < max_pages; i++) {
-        uint64_t idx = (last_index + i) % max_pages;
-        // Can't wrap around: need idx..idx+count-1 all in range
-        if (idx + count > max_pages) continue;
-        int ok = 1;
-        for (uint64_t j = 0; j < count; j++) {
-            if (bitmap[(idx + j) / 8] & (1 << ((idx + j) % 8))) { ok = 0; break; }
-        }
-        if (ok) {
-            for (uint64_t j = 0; j < count; j++) {
-                bitmap[(idx + j) / 8] |= (1 << ((idx + j) % 8));
-                ref_counts[idx + j] = 1;
-            }
-            free_pages -= count;
-            last_index = idx + count;
-            spin_unlock_irqrestore(&pmm_lock, flags);
-            return (void*)(idx * PAGE_SIZE);
-        }
-    }
-    spin_unlock_irqrestore(&pmm_lock, flags);
-    if (!is_sched_ready()) panic("out of memory");
-    spin_unlock(&sched_lock);
-    kill_oom();
-    spin_lock(&sched_lock);
-    return NULL;
+static void remove_free_block(uint64_t page, uint8_t order, pmm_zone_t zone) {
+    pmm_buddy_links_t *links = buddy_links(page);
+    if (links->previous == PMM_INVALID_PAGE) free_heads[zone][order] = links->next;
+    else buddy_links(links->previous)->next = links->next;
+    if (links->next != PMM_INVALID_PAGE) buddy_links(links->next)->previous = links->previous;
+    page_orders[page] = PMM_PAGE_INTERIOR;
 }
 
-void* prealloc_dma32(uint64_t count) {
-    if (count == 0 || count > (1ULL << 20)) return NULL;
+static void free_block(uint64_t page, uint8_t order) {
+    pmm_zone_t zone = page_zone(page);
+    while (order < PMM_MAX_ORDER) {
+        uint64_t buddy = page ^ (1ULL << order);
+        if (buddy >= max_pages || page_zone(buddy) != zone || page_orders[buddy] != order) break;
+        remove_free_block(buddy, order, zone);
+        if (buddy < page) page = buddy;
+        order++;
+    }
+    insert_free_block(page, order, zone);
+}
+
+static void free_page_range(uint64_t page, uint64_t count) {
+    while (count) {
+        uint8_t order = 0;
+        while (order < PMM_MAX_ORDER) {
+            uint64_t next_size = 1ULL << (order + 1);
+            if ((page & (next_size - 1)) || next_size > count || page_zone(page) != page_zone(page + next_size - 1)) break;
+            order++;
+        }
+        free_block(page, order);
+        uint64_t block_pages = 1ULL << order;
+        page += block_pages;
+        count -= block_pages;
+    }
+}
+
+static uint64_t allocate_from_zone(pmm_zone_t zone, uint64_t count) {
+    uint8_t wanted_order = pages_order(count);
+    uint8_t order = wanted_order;
+    while (order <= PMM_MAX_ORDER && free_heads[zone][order] == PMM_INVALID_PAGE) order++;
+    if (order > PMM_MAX_ORDER) return PMM_INVALID_PAGE;
+
+    uint64_t page = free_heads[zone][order];
+    remove_free_block(page, order, zone);
+    while (order > wanted_order) {
+        order--;
+        insert_free_block(page + (1ULL << order), order, zone);
+    }
+
+    uint64_t block_pages = 1ULL << wanted_order;
+    if (count < block_pages) free_page_range(page + count, block_pages - count);
+    for (uint64_t i = 0; i < count; i++) {
+        page_orders[page + i] = PMM_PAGE_ALLOCATED;
+        ref_counts[page + i] = 1;
+    }
+    free_pages -= count;
+    return page;
+}
+
+static void *allocate_pages(uint64_t count, bool dma32, bool oom) {
+    if (!count || count > max_pages || pages_order(count) > PMM_MAX_ORDER) return NULL;
     uint64_t flags;
     spin_lock_irqsave(&pmm_lock, &flags);
-    uint64_t dma32_pages = max_pages;
-    if (dma32_pages > (1ULL << 20)) dma32_pages = 1ULL << 20;
-    for (uint64_t idx = 0; idx + count <= dma32_pages; idx++) {
-        bool available = true;
-        for (uint64_t page = 0; page < count; page++) {
-            if (bitmap[(idx + page) / 8] & (1 << ((idx + page) % 8))) { available = false; break; }
-        }
-        if (!available) continue;
-        for (uint64_t page = 0; page < count; page++) {
-            bitmap[(idx + page) / 8] |= 1 << ((idx + page) % 8);
-            ref_counts[idx + page] = 1;
-        }
-        free_pages -= count;
-        last_index = idx + count;
-        uint64_t phys = idx * PAGE_SIZE;
-        spin_unlock_irqrestore(&pmm_lock, flags);
-        memset((void *)(phys + hhdm_req.response->offset), 0, count * PAGE_SIZE);
-        return (void *)phys;
-    }
+    uint64_t page = dma32 ? allocate_from_zone(PMM_ZONE_DMA32, count) : allocate_from_zone(PMM_ZONE_NORMAL, count);
+    if (!dma32 && page == PMM_INVALID_PAGE) page = allocate_from_zone(PMM_ZONE_DMA32, count);
     spin_unlock_irqrestore(&pmm_lock, flags);
-    return NULL;
+    if (page == PMM_INVALID_PAGE) {
+        if (!oom) return NULL;
+        if (!is_sched_ready()) panic("out of memory");
+        spin_unlock(&sched_lock);
+        kill_oom();
+        spin_lock(&sched_lock);
+        return NULL;
+    }
+    uint64_t phys = page * PAGE_SIZE;
+    memset((void *)(phys + hhdm_req.response->offset), 0, count * PAGE_SIZE);
+    return (void *)phys;
 }
+
+void* pmalloc(void) { return allocate_pages(1, false, true); }
+
+void* pmalloc_dma32(void) { return allocate_pages(1, true, false); }
+
+void* prealloc(uint64_t count) { return allocate_pages(count, false, true); }
+
+void* prealloc_dma32(uint64_t count) { return allocate_pages(count, true, false); }
 
 void pfree(void *phys_addr) {
+    if (!phys_addr) return;
     uint64_t flags;
     spin_lock_irqsave(&pmm_lock, &flags);
     uint64_t page_idx = (uint64_t)phys_addr / PAGE_SIZE;
     if (page_idx < max_pages && ref_counts[page_idx] > 0) {
         ref_counts[page_idx]--;
         if (ref_counts[page_idx] == 0) {
-            bitmap[page_idx / 8] &= ~(1 << (page_idx % 8));
+            bool was_reserved = page_orders[page_idx] == PMM_PAGE_RESERVED;
+            page_orders[page_idx] = PMM_PAGE_ALLOCATED;
+            free_block(page_idx, 0);
+            if (was_reserved) total_pages++;
             free_pages++;
         }
     }
@@ -149,11 +149,13 @@ void pfree_range(void *phys_addr, uint64_t size) {
 
     uint64_t flags;
     spin_lock_irqsave(&pmm_lock, &flags);
-    for (uint64_t pa = start_page; pa < end_page; pa += PAGE_SIZE) {
-        uint64_t page_idx = pa / PAGE_SIZE;
+    for (uint64_t page_idx = start_page / PAGE_SIZE; page_idx < end_page / PAGE_SIZE; page_idx++) {
         if (page_idx < max_pages && ref_counts[page_idx] > 0) {
+            bool was_reserved = page_orders[page_idx] == PMM_PAGE_RESERVED;
             ref_counts[page_idx] = 0;
-            bitmap[page_idx / 8] &= ~(1 << (page_idx % 8));
+            page_orders[page_idx] = PMM_PAGE_ALLOCATED;
+            free_block(page_idx, 0);
+            if (was_reserved) total_pages++;
             free_pages++;
         }
     }
@@ -209,24 +211,27 @@ void init_pmm(void) {
     max_pages = highest_addr / PAGE_SIZE;
     total_pages = 0;
     free_pages = 0;
-    uint64_t bitmap_size = (max_pages + 7) / 8;
     uint64_t refcount_size = max_pages;
-    uint64_t metadata_size = bitmap_size + refcount_size;
+    uint64_t order_size = max_pages * sizeof(*page_orders);
+    uint64_t metadata_size = refcount_size + order_size;
     uint64_t metadata_length = (metadata_size + PAGE_SIZE - 1) & ~((uint64_t)PAGE_SIZE - 1);
 
-    // find usable hole for bitmap
+    for (int zone = 0; zone < PMM_ZONE_COUNT; zone++) {
+        for (int order = 0; order <= PMM_MAX_ORDER; order++) free_heads[zone][order] = PMM_INVALID_PAGE;
+    }
+
+    // Find a usable region for the per-page buddy metadata.
     for (size_t i = 0; i < memmap->entry_count; i++) {
         struct limine_memmap_entry* entry = memmap->entries[i];
         uint64_t usable_start = (entry->base + PAGE_SIZE - 1) & ~((uint64_t)PAGE_SIZE - 1);
         uint64_t usable_end = (entry->base + entry->length) & ~((uint64_t)PAGE_SIZE - 1);
         if (entry->type == LIMINE_MEMMAP_USABLE && usable_end >= usable_start && usable_end - usable_start >= metadata_length) {
-            // Place bitmap in virtual address space via HHDM
-            bitmap = (uint8_t*)(usable_start + hhdm_offset);
-            ref_counts = bitmap + bitmap_size;
+            ref_counts = (uint8_t *)(usable_start + hhdm_offset);
+            page_orders = (int8_t *)(ref_counts + refcount_size);
             
             // initially mark everything reserved
-            memset(bitmap, 0xFF, bitmap_size);
             memset(ref_counts, 1, refcount_size);
+            memset(page_orders, PMM_PAGE_RESERVED, order_size);
             
             // Reserve every page touched by the allocator metadata.
             entry->base = usable_start + metadata_length;
@@ -235,7 +240,7 @@ void init_pmm(void) {
         }
     }
 
-    if (!bitmap) panic("unable to reserve physical memory metadata");
+    if (!ref_counts) panic("unable to reserve physical memory metadata");
 
     // mark usable regions as free
     for (size_t i = 0; i < memmap->entry_count; i++) {
@@ -243,16 +248,16 @@ void init_pmm(void) {
         if (entry->type == LIMINE_MEMMAP_USABLE) {
             uint64_t usable_start = (entry->base + PAGE_SIZE - 1) & ~((uint64_t)PAGE_SIZE - 1);
             uint64_t usable_end = (entry->base + entry->length) & ~((uint64_t)PAGE_SIZE - 1);
-            for (uint64_t address = usable_start; address < usable_end; address += PAGE_SIZE) {
-                uint64_t page_idx = address / PAGE_SIZE;
-                if (page_idx == 0) continue;
-                if (page_idx < max_pages && (bitmap[page_idx / 8] & (1 << (page_idx % 8)))) {
-                    bitmap[page_idx / 8] &= ~(1 << (page_idx % 8));
-                    ref_counts[page_idx] = 0;
-                    total_pages++;
-                    free_pages++;
-                }
-            }
+            uint64_t first_page = usable_start / PAGE_SIZE;
+            uint64_t end_page = usable_end / PAGE_SIZE;
+            if (first_page == 0) first_page = 1;
+            if (end_page > max_pages) end_page = max_pages;
+            if (first_page >= end_page) continue;
+            uint64_t count = end_page - first_page;
+            memset(ref_counts + first_page, 0, count);
+            free_page_range(first_page, count);
+            total_pages += count;
+            free_pages += count;
         }
     }
     log("pmm: initialized pmm\n");

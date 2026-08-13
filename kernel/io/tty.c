@@ -249,7 +249,7 @@ void set_keyboard_tty(int tty_idx) {
     }
 }
 
-void init_ttys(void) {
+void init_tty(void) {
     for (int i = 0; i < NUM_TTYS; i++) {
         ttys[i].input.head = ttys[i].input.tail = 0;
         ttys[i].active = true;
@@ -266,5 +266,5 @@ void init_ttys(void) {
         ttys[i].termios.c_cc[VEOF]   = 0x04;
         ttys[i].termios.c_cc[VSUSP]  = 0x1A;
     }
-    log("tty: initialized ttys\n");
+    log("tty: initialized tty\n");
 }

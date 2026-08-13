@@ -8,7 +8,7 @@
 #include <io/pci.h>
 #include <io/io.h>
 #include <io/usb_keyboard.h>
-#include <io/hpet.h>
+#include <io/time.h>
 #include <mm/mm.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>

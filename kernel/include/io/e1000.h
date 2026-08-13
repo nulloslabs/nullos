@@ -17,6 +17,7 @@
 #define E1000_IMS      0x00D0
 #define E1000_RCTL     0x0100
 #define E1000_TCTL     0x0400
+#define E1000_TIPG     0x0410
 #define E1000_RDBAL    0x2800
 #define E1000_RDBAH    0x2804
 #define E1000_RDLEN    0x2808
@@ -42,8 +43,15 @@
 #define RCTL_SECRC          (1 << 26)   // Strip Ethernet CRC
 
 // TCTL bits
-#define TCTL_EN             (1 << 1)    // Transmit Enable
-#define TCTL_PSP            (1 << 3)    // Pad Short Packets
+#define CTRL_SLU             (1 << 6)
+#define TCTL_EN              (1 << 1)
+#define TCTL_PSP             (1 << 3)
+#define TCTL_CT              (0x0F << 4)
+#define TCTL_COLD            (0x40 << 12)
+#define TIPG_IPGT            10
+#define TIPG_IPGR1           (8 << 10)
+#define TIPG_IPGR2           (6 << 20)
+#define E1000_TX_TIMEOUT     1000000
 
 // Descriptors
 #define E1000_NUM_RX_DESC 32
@@ -53,7 +61,7 @@ typedef struct {
     uint64_t addr;
     uint16_t length;
     uint16_t checksum;
-    uint8_t status;
+    volatile uint8_t status;
     uint8_t errors;
     uint16_t special;
 } __attribute__((packed)) e1000_rx_desc_t;
@@ -63,7 +71,7 @@ typedef struct {
     uint16_t length;
     uint8_t cso;
     uint8_t cmd;
-    uint8_t status;
+    volatile uint8_t status;
     uint8_t css;
     uint16_t special;
 } __attribute__((packed)) e1000_tx_desc_t;

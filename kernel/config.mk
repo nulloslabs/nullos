@@ -35,3 +35,6 @@ OUTFILE = nullkrnl
 UACPI_OUTFILE = uacpi/build/libuacpi.a
 UACPI_BUILD = uacpi/build
 SUBDIR = kernel
+
+undefine ARCH
+undefine KERNEL

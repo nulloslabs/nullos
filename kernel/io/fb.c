@@ -7,6 +7,7 @@
 #include <io/fb.h>
 #include <io/bga.h>
 #include <io/svga_ii.h>
+#include <io/virtio_gpu.h>
 #include <io/fonts.h>
 #include <io/terminal.h>
 #include <limine.h>
@@ -61,6 +62,8 @@ int set_fb_resolution(uint64_t xres, uint64_t yres, uint64_t xres_virtual, uint6
             return set_bga_resolution(xres, yres, xres_virtual, yres_virtual, xoffset, yoffset, bpp);
         case FB_SVGA_II:
             return set_svga_ii_resolution(xres, yres, xres_virtual, yres_virtual, xoffset, yoffset, bpp);
+        case FB_VIRTIO_GPU:
+            return set_virtio_gpu_resolution(xres, yres, xres_virtual, yres_virtual, xoffset, yoffset, bpp);
         default:
             // whar
             return -EINVAL;
@@ -76,6 +79,8 @@ int update_fb(uint64_t x, uint64_t y, uint64_t width, uint64_t height) {
             return 0;
         case FB_SVGA_II:
             return update_svga_ii(x, y, width, height);
+        case FB_VIRTIO_GPU:
+            return update_virtio_gpu(x, y, width, height);
         default:
             // whar
             return -EINVAL;

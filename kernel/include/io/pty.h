@@ -37,4 +37,4 @@ int read_pty_master(int idx, char *buf, int len);
 int write_pty_master(int idx, const char *buf, int len);
 void set_keyboard_pty(int pty_idx);
 void clear_keyboard_pty(int pty_idx);
-void init_ptys(void);
+void init_pty(void);

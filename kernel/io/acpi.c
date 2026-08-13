@@ -10,7 +10,7 @@
 #include <io/acpi.h>
 #include <io/apic.h>
 #include <io/ec.h>
-#include <io/hpet.h>
+#include <io/time.h>
 #include <io/power_button.h>
 #include <io/io.h>
 #include <io/ioapic.h>
@@ -31,7 +31,7 @@ static char acpi_log_buffer[1024];
 static uacpi_bool early_tables_ready;
 
 static uacpi_u64 monotonic_ms(void) {
-    return hpet_elapsed_us() / 1000;
+    return get_monotonic_time_us() / 1000;
 }
 
 static uint32_t pci_read_dword(uacpi_pci_handle_t *device, uacpi_size offset) {
@@ -212,7 +212,7 @@ uacpi_status uacpi_kernel_io_write32(uacpi_handle handle, uacpi_size offset, uac
 }
 
 uacpi_u64 uacpi_kernel_get_nanoseconds_since_boot(void) {
-    return hpet_elapsed_us() * 1000;
+    return get_monotonic_time_us() * 1000;
 }
 
 void uacpi_kernel_stall(uacpi_u8 usec) {

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <mm/kstack.h>
+
 #ifndef __ASSEMBLY__
 #include <stdint.h>
 #include <stdbool.h>
@@ -17,7 +19,6 @@
 #define MAX_TASKS 1024
 #define PID_MAX 32768
 #define USER_STACK_SIZE (1 * 1024 * 1024)
-#define KERNEL_STACK_SIZE 32768
 #define TASK_STDIN_BUF_SIZE 256
 #define LOAD_FIXED_1 2048UL
 #define LOAD_EXP_1 1884UL

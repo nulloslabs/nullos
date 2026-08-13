@@ -9,7 +9,7 @@
 #include <main/machine_info.h>
 #include <main/timekeeping.h>
 #include <io/devtmpfs.h>
-#include <io/hpet.h>
+#include <io/time.h>
 #include <io/procfs.h>
 #include <io/vfs.h>
 #include <mm/pmm.h>
@@ -246,7 +246,7 @@ static size_t build_meminfo(char *out) {
 }
 
 static size_t build_uptime(char *out) {
-    uint64_t uptime = hpet_elapsed_us();
+    uint64_t uptime = get_monotonic_time_us();
     uint64_t idle = get_idle_time_us();
     size_t pos = 0;
     out[0] = '\0';
@@ -277,7 +277,7 @@ static void append_cpu_stat(char *out, size_t *pos, const char *name, uint64_t u
 }
 
 static size_t build_root_stat(char *out) {
-    uint64_t uptime_us = hpet_elapsed_us();
+    uint64_t uptime_us = get_monotonic_time_us();
     uint64_t bsp_idle_us = get_idle_time_us();
     if (bsp_idle_us > uptime_us) bsp_idle_us = uptime_us;
     uint64_t bsp_user = (uptime_us - bsp_idle_us) / 10000ULL;

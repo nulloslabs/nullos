@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <main/log.h>
 #include <main/string.h>
-#include <io/hpet.h>
+#include <io/time.h>
 #include <io/ohci.h>
 #include <io/pci.h>
 #include <io/usb.h>

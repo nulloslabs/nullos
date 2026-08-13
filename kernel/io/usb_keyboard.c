@@ -6,7 +6,7 @@
 #include <io/usb_keyboard.h>
 #include <io/usb.h>
 #include <io/keyboard.h>
-#include <io/hpet.h>
+#include <io/time.h>
 #include <io/tty.h>
 #include <mm/mm.h>
 static const uint8_t hid_to_scancode[256] = {

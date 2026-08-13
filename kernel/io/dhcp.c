@@ -7,7 +7,7 @@
 #include <main/rng.h>
 #include <main/string.h>
 #include <io/dhcp.h>
-#include <io/hpet.h>
+#include <io/time.h>
 #include <io/net.h>
 
 static volatile dhcp_state_t dhcp_state = DHCP_STATE_IDLE;

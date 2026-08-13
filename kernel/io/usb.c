@@ -3,7 +3,7 @@
 #include <main/halt.h>
 #include <main/mp.h>
 #include <main/string.h>
-#include <io/hpet.h>
+#include <io/time.h>
 #include <io/usb.h>
 #include <io/uhci.h>
 #include <io/ohci.h>
@@ -60,7 +60,7 @@ void poll_usb_hcds(void) {
     if (system_halted) return;
     if (get_cpu_index() != 0) return;
     static uint64_t last_poll_us = 0;
-    uint64_t now = hpet_elapsed_us();
+    uint64_t now = get_monotonic_time_us();
     if (now && last_poll_us && now - last_poll_us < 4000) return;
     last_poll_us = now;
     poll_uhci_ports();

@@ -16,6 +16,10 @@
 #include <io/tty.h>
 #include <mm/mm.h>
 
+#define TERMINAL_MAX_COLUMNS 8192
+#define TAB_STOP_WORD_BITS 64
+#define TAB_STOP_WORDS (TERMINAL_MAX_COLUMNS / TAB_STOP_WORD_BITS)
+
 static parser_state_t state = STATE_NORMAL;
 static char ansi_buffer[32];
 static int ansi_idx = 0;
@@ -28,6 +32,8 @@ static bool expect_charset_designator = false;
 static bool cursor_visible = false;
 static bool cursor_enabled = true;
 static spinlock_t term_lock = SPINLOCK_INIT;
+static uint64_t tab_stops[TAB_STOP_WORDS];
+static bool tab_stops_initialized = false;
 
 static uint32_t cursor_saved_pixels[32 * 16]; // max glyph: 32w × 16h
 static uint64_t cursor_saved_x = 0;
@@ -59,6 +65,12 @@ static char   font_pending_buffer[FONT_PENDING_BUFFER_SIZE];
 static size_t font_pending_len = 0;
 static bool   font_pending_overflowed = false;
 static bool   font_pending_replaying = false;
+static uint32_t fb_batch_depth = 0;
+static bool fb_update_pending = false;
+static uint64_t fb_update_x = 0;
+static uint64_t fb_update_y = 0;
+static uint64_t fb_update_right = 0;
+static uint64_t fb_update_bottom = 0;
 
 uint32_t *back_buffer = NULL;
 uint64_t back_buffer_width = 0;
@@ -87,7 +99,63 @@ static inline unsigned char acs_translate(unsigned char c) {
     return c;
 }
 
+static void reset_tab_stops(void) {
+    memset(tab_stops, 0, sizeof(tab_stops));
+    for (uint64_t column = 0; column < TERMINAL_MAX_COLUMNS; column += 8) {
+        tab_stops[column / TAB_STOP_WORD_BITS] |= 1ULL << (column % TAB_STOP_WORD_BITS);
+    }
+    tab_stops_initialized = true;
+}
+
+static void set_tab_stop(uint64_t column) {
+    if (!tab_stops_initialized) reset_tab_stops();
+    if (column >= TERMINAL_MAX_COLUMNS) return;
+    tab_stops[column / TAB_STOP_WORD_BITS] |= 1ULL << (column % TAB_STOP_WORD_BITS);
+}
+
+static void clear_all_tab_stops(void) {
+    memset(tab_stops, 0, sizeof(tab_stops));
+    tab_stops_initialized = true;
+}
+
+static uint64_t next_tab_stop(uint64_t column, uint64_t columns) {
+    if (!tab_stops_initialized) reset_tab_stops();
+    if (!columns) return 0;
+
+    uint64_t limit = columns < TERMINAL_MAX_COLUMNS ? columns : TERMINAL_MAX_COLUMNS;
+    for (uint64_t next = column + 1; next < limit; next++) {
+        if (tab_stops[next / TAB_STOP_WORD_BITS] & (1ULL << (next % TAB_STOP_WORD_BITS))) return next;
+    }
+    return columns - 1;
+}
+
 static void backbuffer_reload_from_fb(struct limine_framebuffer *fb);
+
+static void begin_fb_batch(void) { fb_batch_depth++; }
+
+static void update_terminal_fb(uint64_t x, uint64_t y, uint64_t width, uint64_t height) {
+    if (!fb_batch_depth) { (void)update_fb(x, y, width, height); return; }
+    uint64_t right = x + width;
+    uint64_t bottom = y + height;
+    if (!fb_update_pending) {
+        fb_update_x = x;
+        fb_update_y = y;
+        fb_update_right = right;
+        fb_update_bottom = bottom;
+        fb_update_pending = true;
+        return;
+    }
+    if (x < fb_update_x) fb_update_x = x;
+    if (y < fb_update_y) fb_update_y = y;
+    if (right > fb_update_right) fb_update_right = right;
+    if (bottom > fb_update_bottom) fb_update_bottom = bottom;
+}
+
+static void end_fb_batch(void) {
+    if (!fb_batch_depth || --fb_batch_depth || !fb_update_pending) return;
+    (void)update_fb(fb_update_x, fb_update_y, fb_update_right - fb_update_x, fb_update_bottom - fb_update_y);
+    fb_update_pending = false;
+}
 
 static uint64_t resize_first_row(uint64_t old_rows, uint64_t new_rows, uint64_t cursor_row) {
     if (new_rows >= old_rows || cursor_row <= new_rows) return 0;
@@ -131,11 +199,11 @@ static void backbuffer_reload_from_fb(struct limine_framebuffer *fb) {
 
     for (uint64_t y = 0; y < back_buffer_height; y++) {
         uint64_t fb_row_offset = y * fb->pitch;
-        uint64_t bb_row_offset = y * back_buffer_width;
+        uint64_t backbuffer_row_offset = y * back_buffer_width;
         for (uint64_t x = 0; x < back_buffer_width; x++) {
             uint64_t fb_offset = fb_row_offset + x * ((bpp + 7) / 8);
             if (bpp == 8) {
-                back_buffer[bb_row_offset + x] = bga_palette_color(fb_addr[fb_offset]);
+                back_buffer[backbuffer_row_offset + x] = bga_palette_color(fb_addr[fb_offset]);
                 continue;
             }
 
@@ -153,12 +221,12 @@ static void backbuffer_reload_from_fb(struct limine_framebuffer *fb) {
             uint32_t r = (r_size == 0) ? 0 : ((pixel >> r_shift) & ((1u << r_size) - 1)) * 255 / ((1u << r_size) - 1);
             uint32_t g = (g_size == 0) ? 0 : ((pixel >> g_shift) & ((1u << g_size) - 1)) * 255 / ((1u << g_size) - 1);
             uint32_t b = (b_size == 0) ? 0 : ((pixel >> b_shift) & ((1u << b_size) - 1)) * 255 / ((1u << b_size) - 1);
-            back_buffer[bb_row_offset + x] = (r << 16) | (g << 8) | b;
+            back_buffer[backbuffer_row_offset + x] = (r << 16) | (g << 8) | b;
         }
     }
 }
 
-static inline bool fb_format_matches_bb(struct limine_framebuffer *fb) {
+static inline bool fb_format_matches_backbuffer(struct limine_framebuffer *fb) {
     return fb->bpp == 32 &&
            fb->red_mask_size   == 8 && fb->red_mask_shift   == 16 &&
            fb->green_mask_size == 8 && fb->green_mask_shift == 8  &&
@@ -185,7 +253,7 @@ static void flush_backbuffer(struct limine_framebuffer *fb) {
     uint64_t bpp = fb->bpp;
 
     // Fast path: 32bpp XRGB — backbuffer IS native pixel format, just memcpy.
-    if (fb_format_matches_bb(fb)) {
+    if (fb_format_matches_backbuffer(fb)) {
         if (fb->pitch == back_buffer_pitch) {
             memcpy(fb_addr, back_buffer, back_buffer_pitch * back_buffer_height);
         } else {
@@ -195,7 +263,7 @@ static void flush_backbuffer(struct limine_framebuffer *fb) {
                        back_buffer_pitch);
             }
         }
-        (void)update_fb(0, 0, back_buffer_width, back_buffer_height);
+        update_terminal_fb(0, 0, back_buffer_width, back_buffer_height);
         return;
     }
 
@@ -208,10 +276,10 @@ static void flush_backbuffer(struct limine_framebuffer *fb) {
 
     for (uint64_t y = 0; y < height; y++) {
         uint64_t fb_row_offset = y * fb->pitch;
-        uint64_t bb_row_offset = y * width;
+        uint64_t backbuffer_row_offset = y * width;
 
         for (uint64_t x = 0; x < width; x++) {
-            uint32_t color = back_buffer[bb_row_offset + x];
+            uint32_t color = back_buffer[backbuffer_row_offset + x];
             uint8_t r = (color >> 16) & 0xFF;
             uint8_t g = (color >> 8) & 0xFF;
             uint8_t b = color & 0xFF;
@@ -236,7 +304,7 @@ static void flush_backbuffer(struct limine_framebuffer *fb) {
             }
         }
     }
-    (void)update_fb(0, 0, width, height);
+    update_terminal_fb(0, 0, width, height);
 }
 
 static void flush_region_backbuffer(struct limine_framebuffer *fb, uint64_t x, uint64_t y, uint64_t w, uint64_t h) {
@@ -258,13 +326,13 @@ static void flush_region_backbuffer(struct limine_framebuffer *fb, uint64_t x, u
     uint64_t bpp = fb->bpp;
 
     // Fast path: 32bpp XRGB — memcpy each row slice directly.
-    if (fb_format_matches_bb(fb)) {
+    if (fb_format_matches_backbuffer(fb)) {
         for (uint64_t row = 0; row < h; row++) {
             memcpy(fb_addr + (y + row) * fb->pitch + x * sizeof(uint32_t),
                    back_buffer + (y + row) * back_buffer_width + x,
                    w * sizeof(uint32_t));
         }
-        (void)update_fb(x, y, w, h);
+        update_terminal_fb(x, y, w, h);
         return;
     }
 
@@ -277,10 +345,10 @@ static void flush_region_backbuffer(struct limine_framebuffer *fb, uint64_t x, u
 
     for (uint64_t row = 0; row < h; row++) {
         uint64_t fb_row_offset = (y + row) * fb->pitch;
-        uint64_t bb_row_offset = (y + row) * back_buffer_width;
+        uint64_t backbuffer_row_offset = (y + row) * back_buffer_width;
 
         for (uint64_t col = 0; col < w; col++) {
-            uint32_t color = back_buffer[bb_row_offset + (x + col)];
+            uint32_t color = back_buffer[backbuffer_row_offset + (x + col)];
             uint8_t r = (color >> 16) & 0xFF;
             uint8_t g = (color >> 8) & 0xFF;
             uint8_t b = color & 0xFF;
@@ -305,7 +373,7 @@ static void flush_region_backbuffer(struct limine_framebuffer *fb, uint64_t x, u
             }
         }
     }
-    (void)update_fb(x, y, w, h);
+    update_terminal_fb(x, y, w, h);
 }
 
 static void fill_rect_backbuffer(uint64_t x, uint64_t y, uint64_t w, uint64_t h, uint32_t color) {
@@ -389,13 +457,13 @@ static void scroll_region_both(int n_lines, uint32_t bg) {
     }
 }
 
-static void put_pixel_bb(uint32_t x, uint32_t y, uint32_t color) {
+static void put_pixel_backbuffer(uint32_t x, uint32_t y, uint32_t color) {
     if (!back_buffer_initialized || !back_buffer || !back_buffer_available) return;
     if (x >= back_buffer_width || y >= back_buffer_height) return;
     back_buffer[y * back_buffer_width + x] = color;
 }
 
-static void putchar_bb(char c, int x, int y, uint32_t fg, uint32_t bg) {
+static void putchar_backbuffer(char c, int x, int y, uint32_t fg, uint32_t bg) {
     if (!current_font_w || !current_font_h) return;
     if (!back_buffer_initialized || !back_buffer || !back_buffer_available) return;
 
@@ -405,9 +473,9 @@ static void putchar_bb(char c, int x, int y, uint32_t fg, uint32_t bg) {
         unsigned char row_data = glyph[row];
         for (int col = 0; col < current_font_w; col++) {
             if (row_data & (0x80 >> col)) {
-                put_pixel_bb(x + col, y + row, fg);
+                put_pixel_backbuffer(x + col, y + row, fg);
             } else {
-                put_pixel_bb(x + col, y + row, bg);
+                put_pixel_backbuffer(x + col, y + row, bg);
             }
         }
     }
@@ -833,8 +901,8 @@ static int putchar_unlocked(int c) {
             }
             case '\t': {
                 uint64_t col = cursor_x / current_font_w;
-                cursor_x = ((col + 8) & ~7ULL) * current_font_w;
-                if (cursor_x >= fb->width) { cursor_x = 0; cursor_y += current_font_h; }
+                uint64_t columns = fb->width / current_font_w;
+                cursor_x = next_tab_stop(col, columns) * current_font_w;
                 break;
             }
             case '\b':
@@ -847,7 +915,7 @@ static int putchar_unlocked(int c) {
                 uint32_t eff_fg = is_reverse ? bg_color : fg_color;
                 uint32_t eff_bg = is_reverse ? fg_color : bg_color;
                 if (back_buffer_available) {
-                    putchar_bb(draw_c, cursor_x, cursor_y, eff_fg, eff_bg);
+                    putchar_backbuffer(draw_c, cursor_x, cursor_y, eff_fg, eff_bg);
                     flush_region_backbuffer(fb, cursor_x, cursor_y, current_font_w, current_font_h);
                 } else {
                     putchar_fb(draw_c, cursor_x, cursor_y, eff_fg, eff_bg);
@@ -924,6 +992,9 @@ static int putchar_unlocked(int c) {
                     }
                     break;
                 }
+                case 'H':  // HTS: set a horizontal tab stop at the cursor
+                    set_tab_stop(cursor_x / current_font_w);
+                    break;
             }
             state = STATE_NORMAL;
         }
@@ -1270,6 +1341,12 @@ static int putchar_unlocked(int c) {
                 // SD: Scroll Down (entire screen / region)
                 int n = (npp > 0 && pp[0] > 0) ? pp[0] : 1;
                 scroll_region_both(-n, bg_color);
+            } else if (c == 'g') {
+                // Match the Linux virtual console: CSI 0 g sets a stop at the
+                // current column, while CSI 3 g clears every tab stop.
+                int param = npp > 0 ? pp[0] : 0;
+                if (param == 0) set_tab_stop(cursor_x / current_font_w);
+                else if (param == 3) clear_all_tab_stops();
             } else if (c == 'r') {
                 // DECSTBM: Set Top and Bottom Margins
                 int top = (npp > 0 && pp[0] > 0) ? pp[0] - 1 : 0;
@@ -1317,8 +1394,8 @@ static int putchar_unlocked(int c) {
                                 alt_saved_reverse = is_reverse;
                                 alt_active = true;
                                 if (back_buffer_available && alt_back_buffer) {
-                                    size_t bb_size = back_buffer_width * back_buffer_height * sizeof(uint32_t);
-                                    memcpy(alt_back_buffer, back_buffer, bb_size);
+                                    size_t backbuffer_size = back_buffer_width * back_buffer_height * sizeof(uint32_t);
+                                    memcpy(alt_back_buffer, back_buffer, backbuffer_size);
                                     fill_rect_backbuffer(0, 0, fb->width, fb->height, bg_color);
                                     flush_backbuffer(fb);
                                 }
@@ -1339,8 +1416,8 @@ static int putchar_unlocked(int c) {
                                 region_top = 0;
                                 region_bottom = 0;
                                 if (back_buffer_available && alt_back_buffer) {
-                                    size_t bb_size = back_buffer_width * back_buffer_height * sizeof(uint32_t);
-                                    memcpy(back_buffer, alt_back_buffer, bb_size);
+                                    size_t backbuffer_size = back_buffer_width * back_buffer_height * sizeof(uint32_t);
+                                    memcpy(back_buffer, alt_back_buffer, backbuffer_size);
                                     flush_backbuffer(fb);
                                 }
                             }
@@ -1365,11 +1442,26 @@ int putchar(int c) {
     return ret;
 }
 
+uint64_t write_terminal(const char *buf, uint64_t count, bool onlcr) {
+    if (!buf) return 0;
+    uint64_t rflags;
+    spin_lock_irqsave(&term_lock, &rflags);
+    begin_fb_batch();
+    for (uint64_t i = 0; i < count; i++) {
+        if (onlcr && buf[i] == '\n') putchar_unlocked('\r');
+        putchar_unlocked(buf[i]);
+    }
+    end_fb_batch();
+    spin_unlock_irqrestore(&term_lock, rflags);
+    return count;
+}
+
 int puts(const char *s) {
     if (!s) return EOF;
 
     uint64_t rflags;
     spin_lock_irqsave(&term_lock, &rflags);
+    begin_fb_batch();
 
     while (*s) { 
         if (*s == '\n') putchar_unlocked('\r');
@@ -1379,6 +1471,7 @@ int puts(const char *s) {
     putchar_unlocked('\r');
     putchar_unlocked('\n');
 
+    end_fb_batch();
     spin_unlock_irqrestore(&term_lock, rflags);
 
     return 0;
@@ -1388,6 +1481,7 @@ int vprintf(const char *fmt, va_list args) {
     int total_written = 0;
     uint64_t rflags;
     spin_lock_irqsave(&term_lock, &rflags);
+    begin_fb_batch();
 
     #define PUTC(c) do { putchar_unlocked(c); total_written++; } while(0)
 
@@ -1508,6 +1602,7 @@ int vprintf(const char *fmt, va_list args) {
     
     #undef PUTC
 
+    end_fb_batch();
     spin_unlock_irqrestore(&term_lock, rflags);
     return total_written;
 }
@@ -1532,18 +1627,18 @@ void init_terminal_backbuffer(void) {
 
     uint64_t required_size = back_buffer_pitch * fb->height;
 
-    uint32_t *bb = (uint32_t *)malloc(required_size);
-    uint32_t *abb = (uint32_t *)malloc(required_size);
+    uint32_t *prepared_back_buffer = (uint32_t *)malloc(required_size);
+    uint32_t *prepared_alt_back_buffer = (uint32_t *)malloc(required_size);
 
-    if (bb && abb) {
-        back_buffer = bb;
-        alt_back_buffer = abb;
+    if (prepared_back_buffer && prepared_alt_back_buffer) {
+        back_buffer = prepared_back_buffer;
+        alt_back_buffer = prepared_alt_back_buffer;
         back_buffer_initialized = true;
         back_buffer_available = true;
         backbuffer_reload_from_fb(fb); // seed from current VRAM contents
     } else {
-        free(bb);
-        free(abb);
+        free(prepared_back_buffer);
+        free(prepared_alt_back_buffer);
         back_buffer = NULL;
         alt_back_buffer = NULL;
         back_buffer_initialized = true;

@@ -405,48 +405,34 @@ vfs_file_t read_vfs_file(const char *path) {
     vfs_file_t result = {0};
     vfs_mount_t mount;
     char relative[VFS_PATH_MAX];
+
+    #define COPY_VFS_FILE(destination, source) do { \
+        (destination).inode = (source).inode; \
+        (destination).data = (source).data; \
+        (destination).size = (source).size; \
+        (destination).mode = (source).mode; \
+        (destination).uid = (source).uid; \
+        (destination).gid = (source).gid; \
+        (destination).atime = (source).atime; \
+        (destination).btime = (source).btime; \
+        (destination).mtime = (source).mtime; \
+        (destination).ctime = (source).ctime; \
+    } while (0)
     
     if (resolve_vfs_path(path, &mount, relative, sizeof(relative))) {
         if (strcmp(mount.fs_type, "tmpfs") == 0) {
             tmpfs_file_t tmpfs_result = read_tmpfs(relative);
-            result.inode = tmpfs_result.inode;
-            result.data = tmpfs_result.data;
-            result.size = tmpfs_result.size;
-            result.mode = tmpfs_result.mode;
-            result.uid = tmpfs_result.uid;
-            result.gid = tmpfs_result.gid;
-            result.atime = tmpfs_result.atime;
-            result.mtime = tmpfs_result.mtime;
-            result.ctime = tmpfs_result.ctime;
+            COPY_VFS_FILE(result, tmpfs_result);
         } else if (strcmp(mount.fs_type, "initrd") == 0) {
             initrd_file_t initrd_result = read_initrd(relative);
-            result.inode = initrd_result.inode;
-            result.data = initrd_result.data;
-            result.size = initrd_result.size;
-            result.mode = initrd_result.mode;
-            result.uid = initrd_result.uid;
-            result.gid = initrd_result.gid;
-            result.atime = initrd_result.atime;
-            result.mtime = initrd_result.mtime;
-            result.ctime = initrd_result.ctime;
-            result.btime = initrd_result.btime;
+            COPY_VFS_FILE(result, initrd_result);
         }
     } else {
         initrd_file_t initrd_result = read_initrd(path);
-        if (initrd_result.mode) {
-            result.inode = initrd_result.inode;
-            result.data = initrd_result.data;
-            result.size = initrd_result.size;
-            result.mode = initrd_result.mode;
-            result.uid = initrd_result.uid;
-            result.gid = initrd_result.gid;
-            result.atime = initrd_result.atime;
-            result.mtime = initrd_result.mtime;
-            result.ctime = initrd_result.ctime;
-            result.btime = initrd_result.btime;
-        }
+        if (initrd_result.mode) COPY_VFS_FILE(result, initrd_result);
     }
     
+    #undef COPY_VFS_FILE
     return result;
 }
 
@@ -454,48 +440,34 @@ vfs_file_t stat_vfs_file(const char *path) {
     vfs_file_t result = {0};
     vfs_mount_t mount;
     char relative[VFS_PATH_MAX];
+
+    #define COPY_VFS_FILE(destination, source) do { \
+        (destination).inode = (source).inode; \
+        (destination).data = (source).data; \
+        (destination).size = (source).size; \
+        (destination).mode = (source).mode; \
+        (destination).uid = (source).uid; \
+        (destination).gid = (source).gid; \
+        (destination).atime = (source).atime; \
+        (destination).btime = (source).btime; \
+        (destination).mtime = (source).mtime; \
+        (destination).ctime = (source).ctime; \
+    } while (0)
     
     if (resolve_vfs_path(path, &mount, relative, sizeof(relative))) {
         if (strcmp(mount.fs_type, "tmpfs") == 0) {
             tmpfs_file_t tmpfs_result = stat_tmpfs(relative);
-            result.inode = tmpfs_result.inode;
-            result.data = tmpfs_result.data;
-            result.size = tmpfs_result.size;
-            result.mode = tmpfs_result.mode;
-            result.uid = tmpfs_result.uid;
-            result.gid = tmpfs_result.gid;
-            result.atime = tmpfs_result.atime;
-            result.mtime = tmpfs_result.mtime;
-            result.ctime = tmpfs_result.ctime;
+            COPY_VFS_FILE(result, tmpfs_result);
         } else if (strcmp(mount.fs_type, "initrd") == 0) {
             initrd_file_t initrd_result = stat_initrd(relative);
-            result.inode = initrd_result.inode;
-            result.data = initrd_result.data;
-            result.size = initrd_result.size;
-            result.mode = initrd_result.mode;
-            result.uid = initrd_result.uid;
-            result.gid = initrd_result.gid;
-            result.atime = initrd_result.atime;
-            result.mtime = initrd_result.mtime;
-            result.ctime = initrd_result.ctime;
-            result.btime = initrd_result.btime;
+            COPY_VFS_FILE(result, initrd_result);
         }
     } else {
         initrd_file_t initrd_result = stat_initrd(path);
-        if (initrd_result.mode) {
-            result.inode = initrd_result.inode;
-            result.data = initrd_result.data;
-            result.size = initrd_result.size;
-            result.mode = initrd_result.mode;
-            result.uid = initrd_result.uid;
-            result.gid = initrd_result.gid;
-            result.atime = initrd_result.atime;
-            result.mtime = initrd_result.mtime;
-            result.ctime = initrd_result.ctime;
-            result.btime = initrd_result.btime;
-        }
+        if (initrd_result.mode) COPY_VFS_FILE(result, initrd_result);
     }
     
+    #undef COPY_VFS_FILE
     return result;
 }
 

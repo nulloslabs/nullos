@@ -51,3 +51,9 @@ volatile struct limine_mp_request mp_req = {
     .id = LIMINE_MP_REQUEST_ID,
     .revision = 0
 };
+
+__attribute__((used, section(".limine_requests")))
+volatile struct limine_tsc_frequency_request tsc_req = {
+    .id = LIMINE_TSC_FREQUENCY_REQUEST_ID,
+    .revision = 0
+};

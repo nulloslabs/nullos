@@ -3,8 +3,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <mm/pmm.h>
 
-#define PAGE_SIZE 4096
 #define KERNEL_HEAP_BASE  0xffffb00000000000ULL
 #define KERNEL_HEAP_LIMIT 0xffffc00000000000ULL
 #define USER_MMAP_BASE  0x0000100000000000ULL

@@ -6,7 +6,7 @@
 #include <main/spinlocks.h>
 #include <io/ac97.h>
 #include <io/io.h>
-#include <io/hpet.h>
+#include <io/time.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
 

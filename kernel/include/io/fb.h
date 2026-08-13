@@ -7,6 +7,7 @@ typedef enum {
     FB_LIMINE,  // Framebuffer provided by Limine, VESA/GOP
     FB_BGA,     // Bochs Graphics Adapter
     FB_SVGA_II, // VMware SVGA II
+    FB_VIRTIO_GPU,
 } fb_driver_t;
 
 extern fb_driver_t current_fb_driver;

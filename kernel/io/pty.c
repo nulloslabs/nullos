@@ -233,12 +233,12 @@ void clear_keyboard_pty(int pty_idx) {
     }
 }
 
-void init_ptys(void) {
+void init_pty(void) {
     for (int i = 0; i < NUM_PTYS; i++) {
         ptys[i].allocated = false;
         ptys[i].locked = false;
         ptys[i].master_refs = 0;
         ptys[i].slave_refs = 0;
     }
-    log("pty: initialized ptys\n");
+    log("pty: initialized pty\n");
 }

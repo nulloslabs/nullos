@@ -35,6 +35,7 @@ void scroll(void);
 void clrscr(void);
 int putchar(int c);
 int puts(const char *s);
+uint64_t write_terminal(const char *buf, uint64_t count, bool onlcr);
 int vprintf(const char *fmt, va_list args);
 int printf(const char *fmt, ...);
 void init_terminal_backbuffer(void);

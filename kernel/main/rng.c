@@ -5,7 +5,7 @@
 #include <main/rng.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
-#include <io/hpet.h>
+#include <io/time.h>
 #include <io/tsc.h>
 #include <io/pit.h>
 #include <mm/mm.h>
@@ -66,14 +66,14 @@ static size_t collect_cpu_entropy(uint64_t *out, size_t capacity) {
 
 static void collect_jitter_entropy(uint64_t out[16]) {
     uint64_t previous = read_tsc();
-    uint64_t mix = previous ^ read_hpet_counter() ^ (uint64_t)read_pit_counter();
+    uint64_t mix = previous ^ get_raw_time_counter() ^ (uint64_t)read_pit_counter();
     for (int i = 0; i < 16; i++) {
         for (int sample = 0; sample < 32; sample++) {
             uint64_t now = read_tsc();
             uint64_t delta = now - previous;
             previous = now;
             mix ^= delta + 0x9E3779B97F4A7C15ULL + (mix << 6) + (mix >> 2);
-            mix ^= read_hpet_counter() + ((uint64_t)read_pit_counter() << 32);
+            mix ^= get_raw_time_counter() + ((uint64_t)read_pit_counter() << 32);
             for (uint64_t pause = 0; pause < ((mix & 0x1f) + 1); pause++) {
                 __asm__ volatile("pause");
             }
@@ -84,12 +84,12 @@ static void collect_jitter_entropy(uint64_t out[16]) {
 
 void regen_rng(void) {
     // Get entropy from timers
-    uint64_t hpet_entropy = read_hpet_counter();
+    uint64_t timer_entropy = get_raw_time_counter();
     uint64_t tsc_entropy = read_tsc();
     uint64_t pit_entropy = (uint64_t)read_pit_counter();
 
     // Read it again to make completely random numbers with jitters
-    hpet_entropy = read_hpet_counter() - hpet_entropy;
+    timer_entropy = get_raw_time_counter() - timer_entropy;
     tsc_entropy = read_tsc() - tsc_entropy;
     pit_entropy = (uint64_t)read_pit_counter() - pit_entropy;
 
@@ -112,7 +112,6 @@ void regen_rng(void) {
 
     #define GOLDEN_RATIO 0x9E3779B97F4A7C15ULL
 
-    uint64_t timer_entropy = hpet_entropy;
     timer_entropy = timer_entropy * GOLDEN_RATIO ^ tsc_entropy;
     timer_entropy = timer_entropy * GOLDEN_RATIO ^ pit_entropy;
 

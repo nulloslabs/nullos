@@ -11,6 +11,7 @@
 #include <io/apic.h>
 #include <io/ioapic.h>
 #include <mm/mm.h>
+#include <mm/kstack.h>
 #include <mm/vmm.h>
 #include <syscalls/syscalls.h>
 cpu_t cpus[MAX_CPUS];
@@ -29,9 +30,9 @@ static void ap_entry(struct limine_mp_info *info) {
     init_gdt_for_cpu(idx);
     load_idt_for_cpu();
 
-    void *stack = vmalloc(32768);
-    cpus[idx].kernel_stack = (void*)((uint64_t)stack + 32768);
-    set_tss_kernel_stack_for_cpu(idx, cpus[idx].kernel_stack);
+    cpus[idx].kernel_stack = alloc_kernel_stack();
+    if (!cpus[idx].kernel_stack) halt();
+    set_tss_kernel_stack_for_cpu(idx, kernel_stack_top(cpus[idx].kernel_stack));
 
     init_sse_for_cpu();
     init_syscalls_for_cpu();

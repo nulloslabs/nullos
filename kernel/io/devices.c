@@ -16,6 +16,9 @@
 #include <io/ide.h>
 #include <io/pata.h>
 #include <io/atapi.h>
+#include <io/sata.h>
+#include <io/mbr.h>
+#include <io/gpt.h>
 #include <syscalls/syscall_impls.h>
 
 devtmpfs_device_t devtmpfs_devices[MAX_DEVTMPFS_DEVICES];
@@ -212,14 +215,7 @@ static uint64_t write_tty(const void* buf, uint64_t count, uint64_t offset, int 
     if (t && (t->termios.c_oflag & OPOST) && (t->termios.c_oflag & ONLCR)) {
         do_onlcr = true;
     }
-    for (uint64_t i = 0; i < count; i++) {
-        char c = ((const char*)buf)[i];
-        if (do_onlcr && c == '\n') {
-            putchar('\r');
-        }
-        putchar(c);
-    }
-    return count;
+    return write_terminal(buf, count, do_onlcr);
 }
 
 static uint64_t read_urandom(void* buf, uint64_t count, uint64_t offset, int dev_idx) {
@@ -358,6 +354,18 @@ void init_devices(void) {
                 if (register_block_device_idx(name, read_atapi_device, write_atapi_device, i, size) < 0) {
                     log("devices: unable to register %s\n", name);
                 }
+            }
+        }
+
+        if (is_sata_present) {
+            for (int i = 0; i < sata_device_count(); i++) {
+                if (!sata_device_size(i, &size)) continue;
+                if (!make_sata_disk_name(name, sizeof(name), i)) continue;
+                if (register_block_device_idx(name, read_sata_device, write_sata_device, i, size) < 0) {
+                    log("devices: unable to register %s\n", name);
+                    continue;
+                }
+                if (!gpt_probe_sata_disk(i, name, size)) mbr_probe_sata_disk(i, name, size);
             }
         }
     }

@@ -11,4 +11,5 @@ extern volatile struct limine_executable_file_request cmdline_req;
 extern volatile struct limine_executable_address_request eaddr_req;
 extern volatile struct limine_rsdp_request rsdp_req;
 extern volatile struct limine_mp_request mp_req;
+extern volatile struct limine_tsc_frequency_request tsc_req;
 extern volatile struct limine_smbios_request smbios_req;

@@ -95,6 +95,7 @@ char scancode_to_ascii(uint8_t sc) {
     switch (sc) {
         case 0x1C: return '\r'; // Enter
         case 0x0E: return '\x7F'; // Backspace
+        case 0x0F: return '\t'; // Tab
         case 0x39: return ' ';  // Space
         case 0x3A: return 0;
         case 0x45: return 0;

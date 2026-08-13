@@ -17,7 +17,7 @@ static ide_prd_t ide_prdt[2] __attribute__((aligned(16)));
 bool is_pata_present = false;
 bool is_atapi_present = false;
 spinlock_t ide_lock = SPINLOCK_INIT;
-uint8_t ide_dma_data[IDE_DMA_BUFFER_SIZE] __attribute__((aligned(4096)));
+uint8_t ide_dma_data[IDE_DMA_BUFFER_SIZE] __attribute__((aligned(PAGE_SIZE)));
 
 void delay_ide_400ns(const ide_device_t *device) {
     inb(device->control_base);
