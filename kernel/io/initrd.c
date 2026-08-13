@@ -1074,6 +1074,51 @@ int next_initrd_child(int *index, const char *dir_norm, char *child_name, size_t
     return 1; // no more children
 }
 
+static bool initrd_path_is_direct_child(const char *path, const char *prefix, size_t prefix_len) {
+    char abs_path[256];
+    const char *name = path;
+    if (name[0] == '.' && name[1] == '/') name += 2;
+    abs_path[0] = '/';
+    strncpy(abs_path + 1, name[0] == '/' ? name + 1 : name, sizeof(abs_path) - 2);
+    abs_path[sizeof(abs_path) - 1] = '\0';
+    size_t len = strlen(abs_path);
+    if (len > 1 && abs_path[len - 1] == '/') abs_path[--len] = '\0';
+    if (strncmp(abs_path, prefix, prefix_len) != 0) return false;
+    const char *child = abs_path + prefix_len;
+    return *child && !strchr(child, '/') && strcmp(child, ".") != 0 && strcmp(child, "..") != 0;
+}
+
+int count_initrd_children(const char *path) {
+    if (!path) return -EINVAL;
+    char normalized[256];
+    get_norm_path(path, normalized, sizeof(normalized));
+    char absolute[256];
+    if (strcmp(normalized, "./") == 0) strlcpy(absolute, "/", sizeof(absolute));
+    else if (normalized[0] == '.') strlcpy(absolute, normalized + 1, sizeof(absolute));
+    else {
+        absolute[0] = '/';
+        strlcpy(absolute + 1, normalized, sizeof(absolute) - 1);
+    }
+    char prefix[258];
+    strlcpy(prefix, absolute, sizeof(prefix));
+    if (strcmp(absolute, "/") != 0) strlcat(prefix, "/", sizeof(prefix));
+    size_t prefix_len = strlen(prefix);
+    int count = 0;
+
+    for (int i = 0; i < archive_entry_count; i++) {
+        if (archive_tombstone_bits && archive_tombstone_bits[i]) continue;
+        if (initrd_path_is_direct_child(archive_entries[i].path, prefix, prefix_len)) count++;
+    }
+    for (int i = 0; i < modified_capacity; i++) {
+        if (!modified_files[i].is_active || modified_files[i].is_tombstone) continue;
+        if (!initrd_path_is_direct_child(modified_files[i].path, prefix, prefix_len)) continue;
+        int archive_idx = archive_entry_idx(modified_files[i].path);
+        if (archive_idx >= 0 && (!archive_tombstone_bits || !archive_tombstone_bits[archive_idx])) continue;
+        count++;
+    }
+    return count;
+}
+
 static bool parse_cpio_hex(const uint8_t *field, uint32_t *value) {
     uint32_t out = 0;
     for (int i = 0; i < 8; i++) {

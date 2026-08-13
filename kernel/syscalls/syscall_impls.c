@@ -411,6 +411,14 @@ static void stat_set_synthetic_times(struct stat *kst) {
     kst->st_ctim = timestamp;
 }
 
+#define SHMEM_BOGO_DIRENT_SIZE 20
+
+static void stat_set_shmem_directory_size(struct stat *kst, int child_count) {
+    if (!kst || child_count < 0) return;
+    kst->st_size = (2 + child_count) * SHMEM_BOGO_DIRENT_SIZE;
+    kst->st_blocks = 0;
+}
+
 static bool stat_virtual_device(const char *abs_path, struct stat *kst) {
     // build_abs_path_at already resolved intermediate symlinks;
     // resolve the final component too for virtual device lookup.
@@ -447,6 +455,14 @@ static bool stat_virtual_device(const char *abs_path, struct stat *kst) {
         }
         kst->st_uid = 0; kst->st_gid = 0; kst->st_size = 0;
         kst->st_blocks = 0; kst->st_blksize = 4096;
+        if (rel_path[0] == '\0') {
+            int children = 0;
+            while (get_devtmpfs_device_name(children)) children++;
+            int submounts = 0;
+            char sub_name[64];
+            while (find_vfs_submount(resolved, submounts, sub_name, sizeof(sub_name))) submounts++;
+            stat_set_shmem_directory_size(kst, children + submounts);
+        }
         stat_set_synthetic_times(kst);
         return true;
     }
@@ -473,6 +489,7 @@ static bool stat_tmpfs_to_kst(const char *abs_path, struct stat *kst, bool follo
     kst->st_atim = f.atime;
     kst->st_mtim = f.mtime;
     kst->st_ctim = f.ctime;
+    if (S_ISDIR(f.mode)) stat_set_shmem_directory_size(kst, count_tmpfs_children(abs_path));
     return true;
 }
 
@@ -492,6 +509,7 @@ static bool stat_initrd_to_kst(const char *abs_path, struct stat *kst, bool foll
     kst->st_atim = f.atime;
     kst->st_mtim = f.mtime;
     kst->st_ctim = f.ctime;
+    if (S_ISDIR(f.mode)) stat_set_shmem_directory_size(kst, count_initrd_children(abs_path));
     return true;
 }
 
@@ -1492,6 +1510,13 @@ static int timeval_to_us(const struct timeval *tv, uint64_t *out) {
     if (tv->tv_sec < 0 || tv->tv_usec < 0 || tv->tv_usec >= 1000000) return -EINVAL;
     if ((uint64_t)tv->tv_sec > (UINT64_MAX - (uint64_t)tv->tv_usec) / 1000000ULL) return -EINVAL;
     *out = (uint64_t)tv->tv_sec * 1000000ULL + (uint64_t)tv->tv_usec;
+    return 0;
+}
+
+static int timespec_to_us(const struct timespec *ts, int64_t *out) {
+    if (ts->tv_sec < 0 || ts->tv_nsec < 0 || ts->tv_nsec >= 1000000000L) return -EINVAL;
+    if ((uint64_t)ts->tv_sec > ((uint64_t)INT64_MAX - (uint64_t)ts->tv_nsec / 1000ULL) / 1000000ULL) return -EINVAL;
+    *out = (int64_t)((uint64_t)ts->tv_sec * 1000000ULL + (uint64_t)ts->tv_nsec / 1000ULL);
     return 0;
 }
 
@@ -3778,10 +3803,10 @@ void sys_select(syscall_frame_t *frame) {
     int64_t timeout_us = -1;
     if (timeout_ptr) {
         struct timeval tv;
-        copy_from_user(&tv, timeout_ptr, sizeof(tv));
-        if (tv.tv_sec < 0 || tv.tv_usec < 0 || tv.tv_usec >= 1000000) { frame->rax = (uint64_t)-EINVAL; return; }
-        timeout_us = (int64_t)tv.tv_sec * 1000000LL + (int64_t)tv.tv_usec;
-        if (timeout_us == 0) timeout_us = 0;
+        uint64_t converted;
+        if (copy_from_user(&tv, timeout_ptr, sizeof(tv)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+        if (timeval_to_us(&tv, &converted) < 0 || converted > INT64_MAX) { frame->rax = (uint64_t)-EINVAL; return; }
+        timeout_us = (int64_t)converted;
     } else {
         timeout_us = -1; // infinite
     }
@@ -5165,7 +5190,8 @@ static int do_truncate_path(const char *abs_path, uint64_t length) {
     }
     // initrd / overlay
     initrd_file_t f = read_initrd(abs_path);
-    if (!f.data && f.size == 0) return -ENOENT;
+    if (!f.mode) return -ENOENT;
+    if (f.size && !f.data) return -EIO;
     if (!can_access_initrd(&f, 0, 1, 0)) return -EACCES;
     if (length > INITRD_MAX_FILE_SIZE) return -EFBIG;
 
@@ -5949,7 +5975,7 @@ void sys_time(syscall_frame_t *frame) {
     time_t seconds = (time_t)(time_get_realtime_us() / 1000000ULL);
 
     if (result) {
-        if (!user_range_ok(current_task_ptr->ctx, (uint64_t)result, sizeof(*result))) {
+        if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)result, sizeof(*result))) {
             frame->rax = (uint64_t)-EFAULT;
             return;
         }
@@ -5962,6 +5988,13 @@ void sys_time(syscall_frame_t *frame) {
 void sys_gettimeofday(syscall_frame_t *frame) {
     struct timeval *tv = (struct timeval *)frame->rdi;
     struct timezone *tz = (struct timezone *)frame->rsi;
+
+    if (tv && !user_write_range_ok(current_task_ptr->ctx, (uint64_t)tv, sizeof(*tv))) {
+        frame->rax = (uint64_t)-EFAULT; return;
+    }
+    if (tz && !user_write_range_ok(current_task_ptr->ctx, (uint64_t)tz, sizeof(*tz))) {
+        frame->rax = (uint64_t)-EFAULT; return;
+    }
 
     if (tv) {
         uint64_t usec = time_get_realtime_us();
@@ -5981,7 +6014,7 @@ void sys_getrlimit(syscall_frame_t *frame) {
     int resource = (int)frame->rdi;
     rlimit_t *rlim = (rlimit_t *)frame->rsi;
 
-    if (!rlim) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!rlim || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)rlim, sizeof(*rlim))) { frame->rax = (uint64_t)-EFAULT; return; }
 
     rlimit_t lim;
     int ret = fill_rlimit(resource, &lim);
@@ -5995,7 +6028,7 @@ void sys_getrusage(syscall_frame_t *frame) {
     int who = (int)frame->rdi;
     struct rusage *usage = (struct rusage *)frame->rsi;
 
-    if (!usage) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!usage || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)usage, sizeof(*usage))) { frame->rax = (uint64_t)-EFAULT; return; }
     if (who != RUSAGE_SELF && who != RUSAGE_CHILDREN) { frame->rax = (uint64_t)-EINVAL; return; }
 
     struct rusage ru = {0};
@@ -6030,6 +6063,9 @@ void sys_times(syscall_frame_t *frame) {
     uint64_t ticks = get_monotonic_time_us() / 10000ULL;
 
     if (buf) {
+        if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)buf, sizeof(*buf))) {
+            frame->rax = (uint64_t)-EFAULT; return;
+        }
         tms_t t = {0};
         t.tms_stime = (clock_t)ticks;
         write_vmm(current_task_ptr->ctx, (uint64_t)buf, &t, sizeof(t));
@@ -6293,8 +6329,8 @@ void sys_getresuid(syscall_frame_t *frame) {
     uid_t *suid = (uid_t *)frame->rdx;
 
     if (!ruid || !euid || !suid) { frame->rax = (uint64_t)-EFAULT; return; }
-    if (!user_range_ok(current_task_ptr->ctx, (uint64_t)ruid, sizeof(uid_t)) || !user_range_ok(current_task_ptr->ctx, (uint64_t)euid, sizeof(uid_t)) ||
-        !user_range_ok(current_task_ptr->ctx, (uint64_t)suid, sizeof(uid_t))) {
+    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)ruid, sizeof(uid_t)) || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)euid, sizeof(uid_t)) ||
+        !user_write_range_ok(current_task_ptr->ctx, (uint64_t)suid, sizeof(uid_t))) {
         frame->rax = (uint64_t)-EFAULT; return;
     }
 
@@ -6340,8 +6376,8 @@ void sys_getresgid(syscall_frame_t *frame) {
     gid_t *sgid = (gid_t *)frame->rdx;
 
     if (!rgid || !egid || !sgid) { frame->rax = (uint64_t)-EFAULT; return; }
-    if (!user_range_ok(current_task_ptr->ctx, (uint64_t)rgid, sizeof(gid_t)) || !user_range_ok(current_task_ptr->ctx, (uint64_t)egid, sizeof(gid_t)) ||
-        !user_range_ok(current_task_ptr->ctx, (uint64_t)sgid, sizeof(gid_t))) {
+    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)rgid, sizeof(gid_t)) || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)egid, sizeof(gid_t)) ||
+        !user_write_range_ok(current_task_ptr->ctx, (uint64_t)sgid, sizeof(gid_t))) {
         frame->rax = (uint64_t)-EFAULT; return;
     }
 
@@ -6655,7 +6691,7 @@ void sys_arch_prctl(syscall_frame_t *frame) {
             frame->rax = 0;
             return;
         case ARCH_GET_FS:
-            if (!user_range_ok(current_task_ptr->ctx, (uint64_t)(void*)addr, sizeof(uint64_t))) {
+            if (!user_write_range_ok(current_task_ptr->ctx, addr, sizeof(uint64_t))) {
                 frame->rax = (uint64_t)-EFAULT; return;
             }
             write_vmm(current_task_ptr->ctx, addr, &current_task_ptr->fs_base, sizeof(uint64_t));
@@ -6670,7 +6706,7 @@ void sys_arch_prctl(syscall_frame_t *frame) {
             frame->rax = 0;
             return;
         case ARCH_GET_GS:
-            if (!user_range_ok(current_task_ptr->ctx, (uint64_t)(void*)addr, sizeof(uint64_t))) {
+            if (!user_write_range_ok(current_task_ptr->ctx, addr, sizeof(uint64_t))) {
                 frame->rax = (uint64_t)-EFAULT; return;
             }
             write_vmm(current_task_ptr->ctx, addr, &current_task_ptr->gs_base, sizeof(uint64_t));
@@ -6687,12 +6723,12 @@ void sys_setrlimit(syscall_frame_t *frame) {
     rlimit_t *rlim = (rlimit_t *)frame->rsi;
     rlimit_t current;
 
-    if (!rlim) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!rlim) { frame->rax = (uint64_t)-EFAULT; return; }
     int ret = fill_rlimit(resource, &current);
     if (ret < 0) { frame->rax = (uint64_t)ret; return; }
 
     rlimit_t requested;
-    read_vmm(current_task_ptr->ctx, &requested, (uint64_t)rlim, sizeof(requested));
+    if (copy_from_user(&requested, rlim, sizeof(requested)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
     if (requested.rlim_cur != current.rlim_cur || requested.rlim_max != current.rlim_max) { frame->rax = (uint64_t)-EPERM; return; }
 
     frame->rax = 0;
@@ -6706,14 +6742,14 @@ void sys_settimeofday(syscall_frame_t *frame) {
 
     if (tz) {
         struct timezone ktz;
-        read_vmm(current_task_ptr->ctx, &ktz, (uint64_t)tz, sizeof(ktz));
+        if (copy_from_user(&ktz, tz, sizeof(ktz)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
         if (ktz.tz_minuteswest < -15 * 60 || ktz.tz_minuteswest > 15 * 60) { frame->rax = (uint64_t)-EINVAL; return; }
     }
 
     if (!tv) { frame->rax = 0; return; }
 
     struct timeval ktv;
-    read_vmm(current_task_ptr->ctx, &ktv, (uint64_t)tv, sizeof(ktv));
+    if (copy_from_user(&ktv, tv, sizeof(ktv)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
 
     if (ktv.tv_sec < 0 || ktv.tv_usec < 0 || ktv.tv_usec >= 1000000 ||
         ktv.tv_sec > (TIME_T_MAX / 1000000)) { frame->rax = (uint64_t)-EINVAL; return; }
@@ -7453,7 +7489,7 @@ void sys_clock_gettime(syscall_frame_t *frame) {
     int clk_id   = (int)frame->rdi;
     struct timespec *tp = (struct timespec *)frame->rsi;
 
-    if (!tp || !user_range_ok(current_task_ptr->ctx, (uint64_t)tp, sizeof(struct timespec))) {
+    if (!tp || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)tp, sizeof(struct timespec))) {
         frame->rax = (uint64_t)-EFAULT;
         return;
     }
@@ -7557,7 +7593,7 @@ void sys_epoll_ctl(syscall_frame_t *frame) {
 
     switch (op) {
     case EPOLL_CTL_ADD: {
-        if (user_event && !user_range_ok(current_task_ptr->ctx, (uint64_t)user_event, sizeof(struct epoll_event))) {
+        if (!user_event || !user_range_ok(current_task_ptr->ctx, (uint64_t)user_event, sizeof(struct epoll_event))) {
             frame->rax = (uint64_t)-EFAULT; return;
         }
         if (epoll_find_interest(epi, fd) >= 0) {
@@ -7567,11 +7603,7 @@ void sys_epoll_ctl(syscall_frame_t *frame) {
             frame->rax = (uint64_t)-ENOMEM; return;
         }
         struct epoll_event ev;
-        if (user_event) {
-            copy_from_user(&ev, user_event, sizeof(ev));
-        } else {
-            memset(&ev, 0, sizeof(ev));
-        }
+        if (copy_from_user(&ev, user_event, sizeof(ev)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
         epoll_interest_t *interest = &epi->interests[epi->count];
         interest->watched_fd      = fd;
         interest->events          = ev.events;
@@ -7590,7 +7622,7 @@ void sys_epoll_ctl(syscall_frame_t *frame) {
             frame->rax = (uint64_t)-ENOENT; return;
         }
         struct epoll_event ev;
-        copy_from_user(&ev, user_event, sizeof(ev));
+        if (copy_from_user(&ev, user_event, sizeof(ev)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
         epi->interests[idx].events           = ev.events;
         epi->interests[idx].data             = ev.data;
         epi->interests[idx].oneshot_reported = false;
@@ -8079,17 +8111,16 @@ void sys_pselect6(syscall_frame_t *frame) {
     }
     if (nfds > 0) {
         int bytes = ((nfds + 63) / 64) * 8;
-        if (readfds   && !user_range_ok(current_task_ptr->ctx, (uint64_t)readfds,   bytes)) { frame->rax = (uint64_t)-EFAULT; return; }
-        if (writefds  && !user_range_ok(current_task_ptr->ctx, (uint64_t)writefds,  bytes)) { frame->rax = (uint64_t)-EFAULT; return; }
-        if (exceptfds && !user_range_ok(current_task_ptr->ctx, (uint64_t)exceptfds, bytes)) { frame->rax = (uint64_t)-EFAULT; return; }
+        if (readfds   && !user_write_range_ok(current_task_ptr->ctx, (uint64_t)readfds,   bytes)) { frame->rax = (uint64_t)-EFAULT; return; }
+        if (writefds  && !user_write_range_ok(current_task_ptr->ctx, (uint64_t)writefds,  bytes)) { frame->rax = (uint64_t)-EFAULT; return; }
+        if (exceptfds && !user_write_range_ok(current_task_ptr->ctx, (uint64_t)exceptfds, bytes)) { frame->rax = (uint64_t)-EFAULT; return; }
     }
 
     int64_t timeout_us = -1;
     if (timeout_ptr) {
         struct timespec ts;
-        copy_from_user(&ts, timeout_ptr, sizeof(ts));
-        if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000L) { frame->rax = (uint64_t)-EINVAL; return; }
-        timeout_us = (int64_t)ts.tv_sec * 1000000LL + (int64_t)(ts.tv_nsec / 1000);
+        if (copy_from_user(&ts, timeout_ptr, sizeof(ts)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+        if (timespec_to_us(&ts, &timeout_us) < 0) { frame->rax = (uint64_t)-EINVAL; return; }
     }
 
     // Atomically swap signal mask
@@ -8098,15 +8129,14 @@ void sys_pselect6(syscall_frame_t *frame) {
         // pselect6 arg is a struct {sigset_t *ss; size_t ss_len} passed by pointer
         uint64_t ss_ptr = 0;
         size_t ss_len = 0;
-        if (user_range_ok(current_task_ptr->ctx, (uint64_t)(void *)sigmask_arg, 16)) {
-            read_vmm(current_task_ptr->ctx, &ss_ptr,  sigmask_arg,     8);
-            read_vmm(current_task_ptr->ctx, &ss_len,  sigmask_arg + 8, 8);
-        }
-        if (ss_ptr && ss_len == 8) {
+        if (!user_range_ok(current_task_ptr->ctx, sigmask_arg, 16)) { frame->rax = (uint64_t)-EFAULT; return; }
+        read_vmm(current_task_ptr->ctx, &ss_ptr, sigmask_arg, 8);
+        read_vmm(current_task_ptr->ctx, &ss_len, sigmask_arg + 8, 8);
+        if (ss_len != 8) { frame->rax = (uint64_t)-EINVAL; return; }
+        if (ss_ptr) {
             uint64_t new_mask = 0;
-            if (user_range_ok(current_task_ptr->ctx, (uint64_t)(void *)ss_ptr, 8)) {
-                read_vmm(current_task_ptr->ctx, &new_mask, ss_ptr, 8);
-            }
+            if (!user_range_ok(current_task_ptr->ctx, ss_ptr, 8)) { frame->rax = (uint64_t)-EFAULT; return; }
+            read_vmm(current_task_ptr->ctx, &new_mask, ss_ptr, 8);
             new_mask &= ~((1ULL << (SIGKILL - 1)) | (1ULL << (SIGSTOP - 1)));
             current_task_ptr->blocked_signals = new_mask;
         }
@@ -8119,18 +8149,24 @@ void sys_pselect6(syscall_frame_t *frame) {
     uint8_t *o_read = NULL, *o_write = NULL, *o_except = NULL;
 
     if (set_bytes > 0) {
-        k_read   = malloc(qword_bytes); memset(k_read,   0, qword_bytes);
-        k_write  = malloc(qword_bytes); memset(k_write,  0, qword_bytes);
-        k_except = malloc(qword_bytes); memset(k_except, 0, qword_bytes);
-        o_read   = malloc(qword_bytes); memset(o_read,   0, qword_bytes);
-        o_write  = malloc(qword_bytes); memset(o_write,  0, qword_bytes);
-        o_except = malloc(qword_bytes); memset(o_except, 0, qword_bytes);
+        k_read   = malloc(qword_bytes);
+        k_write  = malloc(qword_bytes);
+        k_except = malloc(qword_bytes);
+        o_read   = malloc(qword_bytes);
+        o_write  = malloc(qword_bytes);
+        o_except = malloc(qword_bytes);
         if (!k_read || !k_write || !k_except || !o_read || !o_write || !o_except) {
             free(k_read); free(k_write); free(k_except);
             free(o_read); free(o_write); free(o_except);
             current_task_ptr->blocked_signals = old_blocked;
             frame->rax = (uint64_t)-ENOMEM; return;
         }
+        memset(k_read,   0, qword_bytes);
+        memset(k_write,  0, qword_bytes);
+        memset(k_except, 0, qword_bytes);
+        memset(o_read,   0, qword_bytes);
+        memset(o_write,  0, qword_bytes);
+        memset(o_except, 0, qword_bytes);
         if (readfds)   copy_from_user(k_read,   readfds,   set_bytes);
         if (writefds)  copy_from_user(k_write,  writefds,  set_bytes);
         if (exceptfds) copy_from_user(k_except, exceptfds, set_bytes);
@@ -8173,14 +8209,16 @@ void sys_get_robust_list(syscall_frame_t *frame) {
     size_t *len_ptr = (size_t *)frame->r10;
 
     if (pid != 0 && current_task_ptr && pid != current_task_ptr->pid) { frame->rax = (uint64_t)-ESRCH; return; }
-    if (!head_ptr || !user_range_ok(current_task_ptr->ctx, (uint64_t)head_ptr, sizeof(void *))) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (!head_ptr || !len_ptr ||
+        !user_write_range_ok(current_task_ptr->ctx, (uint64_t)head_ptr, sizeof(void *)) ||
+        !user_write_range_ok(current_task_ptr->ctx, (uint64_t)len_ptr, sizeof(size_t))) {
+        frame->rax = (uint64_t)-EFAULT; return;
+    }
 
     void *head = current_task_ptr->robust_list_head;
     write_vmm(current_task_ptr->ctx, (uint64_t)head_ptr, &head, sizeof(void *));
-    if (len_ptr && user_range_ok(current_task_ptr->ctx, (uint64_t)len_ptr, sizeof(size_t))) {
-        size_t len = head ? 24 : 0;
-        write_vmm(current_task_ptr->ctx, (uint64_t)len_ptr, &len, sizeof(size_t));
-    }
+    size_t len = head ? 24 : 0;
+    write_vmm(current_task_ptr->ctx, (uint64_t)len_ptr, &len, sizeof(size_t));
     frame->rax = 0;
 }
 
@@ -8234,6 +8272,7 @@ void sys_epoll_pwait(syscall_frame_t *frame) {
     if (maxevents <= 0) {
         frame->rax = (uint64_t)-EINVAL; return;
     }
+    if (maxevents > MAX_EPOLL_INTERESTS) maxevents = MAX_EPOLL_INTERESTS;
 
     fd_entry_t *ep_entry = get_current_fd(epfd);
     if (!ep_entry || !ep_entry->open || ep_entry->type != FD_EPOLL) {
@@ -8245,7 +8284,7 @@ void sys_epoll_pwait(syscall_frame_t *frame) {
     }
 
     size_t events_bytes = (size_t)maxevents * sizeof(struct epoll_event);
-    if (!user_events || !user_range_ok(current_task_ptr->ctx, (uint64_t)user_events, events_bytes)) {
+    if (!user_events || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_events, events_bytes)) {
         frame->rax = (uint64_t)-EFAULT; return;
     }
 
@@ -8325,7 +8364,7 @@ void sys_pipe2(syscall_frame_t *frame) {
     int r;
 
     if (!pipefd) { frame->rax = (uint64_t)-EINVAL; return; }
-    if (!user_range_ok(current_task_ptr->ctx, (uint64_t)pipefd, sizeof(int) * 2)) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)pipefd, sizeof(int) * 2)) { frame->rax = (uint64_t)-EFAULT; return; }
     if (flags & ~(O_CLOEXEC | O_NONBLOCK)) { frame->rax = (uint64_t)-EINVAL; return; }
 
     r = create_unix_pipe(&read_end, &write_end);
@@ -8373,12 +8412,17 @@ void sys_prlimit64(syscall_frame_t *frame) {
     if (ret < 0) { frame->rax = (uint64_t)ret; return; }
 
     if (old_rlim) {
+        if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)old_rlim, sizeof(current))) {
+            frame->rax = (uint64_t)-EFAULT; return;
+        }
         write_vmm(current_task_ptr->ctx, (uint64_t)old_rlim, &current, sizeof(current));
     }
 
     if (new_rlim) {
         rlimit_t requested;
-        read_vmm(current_task_ptr->ctx, &requested, (uint64_t)new_rlim, sizeof(requested));
+        if (copy_from_user(&requested, new_rlim, sizeof(requested)) < 0) {
+            frame->rax = (uint64_t)-EFAULT; return;
+        }
         if (requested.rlim_cur != current.rlim_cur ||
             requested.rlim_max != current.rlim_max) {
             frame->rax = (uint64_t)-EPERM;
@@ -8394,10 +8438,11 @@ void sys_getrandom(syscall_frame_t *frame) {
     uint64_t buflen = frame->rsi;
     unsigned int flags = (unsigned int)frame->rdx;
 
+    if (flags & ~(GRND_RANDOM | GRND_NONBLOCK | GRND_INSECURE)) { frame->rax = (uint64_t)-EINVAL; return; }
     if (buflen > 256) { frame->rax = (uint64_t)-EINVAL; return; }
     if (buflen == 0) { frame->rax = 0; return; }
     if (!buf) { frame->rax = (uint64_t)-EFAULT; return; }
-    if (!user_range_ok(current_task_ptr->ctx, (uint64_t)buf, buflen)) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)buf, buflen)) { frame->rax = (uint64_t)-EFAULT; return; }
 
     bool insecure = (flags & GRND_INSECURE);
     bool random = (flags & GRND_RANDOM);
@@ -8540,6 +8585,7 @@ void sys_epoll_pwait2(syscall_frame_t *frame) {
     if (maxevents <= 0) {
         frame->rax = (uint64_t)-EINVAL; return;
     }
+    if (maxevents > MAX_EPOLL_INTERESTS) maxevents = MAX_EPOLL_INTERESTS;
 
     if (timeout_ptr) {
         if (!user_range_ok(current_task_ptr->ctx, (uint64_t)timeout_ptr, sizeof(struct timespec))) {
@@ -8549,10 +8595,7 @@ void sys_epoll_pwait2(syscall_frame_t *frame) {
         if (copy_from_user(&ts, timeout_ptr, sizeof(ts)) < 0) {
             frame->rax = (uint64_t)-EFAULT; return;
         }
-        if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000L) {
-            frame->rax = (uint64_t)-EINVAL; return;
-        }
-        timeout_us = (int64_t)ts.tv_sec * 1000000LL + (int64_t)(ts.tv_nsec / 1000);
+        if (timespec_to_us(&ts, &timeout_us) < 0) { frame->rax = (uint64_t)-EINVAL; return; }
     }
 
     fd_entry_t *ep_entry = get_current_fd(epfd);
@@ -8565,7 +8608,7 @@ void sys_epoll_pwait2(syscall_frame_t *frame) {
     }
 
     size_t events_bytes = (size_t)maxevents * sizeof(struct epoll_event);
-    if (!user_events || !user_range_ok(current_task_ptr->ctx, (uint64_t)user_events, events_bytes)) {
+    if (!user_events || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_events, events_bytes)) {
         frame->rax = (uint64_t)-EFAULT; return;
     }
 

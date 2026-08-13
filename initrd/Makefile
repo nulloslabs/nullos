@@ -12,7 +12,7 @@ include config.mk
 all: initrd
 
 initrd:
-	resolved_packages="$$(../scripts/resolve_packages.sh $(PACKAGE_NAMES))"; \
+	resolved_packages="$$(../scripts/resolve_packages.sh $(PACKAGE_NAMES))" || exit $$?; \
 	resolved_packages="$$(printf '%s\n' "$$resolved_packages" | sed '/^core\/filesystem$$/d; /^core\/linux-api-headers$$/d')"; \
 	current_names="$$(for p in $$resolved_packages; do basename $$p; done)"; \
 	cached_names="$$(ls packages/*.pkg.tar.zst 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.pkg\.tar\.zst$$//')"; \
@@ -148,7 +148,12 @@ initrd:
 		(cd main && ln -sf /bin/busybox sbin/init && ln -sf sbin/init init) && \
 		rm -f main/linuxrc && \
 		printf "  %-7s %s\n" "CPIO" "$(SUBDIR)/$(OUTFILE)" && \
-		(cd main && find . -print0 | $(CPIO) $(CPIOFLAGS) 2>/dev/null) | gzip -9 > $(OUTFILE) && gzip -t $(OUTFILE); \
+		rm -f $(OUTFILE).cpio.part $(OUTFILE).part && \
+		(cd main && find . -print0 | $(CPIO) $(CPIOFLAGS) 2>/dev/null > ../$(OUTFILE).cpio.part) && \
+		gzip -9 < $(OUTFILE).cpio.part > $(OUTFILE).part && \
+		gzip -t $(OUTFILE).part && \
+		mv $(OUTFILE).part $(OUTFILE) && \
+		rm -f $(OUTFILE).cpio.part; \
 	else \
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/$(OUTFILE) is already up to date"; \
 	fi

@@ -35,6 +35,8 @@ static int identify_atapi(const ide_device_t *device) {
 }
 
 static int send_atapi_packet_pio(const ide_device_t *device, const uint8_t packet[12], void *data, uint16_t size) {
+    if (size && !data) return -EINVAL;
+    if (size) memset(data, 0, size);
     select_ide_device(device);
     outb(device->io_base + IDE_REG_FEATURES, 0);
     outb(device->io_base + IDE_REG_LBA_MID, size & 0xFF);
@@ -53,7 +55,8 @@ static int send_atapi_packet_pio(const ide_device_t *device, const uint8_t packe
         if (offset < size) output[offset] = word & 0xFF;
         if (offset + 1 < size) output[offset + 1] = word >> 8;
     }
-    return wait_ide_not_busy(device);
+    if (wait_ide_not_busy(device) < 0) return -EIO;
+    return available < size ? -EIO : 0;
 }
 
 static int get_atapi_capacity(const ide_device_t *device, uint64_t *sectors) {

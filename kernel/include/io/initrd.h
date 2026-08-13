@@ -87,4 +87,5 @@ int set_initrd_times(const char *path, struct timespec atime, bool set_atime, st
 int get_initrd_entry(int index, directory_entry_t* entry);
 int next_initrd_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size,
                       uint8_t *child_type, ino_t *child_ino);
+int count_initrd_children(const char *path);
 void init_initrd(void);

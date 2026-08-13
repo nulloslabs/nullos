@@ -42,8 +42,7 @@ static int read_extfs_block(const extfs_mount_t *mnt, uint64_t block, void *buf)
 
 static const char *get_device_name(const char *source) {
     if (!source) return NULL;
-    while (*source == '/')
-        source++;
+    while (*source == '/') source++;
     if (strncmp(source, "dev/", 4) == 0) source += 4;
     return source;
 }
@@ -53,8 +52,7 @@ static bool check_path_under(const char *path, const char *target, const char **
     if (strncmp(path, target, n) != 0) return false;
     if (path[n] != '\0' && path[n] != '/') return false;
     const char *rel = path + n;
-    while (*rel == '/')
-        rel++;
+    while (*rel == '/') rel++;
     if (relative) *relative = rel;
     return true;
 }
@@ -135,7 +133,6 @@ static int read_extfs_inode(const extfs_mount_t *mnt, uint32_t ino, extfs_inode_
     return inode->mode ? 0 : -ENOENT;
 }
 
-/* Return 0 for a hole, 1 for a mapped block, or a negative errno. */
 static int map_extfs_extent_block(const extfs_mount_t *mnt, const uint8_t *root, size_t root_size, uint32_t logical, uint16_t expected_depth, uint64_t *physical) {
     if (root_size < 12 || read_le16(root) != EXTFS_EXTENT_MAGIC) return -EIO;
     uint16_t entries = read_le16(root + 2);
@@ -427,9 +424,6 @@ restart: {
 }
 }
 
-/* Mount an ext2/ext3/ext4 filesystem read-only.  The source may be either a
- * registered device name ("hda") or its devtmpfs path ("/dev/hda").
- */
 int mount_extfs(const char *source, const char *target) {
     const char *dev = get_device_name(source);
     if (!dev || !*dev || strlen(dev) > 64 || !target || target[0] != '/' || strlen(target) > 63) return -EINVAL;

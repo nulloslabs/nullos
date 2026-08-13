@@ -810,6 +810,20 @@ int next_tmpfs_child(int *index, const char *dir_norm, char *child_name, size_t 
     return found ? 0 : 1;
 }
 
+int count_tmpfs_children(const char *path) {
+    if (!path) return -EINVAL;
+    uint64_t irq;
+    spin_lock_irqsave(&tmpfs_lock, &irq);
+    int inode = resolve_locked(path, true);
+    int count = -ENOENT;
+    if (inode >= 0 && tmpfs_inodes[inode] && tmpfs_inodes[inode]->type == TMPFS_DIR)
+        count = tmpfs_inodes[inode]->child_count;
+    else if (inode >= 0)
+        count = -ENOTDIR;
+    spin_unlock_irqrestore(&tmpfs_lock, irq);
+    return count;
+}
+
 void init_tmpfs(void) {
     memset(tmpfs_inodes, 0, sizeof(tmpfs_inodes));
     memset(tmpfs_mounts, 0, sizeof(tmpfs_mounts));

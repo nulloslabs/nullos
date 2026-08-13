@@ -10,8 +10,8 @@
 
 #ifndef __ASSEMBLY__
 #include <stdint.h>
-#include <stddef.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <limine.h>
 
 typedef enum {

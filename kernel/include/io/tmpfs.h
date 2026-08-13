@@ -96,5 +96,6 @@ int  set_tmpfs_times(const char *path, struct timespec atime, bool set_atime, st
 int  truncate_tmpfs(const char *path, uint64_t size);
 int  read_tmpfs_link(const char *path, char *out, size_t out_size);
 int  next_tmpfs_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size, uint8_t *child_type, ino_t *child_ino);
+int  count_tmpfs_children(const char *path);
 int  get_tmpfs_entry(int index, tmpfs_dirent_t *entry);
 void init_tmpfs(void);

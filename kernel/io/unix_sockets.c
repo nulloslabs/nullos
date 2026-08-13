@@ -369,7 +369,8 @@ int connect_unix_socket(unix_handle_t *h, const void *addr, uint32_t addrlen) {
     unix_handle_t *listener;
     unix_handle_t *client;
     unix_handle_t *server;
-    uint64_t flags;
+    uint64_t listener_flags;
+    uint64_t handle_flags;
     int r = sockaddr_path(addr, addrlen, path, sizeof(path));
     if (r < 0) return r;
     if (!h || h->kind != UH_SOCKET) return -ENOTSOCK;
@@ -388,27 +389,37 @@ int connect_unix_socket(unix_handle_t *h, const void *addr, uint32_t addrlen) {
         return r;
     }
 
-    spin_lock_irqsave(&h->lock, &flags);
+    spin_lock_irqsave(&listener->lock, &listener_flags);
+    if (!listener->listening || listener->pending_len >= UNIX_MAX_PENDING) {
+        spin_unlock_irqrestore(&listener->lock, listener_flags);
+        release_unix_handle(client);
+        release_unix_handle(server);
+        release_unix_handle(listener);
+        return -ECONNREFUSED;
+    }
+
+    spin_lock_irqsave(&h->lock, &handle_flags);
+    if (h->in || h->out) {
+        spin_unlock_irqrestore(&h->lock, handle_flags);
+        spin_unlock_irqrestore(&listener->lock, listener_flags);
+        release_unix_handle(client);
+        release_unix_handle(server);
+        release_unix_handle(listener);
+        return -EISCONN;
+    }
     h->in = client->in;
     h->out = client->out;
     retain_unix_channel(h->in);
     retain_unix_channel(h->out);
     add_unix_channel_reader(h->in);
     add_unix_channel_writer(h->out);
-    spin_unlock_irqrestore(&h->lock, flags);
+    spin_unlock_irqrestore(&h->lock, handle_flags);
     release_unix_handle(client);
 
-    spin_lock_irqsave(&listener->lock, &flags);
-    if (listener->pending_len >= UNIX_MAX_PENDING) {
-        spin_unlock_irqrestore(&listener->lock, flags);
-        release_unix_handle(server);
-        release_unix_handle(listener);
-        return -ECONNREFUSED;
-    }
     listener->pending[listener->pending_tail] = server;
     listener->pending_tail = (listener->pending_tail + 1) % UNIX_MAX_PENDING;
     listener->pending_len++;
-    spin_unlock_irqrestore(&listener->lock, flags);
+    spin_unlock_irqrestore(&listener->lock, listener_flags);
     release_unix_handle(listener);
     return 0;
 }
