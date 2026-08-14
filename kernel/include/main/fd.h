@@ -21,7 +21,7 @@ typedef enum {
     FD_EPOLL = 8,       // epoll instance
     FD_EPOLL_H = 9,     // (reserved)
     FD_TMPFS = 10,      // file/dir on a tmpfs mount (handle stores inode index)
-    FD_EXTFS = 11,      // file/dir on a read-only ext-family mount
+    FD_EXT4 = 11,      // file/dir on a read-only ext-family mount
 } fd_type_t;
 
 typedef struct {

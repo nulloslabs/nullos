@@ -6,7 +6,7 @@
 #include <main/spinlocks.h>
 #include <main/string.h>
 #include <io/devtmpfs.h>
-#include <io/extfs.h>
+#include <io/ext4.h>
 #include <io/initrd.h>
 #include <io/procfs.h>
 #include <io/tmpfs.h>
@@ -39,11 +39,11 @@ static int mount_ext(const char *source, const char *path, unsigned long flags, 
     if (!(flags & MS_RDONLY)) return -EROFS;
     if (flags & ~(MS_RDONLY | MS_SILENT)) return -EOPNOTSUPP;
     if (data && data[0] && strcmp(data, "ro") != 0) return -EOPNOTSUPP;
-    return mount_extfs(source, path);
+    return mount_ext4(source, path);
 }
 
 static int unmount_ext(const char *path) {
-    return unmount_extfs(path);
+    return unmount_ext4(path);
 }
 
 static const vfs_backend_t backends[] = {
@@ -190,7 +190,7 @@ int64_t read_vfs(const char *path, void *buf, uint64_t count, uint64_t offset) {
         return (int64_t)bytes;
     }
 
-    if (check_extfs_path(path)) return read_extfs(path, buf, count, offset);
+    if (check_ext4_path(path)) return read_ext4(path, buf, count, offset);
 
     initrd_file_t file = read_initrd(path);
     if (!file.mode) return -ENOENT;
@@ -237,9 +237,9 @@ static int load_internal(const char *path, void **data, uint64_t *size, uint64_t
         if (!file.mode) return -ENOENT;
         if (S_ISDIR(file.mode)) return -EISDIR;
         file_size = file.size;
-    } else if (check_extfs_path(path)) {
+    } else if (check_ext4_path(path)) {
         struct stat st;
-        int status = stat_extfs(path, &st, true);
+        int status = stat_ext4(path, &st, true);
         if (status < 0) return status;
         if (S_ISDIR(st.st_mode)) return -EISDIR;
         if (st.st_size < 0) return -EIO;
