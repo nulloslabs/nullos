@@ -1,0 +1,85 @@
+name: Build NullOS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rolling-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends \
+            binutils \
+            build-essential \
+            cpio \
+            curl \
+            gzip \
+            tar \
+            xorriso \
+            xz-utils \
+            zstd
+
+      - name: Build ISO
+        run: make iso
+
+      - name: Name ISO
+        id: build
+        run: |
+          short_sha="${GITHUB_SHA::7}"
+          iso_name="nullos-${short_sha}.iso"
+          cp iso/nullos.iso "$iso_name"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+          echo "iso_name=$iso_name" >> "$GITHUB_OUTPUT"
+
+      - name: Upload commit artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.build.outputs.iso_name }}
+          archive: false
+          retention-days: 14
+
+      - name: Update rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISO_NAME: ${{ steps.build.outputs.iso_name }}
+          SHORT_SHA: ${{ steps.build.outputs.short_sha }}
+        run: |
+          git tag --force rolling "$GITHUB_SHA"
+          git push --force origin refs/tags/rolling
+
+          notes="Automated NullOS build for commit [$GITHUB_SHA]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA)."
+
+          if gh release view rolling >/dev/null 2>&1; then
+            while IFS= read -r asset; do
+              if [ -n "$asset" ]; then
+                gh release delete-asset rolling "$asset" --yes
+              fi
+            done < <(gh release view rolling --json assets --jq '.assets[].name')
+            gh release edit rolling \
+              --title "NullOS rolling ($SHORT_SHA)" \
+              --notes "$notes" \
+              --latest
+            gh release upload rolling "$ISO_NAME"
+          else
+            gh release create rolling "$ISO_NAME" \
+              --title "NullOS rolling ($SHORT_SHA)" \
+              --notes "$notes" \
+              --latest \
+              --verify-tag
+          fi

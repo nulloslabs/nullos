@@ -24,10 +24,14 @@ all: $(OBJ)
 	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/main/$@"
 	@$(AS) $(AFLAGS) -c $< -o $@
 
+utsname.o: FORCE
+
+FORCE:
+
 clean:
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/*.o $(SUBDIR)/main/*.d"
 	@rm -rf *.o *.d
 
 mrproper: clean
 
-.PHONY: all clean mrproper
+.PHONY: all clean mrproper FORCE
