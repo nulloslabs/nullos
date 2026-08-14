@@ -138,3 +138,5 @@ isr32:
     pop rax
     
     iretq
+
+.section .note.GNU-stack,"",@progbits

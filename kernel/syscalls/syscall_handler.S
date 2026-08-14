@@ -104,3 +104,5 @@ syscall_entry:
 .align 8
 saved_user_rsp:
     .quad 0
+
+.section .note.GNU-stack,"",@progbits

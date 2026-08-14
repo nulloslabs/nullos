@@ -72,13 +72,13 @@ jobs:
               fi
             done < <(gh release view rolling --json assets --jq '.assets[].name')
             gh release edit rolling \
-              --title "NullOS rolling ($SHORT_SHA)" \
+              --title "NullOS Rolling ($SHORT_SHA)" \
               --notes "$notes" \
               --latest
             gh release upload rolling "$ISO_NAME"
           else
             gh release create rolling "$ISO_NAME" \
-              --title "NullOS rolling ($SHORT_SHA)" \
+              --title "NullOS Rolling ($SHORT_SHA)" \
               --notes "$notes" \
               --latest \
               --verify-tag

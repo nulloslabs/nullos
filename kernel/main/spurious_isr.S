@@ -43,3 +43,5 @@ isrspr:
     pop rbx
     pop rax
     iretq
+
+.section .note.GNU-stack,"",@progbits

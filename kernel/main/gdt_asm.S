@@ -23,3 +23,5 @@ flush_tss:
     mov ax, 0x28          // 0x28 is the TSS descriptor in the GDT
     ltr ax                // Load Task Register
     ret
+
+.section .note.GNU-stack,"",@progbits

@@ -151,3 +151,5 @@ isrhdr:
 
     add rsp, 16         // discard vector + error_code
     iretq
+
+.section .note.GNU-stack,"",@progbits

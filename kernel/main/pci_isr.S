@@ -216,3 +216,5 @@ MSI_STUB 92
 MSI_STUB 93
 MSI_STUB 94
 MSI_STUB 95
+
+.section .note.GNU-stack,"",@progbits

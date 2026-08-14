@@ -64,3 +64,5 @@ isr_acpi:
     pop rbx
     pop rax
     iretq
+
+.section .note.GNU-stack,"",@progbits
