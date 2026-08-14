@@ -11,6 +11,7 @@ all: tools
 
 tools:
 	@if [ ! -f limine-binary.tar.xz ] || [ config.mk -nt limine-binary.tar.xz ] || [ Makefile -nt limine-binary.tar.xz ]; then \
+		printf "  %-7s %s\n" "FETCH" "$(SUBDIR)/limine-binary/" && \
 		curl -fsSL --retry 3 -o limine-binary.tar.xz https://github.com/Limine-Bootloader/Limine/releases/latest/download/limine-binary.tar.xz && \
 		tar -xJf limine-binary.tar.xz; \
 	fi
