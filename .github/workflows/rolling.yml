@@ -63,7 +63,7 @@ jobs:
           git tag --force rolling "$GITHUB_SHA"
           git push --force origin refs/tags/rolling
 
-          notes="NullOS build for commit [$GITHUB_SHA]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA)."
+          notes="Automated NullOS build for commit [$GITHUB_SHA]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA)."
 
           if gh release view rolling >/dev/null 2>&1; then
             while IFS= read -r asset; do

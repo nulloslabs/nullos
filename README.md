@@ -67,7 +67,7 @@ make qemu
 ```
 
 > [!NOTE]
-> The root password is 'nullos'.
+> The root password is `nullos`.
 
 ## 📜 License
 
