@@ -3263,6 +3263,30 @@ void sys_ioctl(syscall_frame_t *frame) {
     }
 
     switch (req) {
+        case KDFONTOP: {
+            int idx = ioctl_tty_idx(entry);
+            if (!is_tty || idx < 0 || idx >= 100) { frame->rax = (uint64_t)-ENOTTY; return; }
+            if (!current_task_ptr || current_task_ptr->euid != 0) { frame->rax = (uint64_t)-EPERM; return; }
+
+            struct console_font_op font_op;
+            if (copy_from_user(&font_op, (const void *)argp, sizeof(font_op)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+            if (font_op.op != KD_FONT_OP_SET || (font_op.flags & ~KD_FONT_FLAG_DONT_RECALC) != 0 || font_op.width != 8 || font_op.height == 0 || font_op.height > 32 || font_op.charcount != 256 || !font_op.data) { frame->rax = (uint64_t)-EINVAL; return; }
+
+            uint64_t font_size = 256ULL * font_op.height;
+            unsigned char *font_data = malloc(font_size);
+            if (!font_data) { frame->rax = (uint64_t)-ENOMEM; return; }
+
+            for (uint64_t glyph = 0; glyph < 256; glyph++) {
+                uint64_t user_glyph = (uint64_t)font_op.data + glyph * 32ULL;
+                if (copy_from_user(font_data + glyph * font_op.height, (const void *)user_glyph, font_op.height) < 0) { free(font_data); frame->rax = (uint64_t)-EFAULT; return; }
+            }
+
+            int status = change_font_data(font_data, 8, (uint8_t)font_op.height);
+            free(font_data);
+            frame->rax = (uint64_t)status;
+            return;
+        }
+
         case TCGETS: {
             struct termios t = {0};
             int idx = ioctl_tty_idx(entry);

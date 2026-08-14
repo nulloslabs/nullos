@@ -14,6 +14,7 @@
 unsigned char current_font[16384];
 uint8_t current_font_w = 0;
 uint8_t current_font_h = 0;
+uint64_t current_font_generation = 0;
 
 static uint8_t builtin_8x15_font[] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -683,6 +684,18 @@ static uint8_t builtin_8x16_font[] = {
     0x00, 0x00, 0x00, 0x00
 };
 
+int change_font_data(const unsigned char *data, uint8_t w, uint8_t h) {
+    if (!data || w != 8 || h == 0 || h > 32) return -EINVAL;
+    uint64_t font_size = 256ULL * h;
+    if (current_font_w == w && current_font_h == h && memcmp(current_font, data, font_size) == 0) return 0;
+    memcpy(current_font, data, font_size);
+    current_font_w = w;
+    current_font_h = h;
+    current_font_generation++;
+    sync_terminal();
+    return 0;
+}
+
 int change_font(const char *path, uint8_t w, uint8_t h) {
     if (!path) return -EINVAL;
     if (!w || !h) return -EINVAL; // Sanity check if width or height is 0
@@ -703,18 +716,9 @@ int change_font(const char *path, uint8_t w, uint8_t h) {
         free(font_data);
         return -EFBIG;
     }
-    if (memcmp(current_font, font_data, font_size) == 0) {
-        free(font_data);
-        return 0;
-    }
-
-    clrscr(); // Clear the screen so there isn't any weird shenanigans
-
-    memcpy(current_font, font_data, font_size);
+    r = change_font_data(font_data, w, h);
     free(font_data);
-    current_font_w = w;
-    current_font_h = h;
-    return 0;
+    return r;
 }
 
 void init_default_font(void) {
@@ -732,5 +736,6 @@ void init_default_font(void) {
         // We can't print the output without the font, so just silently halt
         halt();
     }
+    current_font_generation++;
     log("fonts: initialized %dx%d font\n", current_font_w, current_font_h); // Now we can use functions like log() again!
 }

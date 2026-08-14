@@ -1,5 +1,6 @@
 #pragma once
 
+#define KDFONTOP 0x4B72
 #define TCGETS 0x5401
 #define TCSETS 0x5402
 #define TCSETSW 0x5403
@@ -24,3 +25,15 @@
 #define TCSETSF2 0x402C542D
 #define TIOCSPTLCK 0x40045431
 #define TIOCGPTN 0x80045430
+
+#define KD_FONT_OP_SET 0
+#define KD_FONT_FLAG_DONT_RECALC 1
+
+struct console_font_op {
+    unsigned int op;
+    unsigned int flags;
+    unsigned int width;
+    unsigned int height;
+    unsigned int charcount;
+    unsigned char *data;
+};

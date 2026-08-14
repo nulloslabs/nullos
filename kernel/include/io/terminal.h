@@ -7,12 +7,21 @@
 #include <io/fb.h>
 
 #define FONT_PENDING_BUFFER_SIZE 4096
+#define TERMINAL_MAX_COLUMNS 8192
+#define TAB_STOP_WORD_BITS 64
+#define TAB_STOP_WORDS (TERMINAL_MAX_COLUMNS / TAB_STOP_WORD_BITS)
 
 typedef enum {
     STATE_NORMAL,
     STATE_EXPECT_BRACKET,
     STATE_READ_PARAMS
 } parser_state_t;
+
+typedef struct {
+    unsigned char character;
+    uint32_t foreground;
+    uint32_t background;
+} terminal_cell_t;
 
 extern uint32_t *back_buffer;
 extern uint64_t back_buffer_width;
