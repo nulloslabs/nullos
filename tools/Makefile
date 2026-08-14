@@ -11,8 +11,7 @@ all: tools
 
 tools:
 	@if [ ! -f limine-binary.tar.xz ] || [ config.mk -nt limine-binary.tar.xz ] || [ Makefile -nt limine-binary.tar.xz ]; then \
-		LIMINE_URL=$$(curl -sL https://api.github.com/repos/Limine-Bootloader/Limine/releases/latest | grep -m 1 "browser_download_url.*limine-binary.tar.xz" | cut -d '"' -f4) && \
-		curl -sLo limine-binary.tar.xz "$$LIMINE_URL" && \
+		curl -fsSL --retry 3 -o limine-binary.tar.xz https://github.com/Limine-Bootloader/Limine/releases/latest/download/limine-binary.tar.xz && \
 		tar -xJf limine-binary.tar.xz; \
 	fi
 	@if [ ! -f limine-binary/limine ] || [ config.mk -nt limine-binary/limine ] || [ Makefile -nt limine-binary/limine ]; then \
