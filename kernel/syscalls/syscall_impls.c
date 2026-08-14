@@ -2345,7 +2345,7 @@ void sys_open(syscall_frame_t *frame) {
     if ((flags & O_CREAT) && !file.data && !file.mode) {
         int access = check_parent_access(abs_path, true);
         if (access < 0) { frame->rax = (uint64_t)access; return; }
-        int r = write_initrd(abs_path, "", 0, mode | 0o100000, current_task_ptr->fsuid, current_task_ptr->fsgid);
+        int r = write_initrd(abs_path, "", 0, mode | 0100000, current_task_ptr->fsuid, current_task_ptr->fsgid);
         if (r < 0) { frame->rax = (uint64_t)r; return; }
         file = read_initrd(abs_path);
     }
@@ -7797,7 +7797,7 @@ void sys_openat(syscall_frame_t *frame) {
     if ((flags & O_CREAT) && !file.data && !file.mode) {
         int access = check_parent_access(abs_path, true);
         if (access < 0) { frame->rax = (uint64_t)access; return; }
-        int r = write_initrd(abs_path, "", 0, mode | 0o100000, current_task_ptr->fsuid, current_task_ptr->fsgid);
+        int r = write_initrd(abs_path, "", 0, mode | 0100000, current_task_ptr->fsuid, current_task_ptr->fsgid);
         if (r < 0) { frame->rax = (uint64_t)r; return; }
         file = read_initrd(abs_path);
     }

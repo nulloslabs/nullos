@@ -3,6 +3,8 @@ DEBUG := 0
 KERNEL := $(shell uname -s)
 ARCH := $(shell uname -m)
 
+KERNEL_RELEASE := $(shell git rev-parse --short=7 HEAD 2>/dev/null || printf unknown)
+
 ifeq ($(KERNEL)-$(ARCH),Linux-x86_64)
 	CROSS :=
 else ifneq ($(shell command -v x86_64-elf-gcc 2>/dev/null),)
@@ -12,8 +14,7 @@ else
 endif
 
 CC = $(CROSS)gcc
-KERNEL_RELEASE := $(shell git rev-parse --short=7 HEAD 2>/dev/null || printf unknown)
-CFLAGS = -O2 -m64 -std=c23 -Wall -Wextra -I../include/ -I../include/freestanding/ -I../include/limine/ -I../uacpi/include/ -DKERNEL_RELEASE=\"$(KERNEL_RELEASE)\" -ffreestanding -nostdlib -nostdinc -fno-builtin -nodefaultlibs -nostartfiles -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie -no-pie -fno-lto -fno-stack-check -mno-red-zone -mcmodel=kernel -mabi=sysv -march=x86-64 -mtune=generic -mno-sse -mno-sse2 -mno-mmx -mno-80387 -MMD -MP
+CFLAGS = -O2 -m64 -std=c11 -Wall -Wextra -I../include/ -I../include/freestanding/ -I../include/limine/ -I../uacpi/include/ -DKERNEL_RELEASE=\"$(KERNEL_RELEASE)\" -ffreestanding -nostdlib -nostdinc -fno-builtin -nodefaultlibs -nostartfiles -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie -no-pie -fno-lto -fno-stack-check -mno-red-zone -mcmodel=kernel -mabi=sysv -march=x86-64 -mtune=generic -mno-sse -mno-sse2 -mno-mmx -mno-80387 -MMD -MP
 UACPI_CFLAGS = $(filter-out -I../include/ -I../include/freestanding/ -I../include/limine/ -I../uacpi/include/,$(CFLAGS)) -I./include/ -I./include/freestanding/ -I./include/limine/ -I./uacpi/include
 ifeq ($(DEBUG),1)
 	CFLAGS := -g $(CFLAGS)
@@ -37,5 +38,6 @@ UACPI_OUTFILE = uacpi/build/libuacpi.a
 UACPI_BUILD = uacpi/build
 SUBDIR = kernel
 
+undefine KERNEL_RELEASE
 undefine ARCH
 undefine KERNEL
