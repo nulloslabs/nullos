@@ -108,7 +108,7 @@ int get_device_mode(const char *name, mode_t *mode) {
         if (!devtmpfs_devices[i].active || strcmp(devtmpfs_devices[i].name, dev_name) != 0) continue;
         if (devtmpfs_devices[i].block) {
             *mode = S_IFBLK | 0600;
-        } else if (strncmp(dev_name, "fb", 2) == 0) {
+        } else if (strncmp(dev_name, "fb", 2) == 0 || strcmp(dev_name, "console") == 0 || (strncmp(dev_name, "tty", 3) == 0 && dev_name[3] >= '0' && dev_name[3] <= '9' && dev_name[4] == '\0')) {
             *mode = S_IFCHR | 0600;
         } else {
             *mode = S_IFCHR | 0666;

@@ -1,8 +1,9 @@
 .intel_syntax noprefix
+#include <main/smap.h>
 .global isr32
 
 .extern schedule
-.extern current_task_ptr
+.extern get_current_task_ptr
 .extern current_apic_mode
 .extern lapic_base
 .extern poll_usb_hcds
@@ -12,6 +13,7 @@
 .extern sched_lock
 
 isr32:
+    SANITIZE_KERNEL_FLAGS
     // save registers
     push rax
     push rbx
@@ -58,8 +60,9 @@ isr32:
     // prevents those software-interrupt yields from driving USB polling
     // (which would also incorrectly heat up the typematic repeat timer
     // and make USB keyboard auto-repeat run way too fast).
-    mov eax, [rip + sched_lock]
-    test eax, eax
+    mov al, 1
+    xchg byte ptr [rip + sched_lock], al
+    test al, al
     jnz .skip_switch
 
     mov rbx, rsp
@@ -67,11 +70,21 @@ isr32:
     call poll_usb_hcds
     mov rsp, rbx
 
-    mov rbx, [rip + current_task_ptr]
-    mov [rbx + 32], rsp
+    mov r12, rsp
+    and rsp, -16
+    call get_current_task_ptr
+    mov rsp, r12
+    mov [rax + 32], rsp
+    mov r12, rsp
+    and rsp, -16
     call schedule
-    mov rbx, [rip + current_task_ptr]
-    mov rsp, [rbx + 32]
+    mov rsp, r12
+    mov r12, rsp
+    and rsp, -16
+    call get_current_task_ptr
+    mov rsp, r12
+    mov rsp, [rax + 32]
+    mov byte ptr [rip + sched_lock], 0
 
 .skip_switch:
     // send EOI

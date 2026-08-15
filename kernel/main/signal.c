@@ -27,6 +27,7 @@ bool send_task_signal(int task_index, int signal) {
     }
 
     if (!ignored) task->pending_signals |= 1ULL << signal;
+    if (task->state == TASK_SLEEPING) { task->sleep_deadline_us = 0; task->state = TASK_READY; }
     if (task->state == TASK_STOPPED && (signal == SIGKILL || (!task->stopped_by_signal && !blocked && !ignored))) task->state = TASK_READY;
     return true;
 }

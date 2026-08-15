@@ -1,8 +1,9 @@
 #include <errno.h>
 #include <asm/unistd.h>
-#include <main/log.h>
+#include <main/gdt.h>
 #include <main/sched.h>
 #include <main/msr.h>
+#include <main/log.h>
 #include <io/tty.h>
 #include <syscalls/syscalls.h>
 #include <syscalls/syscall_impls.h>
@@ -38,6 +39,8 @@ const syscall_fn_t syscall_table[] = {
     [__NR_getitimer]       = sys_getitimer,
     [__NR_setitimer]       = sys_setitimer,
     [__NR_getpid]          = sys_getpid,
+    [__NR_getpriority]     = sys_getpriority,
+    [__NR_setpriority]     = sys_setpriority,
     [__NR_sendfile]        = sys_sendfile,
     [__NR_socket]          = sys_socket,
     [__NR_connect]         = sys_connect,
@@ -181,9 +184,14 @@ void init_syscalls_for_cpu(void) {
     // Enable syscall/sysret in EFER
     write_msr(MSR_EFER, read_msr(MSR_EFER) | 1);
 
-    write_msr(MSR_STAR, ((uint64_t)0x10 << 48) | ((uint64_t)0x08 << 32));
+    write_msr(MSR_STAR, ((uint64_t)GDT_SYSRET_BASE << 48) | ((uint64_t)GDT_KERNEL_CS << 32));
     write_msr(MSR_LSTAR, (uint64_t)syscall_entry);
-    write_msr(MSR_SFMASK, (1 << 9));
+    // TF -> Trap Flag
+    // IF -> Interrupt Flag
+    // DF -> Direction Flag
+    // NT -> Nested Task
+    // AC -> Alignment Check
+    write_msr(MSR_SFMASK, SYSCALL_RFLAG_TF | SYSCALL_RFLAG_IF | SYSCALL_RFLAG_DF | SYSCALL_RFLAG_NT | SYSCALL_RFLAG_AC);
 
     write_msr(MSR_KERNEL_GS_BASE, (uint64_t)current_task_ptr);
 }

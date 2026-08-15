@@ -91,7 +91,7 @@ __attribute__((noreturn)) void kmain(void) {
     if (!current_task_ptr || !current_task_ptr->kernel_stack) panic("bsp kernel stack is unavailable");
     set_tss_kernel_stack(kernel_stack_top(current_task_ptr->kernel_stack));
 
-    if (current_apic_mode != APIC_NONE) { init_mp(); init_apic_timer(250); }
+    if (current_apic_mode != APIC_NONE) { init_apic_timer(250); init_mp(); }
 
     sti();
 

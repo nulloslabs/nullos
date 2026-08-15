@@ -22,8 +22,8 @@ void kill_oom(void) {
 
         uint64_t usage = 0;
         for (int j = 0; j < VMA_MAX; j++) {
-            if (tasks[i]->vmas.entries[j].used) {
-                usage += (tasks[i]->vmas.entries[j].end - tasks[i]->vmas.entries[j].start);
+            if (tasks[i]->ctx && tasks[i]->ctx->vmas.entries[j].used) {
+                usage += (tasks[i]->ctx->vmas.entries[j].end - tasks[i]->ctx->vmas.entries[j].start);
             }
         }
 

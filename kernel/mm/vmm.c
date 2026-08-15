@@ -6,15 +6,18 @@
 #include <main/machine_info.h>
 #include <main/msr.h>
 #include <main/panic.h>
+#include <main/smap.h>
+#include <main/smep.h>
 #include <mm/vmm.h>
 #include <mm/pmm.h>
 #include <mm/mm.h>
 
-vmm_context_t kernel_context;
 static uint64_t vmalloc_cursor = 0xffffc00000000000;
 static uint64_t vuser_cursor = USER_MMAP_BASE;
 static uint64_t vuser32_cursor = USER_MMAP32_BASE;
 static spinlock_t vmm_lock = SPINLOCK_INIT;
+
+vmm_context_t kernel_context;
 
 static uint64_t* get_vmm_next_level(uint64_t* current_level, uint64_t index, bool allocate, uint64_t flags) {
     if (!current_level) { return NULL; }
@@ -353,6 +356,9 @@ vmm_context_t* create_vmm_context(void) {
 
     // get virtual address
     ctx->pml4 = (uint64_t*)phys_to_virt((uint64_t)pml4_raw);
+    ctx->refcount = 1;
+    ctx->mmap_pages = 0;
+    init_vma_table(&ctx->vmas);
 
     // zero it out
     memset(ctx->pml4, 0, PAGE_SIZE);
@@ -363,8 +369,24 @@ vmm_context_t* create_vmm_context(void) {
     return ctx;
 }
 
+bool retain_vmm_context(vmm_context_t* ctx) {
+    if (!ctx || ctx == &kernel_context) return ctx == &kernel_context;
+    uint32_t refs = __atomic_load_n(&ctx->refcount, __ATOMIC_ACQUIRE);
+    while (refs != 0 && refs != UINT32_MAX) {
+        if (__atomic_compare_exchange_n(&ctx->refcount, &refs, refs + 1, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return true;
+    }
+    return false;
+}
+
 void destroy_vmm_context(vmm_context_t* ctx) {
-    if (!ctx || !ctx->pml4) return;
+    if (!ctx || ctx == &kernel_context) return;
+    uint32_t refs = __atomic_load_n(&ctx->refcount, __ATOMIC_ACQUIRE);
+    for (;;) {
+        if (refs == 0) return;
+        if (__atomic_compare_exchange_n(&ctx->refcount, &refs, refs - 1, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) break;
+    }
+    if (refs != 1) return;
+    if (!ctx->pml4) { free(ctx); return; }
     for (int i = 0; i < 256; i++) {
         if (ctx->pml4[i] & VMM_PRESENT) {
             uint64_t pdpt_phys = ctx->pml4[i] & 0x000ffffffffff000ULL;
@@ -403,6 +425,8 @@ vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
 
     vmm_context_t* child = create_vmm_context();
     if (!child) return NULL;
+    child->mmap_pages = parent->mmap_pages;
+    memcpy(&child->vmas, &parent->vmas, sizeof(child->vmas));
 
     // Traverse the parent's page tables and copy all user pages (indices 0-255)
     for (uint64_t pml4_i = 0; pml4_i < 256; pml4_i++) {
@@ -437,8 +461,15 @@ vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
 
                     if (entry & VMM_SHARED) {
                         uint64_t phys = entry & 0x000ffffffffff000ULL;
-                        pref((void*)phys);
-                        map_vmm(child, virt, phys, entry & (0xFFFULL | VMM_NX) & ~VMM_PRESENT);
+                        if (!pref((void*)phys)) {
+                            destroy_vmm_context(child);
+                            return NULL;
+                        }
+                        if (!map_vmm(child, virt, phys, entry & (0xFFFULL | VMM_NX) & ~VMM_PRESENT)) {
+                            pfree((void*)phys);
+                            destroy_vmm_context(child);
+                            return NULL;
+                        }
                         continue;
                     }
 
@@ -672,6 +703,11 @@ void vfree(void* ptr) {
     for (uint64_t i = 0; i < count; i++) { unmap_vmm(&kernel_context, virt + (i * PAGE_SIZE)); }
 }
 
+void enable_cpu_memory_protection(void) {
+    enable_smep();
+    enable_smap();
+}
+
 void init_vmm(void) {
     // Check if we have the NX bit (mandatory for our OS)
     // NOTE: It is called XD on Intel CPUs but because AMD invented it first, lets stay loyal to AMD.
@@ -680,6 +716,13 @@ void init_vmm(void) {
     // Enable the NX/XD bit
     uint64_t efer = read_msr(MSR_EFER);
     write_msr(MSR_EFER, efer | MSR_EFER_NXE);
+
+    // Make supervisor writes obey read-only PTEs as well.
+    uint64_t cr0;
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    cr0 |= 1ULL << 16;
+    __asm__ volatile("mov %0, %%cr0" : : "r"(cr0) : "memory");
+    enable_cpu_memory_protection();
 
     uint64_t current_cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(current_cr3));

@@ -7,7 +7,7 @@
 #include <mm/pmm.h>
 #include <mm/oom.h>
 
-static uint8_t* ref_counts = NULL;
+static uint32_t *ref_counts = NULL;
 static int8_t *page_orders = NULL;
 static uint64_t free_heads[PMM_ZONE_COUNT][PMM_MAX_ORDER + 1];
 static uint64_t max_pages = 0;
@@ -162,14 +162,17 @@ void pfree_range(void *phys_addr, uint64_t size) {
     spin_unlock_irqrestore(&pmm_lock, flags);
 }
 
-void pref(void *phys_addr) {
+bool pref(void *phys_addr) {
+    bool retained = false;
     uint64_t flags;
     spin_lock_irqsave(&pmm_lock, &flags);
     uint64_t page_idx = (uint64_t)phys_addr / PAGE_SIZE;
-    if (page_idx < max_pages && ref_counts[page_idx] > 0 && ref_counts[page_idx] < 255) {
+    if (page_idx < max_pages && ref_counts[page_idx] > 0 && ref_counts[page_idx] < UINT32_MAX) {
         ref_counts[page_idx]++;
+        retained = true;
     }
     spin_unlock_irqrestore(&pmm_lock, flags);
+    return retained;
 }
 
 uint64_t get_total_pmm_memory(void) {
@@ -200,10 +203,12 @@ void init_pmm(void) {
     struct limine_memmap_response* memmap = mm_req.response;
     uint64_t hhdm_offset = hhdm_req.response->offset;
 
-    // find top of memory
+    // Size allocator metadata from usable RAM, not high MMIO mappings that
+    // can never be returned by the PMM.
     uint64_t highest_addr = 0;
     for (size_t i = 0; i < memmap->entry_count; i++) {
         struct limine_memmap_entry* entry = memmap->entries[i];
+        if (entry->type != LIMINE_MEMMAP_USABLE) continue;
         uint64_t top = entry->base + entry->length;
         if (top > highest_addr) highest_addr = top;
     }
@@ -211,7 +216,7 @@ void init_pmm(void) {
     max_pages = highest_addr / PAGE_SIZE;
     total_pages = 0;
     free_pages = 0;
-    uint64_t refcount_size = max_pages;
+    uint64_t refcount_size = max_pages * sizeof(*ref_counts);
     uint64_t order_size = max_pages * sizeof(*page_orders);
     uint64_t metadata_size = refcount_size + order_size;
     uint64_t metadata_length = (metadata_size + PAGE_SIZE - 1) & ~((uint64_t)PAGE_SIZE - 1);
@@ -226,11 +231,11 @@ void init_pmm(void) {
         uint64_t usable_start = (entry->base + PAGE_SIZE - 1) & ~((uint64_t)PAGE_SIZE - 1);
         uint64_t usable_end = (entry->base + entry->length) & ~((uint64_t)PAGE_SIZE - 1);
         if (entry->type == LIMINE_MEMMAP_USABLE && usable_end >= usable_start && usable_end - usable_start >= metadata_length) {
-            ref_counts = (uint8_t *)(usable_start + hhdm_offset);
-            page_orders = (int8_t *)(ref_counts + refcount_size);
+            ref_counts = (uint32_t *)(usable_start + hhdm_offset);
+            page_orders = (int8_t *)ref_counts + refcount_size;
             
             // initially mark everything reserved
-            memset(ref_counts, 1, refcount_size);
+            for (uint64_t page = 0; page < max_pages; page++) ref_counts[page] = 1;
             memset(page_orders, PMM_PAGE_RESERVED, order_size);
             
             // Reserve every page touched by the allocator metadata.
@@ -254,7 +259,7 @@ void init_pmm(void) {
             if (end_page > max_pages) end_page = max_pages;
             if (first_page >= end_page) continue;
             uint64_t count = end_page - first_page;
-            memset(ref_counts + first_page, 0, count);
+            memset(ref_counts + first_page, 0, count * sizeof(*ref_counts));
             free_page_range(first_page, count);
             total_pages += count;
             free_pages += count;

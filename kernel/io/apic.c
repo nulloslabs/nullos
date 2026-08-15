@@ -11,6 +11,7 @@
 #include <mm/vmm.h>
 enum apic_mode current_apic_mode = APIC_NONE;
 volatile uint8_t *lapic_base = NULL;
+static volatile uint32_t apic_timer_ticks;
 
 // xAPIC MMIO helpers
 static uint32_t lapic_read(uint32_t reg) {
@@ -112,6 +113,7 @@ void init_apic_timer(uint32_t frequency_hz) {
         // Scale to desired frequency
         uint32_t ticks_per_interval = (elapsed * 100) / (1000 / (1000 / frequency_hz));
         if (ticks_per_interval == 0) ticks_per_interval = elapsed * 100 / 10; // fallback for 100 Hz
+        apic_timer_ticks = ticks_per_interval;
 
         // Set periodic mode on vector 32
         write_msr(X2APIC_MSR_LVT_TIMER, LAPIC_TIMER_PERIODIC | 32);
@@ -138,9 +140,24 @@ void init_apic_timer(uint32_t frequency_hz) {
         uint32_t elapsed = 0xFFFFFFFF - lapic_read(LAPIC_TIMER_CCR);
         uint32_t ticks_per_interval = (elapsed * 100) / (1000 / (1000 / frequency_hz));
         if (ticks_per_interval == 0) ticks_per_interval = elapsed * 100 / 10;
+        apic_timer_ticks = ticks_per_interval;
 
         lapic_write(LAPIC_TIMER_LVT, LAPIC_TIMER_PERIODIC | 32);
         lapic_write(LAPIC_TIMER_ICR, ticks_per_interval);
+    }
+}
+
+void start_apic_timer_for_cpu(void) {
+    uint32_t ticks = __atomic_load_n(&apic_timer_ticks, __ATOMIC_ACQUIRE);
+    if (!ticks) return;
+    if (current_apic_mode == APIC_X2APIC) {
+        write_msr(X2APIC_MSR_TIMER_DCR, 0x3);
+        write_msr(X2APIC_MSR_LVT_TIMER, LAPIC_TIMER_PERIODIC | 32);
+        write_msr(X2APIC_MSR_TIMER_ICR, ticks);
+    } else if (current_apic_mode == APIC_XAPIC) {
+        lapic_write(LAPIC_TIMER_DCR, 0x3);
+        lapic_write(LAPIC_TIMER_LVT, LAPIC_TIMER_PERIODIC | 32);
+        lapic_write(LAPIC_TIMER_ICR, ticks);
     }
 }
 

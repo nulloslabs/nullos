@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <mm/pmm.h>
+#include <mm/vma.h>
 
 #define KERNEL_HEAP_BASE  0xffffb00000000000ULL
 #define KERNEL_HEAP_LIMIT 0xffffc00000000000ULL
@@ -11,6 +12,7 @@
 #define USER_MMAP32_BASE 0x0000000040000000ULL
 #define USER_VIRTUAL_LIMIT 0x0000800000000000ULL
 #define USER_STACK_BASE 0x0000700000000000ULL
+#define MAX_USER_MMAP_PAGES (262144ULL) // 1 GiB of mmap-managed virtual memory
 
 // Page Table Entry Flags
 #define VMM_PRESENT  (1ULL << 0)
@@ -25,6 +27,9 @@
 
 typedef struct {
     uint64_t* pml4; // Virtual address of the PML4 table
+    uint32_t refcount;
+    uint64_t mmap_pages;
+    vma_table_t vmas;
 } vmm_context_t;
 
 typedef struct {
@@ -48,7 +53,9 @@ void write_vmm(vmm_context_t* ctx, uint64_t virt_dest, const void* src, size_t s
 void memset_vmm(vmm_context_t* ctx, uint64_t virt_dest, int val, size_t size);
 
 void switch_vmm_context(vmm_context_t* ctx);
+void enable_cpu_memory_protection(void);
 vmm_context_t* create_vmm_context(void);
+bool retain_vmm_context(vmm_context_t* ctx);
 void destroy_vmm_context(vmm_context_t* ctx);
 vmm_context_t* clone_vmm_context(vmm_context_t* parent);
 void* vmalloc_ex(vmm_context_t* ctx, size_t size, uint64_t flags);

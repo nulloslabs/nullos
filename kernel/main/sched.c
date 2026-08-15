@@ -23,8 +23,21 @@
 
 static task_t *dead_task;
 task_t *tasks[MAX_TASKS];
-int current_task = 0;
-task_t* current_task_ptr = NULL;
+
+#define NICE_MIN (-20)
+#define NICE_MAX 19
+#define NICE_0_LOAD 1024U
+#define SCHED_WAKEUP_GRANULARITY_US 4000ULL
+
+static const uint32_t nice_weights[40] = {
+    88761, 71755, 56483, 46273, 36291, 29154, 23254, 18705, 14949, 11916,
+    9548, 7620, 6100, 4904, 3906, 3121, 2501, 1991, 1586, 1277,
+    1024, 820, 655, 526, 423, 335, 272, 215, 172, 137,
+    110, 87, 70, 56, 45, 36, 29, 23, 18, 15
+};
+
+_Static_assert(__builtin_offsetof(task_t, kernel_stack) == TASK_KERNEL_STACK_OFFSET, "task kernel stack offset changed");
+_Static_assert(__builtin_offsetof(task_t, syscall_user_rsp) == TASK_SYSCALL_USER_RSP_OFFSET, "task syscall RSP offset changed");
 static spinlock_t task_lock = SPINLOCK_INIT;
 static pid_t next_pid = 0;
 static bool sched_ready = false;
@@ -37,6 +50,52 @@ static uint64_t processes_created = 0;
 static uint64_t timer_interrupt_count = 0;
 static pid_t last_created_pid = 0;
 static void *deferred_kernel_stacks[MAX_CPUS];
+
+static uint32_t get_weight_for_nice(int nice) {
+    if (nice < NICE_MIN) nice = NICE_MIN;
+    if (nice > NICE_MAX) nice = NICE_MAX;
+    return nice_weights[nice - NICE_MIN];
+}
+
+static void initialize_task_scheduling(task_t *task, task_t *parent) {
+    task->nice = parent ? parent->nice : 0;
+    task->weight = get_weight_for_nice(task->nice);
+    task->virtual_runtime = parent ? parent->virtual_runtime : 0;
+    task->execution_start_us = 0;
+    task->sleep_deadline_us = 0;
+    task->running_cpu = -1;
+}
+
+static void wake_sleeping_tasks(uint64_t now) {
+    for (int i = 0; i < MAX_TASKS; i++) {
+        task_t *task = tasks[i];
+        if (task == dead_task || task->state != TASK_SLEEPING || now < task->sleep_deadline_us) continue;
+        task->sleep_deadline_us = 0;
+        task->state = TASK_READY;
+    }
+}
+
+task_t *get_current_task_ptr(void) { return current_task_ptr; }
+int get_task_nice(task_t *task) { return task ? task->nice : 0; }
+
+void sleep_current_task_for(uint64_t duration_us) {
+    uint64_t now = get_monotonic_time_us();
+    current_task_ptr->sleep_deadline_us = duration_us > UINT64_MAX - now ? UINT64_MAX : now + duration_us;
+    current_task_ptr->state = TASK_SLEEPING;
+    spin_unlock(&sched_lock);
+    __asm__ volatile("int $32" ::: "memory");
+    spin_lock(&sched_lock);
+    current_task_ptr->sleep_deadline_us = 0;
+}
+
+int set_task_nice(task_t *task, int nice) {
+    if (!task) return -ESRCH;
+    if (nice < NICE_MIN) nice = NICE_MIN;
+    if (nice > NICE_MAX) nice = NICE_MAX;
+    task->nice = nice;
+    task->weight = get_weight_for_nice(nice);
+    return 0;
+}
 
 static pid_t alloc_pid_locked(void) {
     for (int tries = 0; tries < PID_MAX; tries++) {
@@ -75,6 +134,7 @@ int task_index_by_pid(pid_t pid) {
 
 void release_task_slot(int task_idx) {
     if (task_idx < 0 || task_idx >= MAX_TASKS || tasks[task_idx] == dead_task) return;
+    if ((tasks[task_idx]->state == TASK_ZOMBIE || tasks[task_idx]->state == TASK_REAPED) && tasks[task_idx]->running_cpu >= 0) { tasks[task_idx]->state = TASK_REAPED; return; }
     if (tasks[task_idx]->kernel_stack) free_kernel_stack(tasks[task_idx]->kernel_stack);
     if (tasks[task_idx]->fpu_area) vfree(tasks[task_idx]->fpu_area);
     free(tasks[task_idx]);
@@ -106,7 +166,7 @@ static void update_load_averages(void) {
 uint64_t get_idle_time_us(void) {
     uint64_t idle = idle_time_us;
     uint64_t now = get_monotonic_time_us();
-    if (current_task == 0 && now >= last_account_us) idle += now - last_account_us;
+    if (current_task == get_cpu()->idle_task && now >= last_account_us) idle += now - last_account_us;
     return idle;
 }
 
@@ -142,7 +202,7 @@ bool is_sched_ready(void) {
 const vma_table_t *task_vma_table(int pid_idx) {
     if (pid_idx < 0 || pid_idx >= MAX_TASKS) return NULL;
     if (tasks[pid_idx]->state == TASK_DEAD) return NULL;
-    return &tasks[pid_idx]->vmas;
+    return tasks[pid_idx]->ctx ? &tasks[pid_idx]->ctx->vmas : NULL;
 }
 
 // Let's keep this public and not private, other functions change it.
@@ -203,6 +263,7 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
             tasks[i]->gid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->gid;
             tasks[i]->egid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->egid;
             tasks[i]->fsgid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->fsgid;
+            tasks[i]->umask = current_task_ptr ? current_task_ptr->umask : 0022;
             tasks[i]->fs_base = 0;
             tasks[i]->gs_base = 0;
             tasks[i]->ctty_idx = current_task_ptr ? current_task_ptr->ctty_idx : 0;
@@ -211,7 +272,6 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
             strcpy(tasks[i]->cwd, "/");
             tasks[i]->exe[0] = '\0';
             tasks[i]->name[0] = '\0';
-            init_vma_table(&tasks[i]->vmas);
             memset(tasks[i]->sigactions, 0, sizeof(tasks[i]->sigactions));
             tasks[i]->pgid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->pgid;
             tasks[i]->sid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->sid;
@@ -276,7 +336,7 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
             tasks[i]->pid = alloc_pid_locked();
             tasks[i]->ppid = current_task_ptr ? current_task_ptr->pid : 0;
             tasks[i]->state = TASK_READY;
-            tasks[i]->priority = 1;
+            initialize_task_scheduling(tasks[i], current_task_ptr);
 
             processes_created++;
             last_created_pid = tasks[i]->pid;
@@ -301,9 +361,6 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
             strcpy(tasks[i]->cwd, current_task_ptr->cwd);
             strcpy(tasks[i]->exe, current_task_ptr->exe);
             strcpy(tasks[i]->name, current_task_ptr->name);
-            // A forked child shares an identical address space, so its VMA
-            // layout is a copy of the parent's at this instant.
-            memcpy(&tasks[i]->vmas, &current_task_ptr->vmas, sizeof(vma_table_t));
             tasks[i]->ppid = current_task_ptr->pid;
             tasks[i]->pgid = current_task_ptr->pgid;
             tasks[i]->uid = current_task_ptr->uid;
@@ -312,6 +369,7 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
             tasks[i]->gid = current_task_ptr->gid;
             tasks[i]->egid = current_task_ptr->egid;
             tasks[i]->fsgid = current_task_ptr->fsgid;
+            tasks[i]->umask = current_task_ptr->umask;
             tasks[i]->fs_base = current_task_ptr->fs_base;
             tasks[i]->gs_base = current_task_ptr->gs_base;
             tasks[i]->ctty_idx = current_task_ptr->ctty_idx;
@@ -405,8 +463,8 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
 
             tasks[i]->rsp      = v_rsp;
             tasks[i]->pid      = alloc_pid_locked();
-            tasks[i]->state    = TASK_READY;
-            tasks[i]->priority = 1;
+            tasks[i]->state = TASK_READY;
+            initialize_task_scheduling(tasks[i], current_task_ptr);
 
             processes_created++;
             last_created_pid = tasks[i]->pid;
@@ -433,9 +491,6 @@ pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *ctx, uint64_t flag
         strcpy(tasks[i]->exe, current_task_ptr->exe);
         strcpy(tasks[i]->name, current_task_ptr->name);
 
-        // VMA layout is only meaningful when not sharing VM; for CLONE_VM the
-        // child inherits the same regions.
-        memcpy(&tasks[i]->vmas, &current_task_ptr->vmas, sizeof(vma_table_t));
 
         // CLONE_PARENT and CLONE_THREAD both make the new task's parent the
         // same as the caller's parent (i.e. the sibling/leader relationship);
@@ -449,6 +504,7 @@ pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *ctx, uint64_t flag
         tasks[i]->gid      = current_task_ptr->gid;
         tasks[i]->egid     = current_task_ptr->egid;
         tasks[i]->fsgid    = current_task_ptr->fsgid;
+        tasks[i]->umask    = current_task_ptr->umask;
         tasks[i]->ctty_idx = current_task_ptr->ctty_idx;
         tasks[i]->sid      = current_task_ptr->sid;
         // CLONE_SETTLS installs the requested TLS pointer for the child;
@@ -553,8 +609,8 @@ pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *ctx, uint64_t flag
 
         tasks[i]->rsp            = v_rsp;
         tasks[i]->pid            = alloc_pid_locked();
-        tasks[i]->state          = TASK_READY;
-        tasks[i]->priority       = 1;
+        tasks[i]->state = TASK_READY;
+        initialize_task_scheduling(tasks[i], current_task_ptr);
         tasks[i]->clear_child_tid = (flags & CLONE_CHILD_CLEARTID) ? child_tidptr : NULL;
 
         // Stamp the real pid into parent_tidptr now that it is known.
@@ -602,50 +658,45 @@ void update_interval_timers(void) {
 
 void schedule(void) {
     int cpu_index = get_cpu_index();
+    cpu_t *cpu = &cpus[cpu_index];
     if (deferred_kernel_stacks[cpu_index]) {
         free_kernel_stack(deferred_kernel_stacks[cpu_index]);
         deferred_kernel_stacks[cpu_index] = NULL;
     }
     uint64_t now = get_monotonic_time_us();
-    if (current_task == 0 && now >= last_account_us) idle_time_us += now - last_account_us;
+    if (current_task == cpu->idle_task && now >= last_account_us) idle_time_us += now - last_account_us;
     last_account_us = now;
     update_load_averages();
     update_interval_timers();
     check_futex_timeouts();
+    wake_sleeping_tasks(now);
 
     int old_task = current_task;
+    task_t *old = current_task_ptr;
 
-    if (tasks[old_task]->state == TASK_RUNNING) {
-        tasks[old_task]->state = TASK_READY;
+    if (old && old_task != cpu->idle_task) {
+        uint64_t elapsed = now >= old->execution_start_us ? now - old->execution_start_us : 0;
+        if (elapsed && old->weight) old->virtual_runtime += elapsed * NICE_0_LOAD / old->weight;
+        if (old->state == TASK_RUNNING) old->state = TASK_READY;
+        old->running_cpu = -1;
     }
 
-    int next = old_task;
-    int found = 0;
+    int next = cpu->idle_task;
+    uint64_t best_runtime = UINT64_MAX;
     for (int i = 0; i < MAX_TASKS; i++) {
-        next = (next + 1) % MAX_TASKS;
-        if (tasks[next]->state == TASK_READY) {
-            found = 1;
-            break;
-        }
+        int candidate_index = (old_task + i + 1) % MAX_TASKS;
+        task_t *candidate = tasks[candidate_index];
+        if (candidate == dead_task || candidate->state != TASK_READY || candidate->running_cpu >= 0) continue;
+        uint64_t floor = cpu->minimum_virtual_runtime > SCHED_WAKEUP_GRANULARITY_US ? cpu->minimum_virtual_runtime - SCHED_WAKEUP_GRANULARITY_US : 0;
+        if (candidate->virtual_runtime < floor) candidate->virtual_runtime = floor;
+        if (candidate->virtual_runtime < best_runtime) { best_runtime = candidate->virtual_runtime; next = candidate_index; }
     }
 
-    if (tasks[old_task]->state == TASK_ZOMBIE && tasks[old_task]->ppid == 0) {
-        if (tasks[old_task]->stack_base && tasks[old_task]->ring != 0) {
-            vfree(tasks[old_task]->stack_base);
-            tasks[old_task]->stack_base = NULL;
-        }
-        if (tasks[old_task]->kernel_stack) {
-            deferred_kernel_stacks[cpu_index] = tasks[old_task]->kernel_stack;
-            tasks[old_task]->kernel_stack = NULL;
-        }
-        if (tasks[old_task]->fpu_area) {
-            vfree(tasks[old_task]->fpu_area);
-            tasks[old_task]->fpu_area = NULL;
-        }
-        release_task_slot(old_task);
-    }
+    bool exiting = old && (old->state == TASK_ZOMBIE || old->state == TASK_REAPED);
+    bool reap_old = exiting && (old->state == TASK_REAPED || old->ppid == 0);
+    vmm_context_t *old_ctx = old ? old->ctx : NULL;
 
-    if (found) {
+    if (next >= 0 && tasks[next] != dead_task) {
         // Eager FPU save of the outgoing task (before its registers are
         // clobbered by the incoming task).  Skip if the outgoing task is a
         // zombie being reaped above — its fpu_area is already gone.
@@ -656,6 +707,9 @@ void schedule(void) {
         current_task = next;
         tasks[current_task]->state = TASK_RUNNING;
         current_task_ptr = tasks[current_task];
+        current_task_ptr->running_cpu = cpu_index;
+        current_task_ptr->execution_start_us = now;
+        if (next != cpu->idle_task && current_task_ptr->virtual_runtime > cpu->minimum_virtual_runtime) cpu->minimum_virtual_runtime = current_task_ptr->virtual_runtime;
         if (old_task != next) context_switch_count++;
 
         // Ensure TSS.RSP0 is updated so Ring 3 -> Ring 0 interrupts use the correct stack!
@@ -664,16 +718,15 @@ void schedule(void) {
             set_tss_kernel_stack_for_cpu(cpu_index, kernel_stack_top(tasks[next]->kernel_stack));
         }
 
-        if (tasks[next]->ctx && tasks[next]->ctx != tasks[old_task]->ctx) {
+        if (tasks[next]->ctx && tasks[next]->ctx != old_ctx) {
             switch_vmm_context(tasks[next]->ctx);
         }
 
         write_msr(MSR_FS_BASE, tasks[next]->fs_base);
-        // MSR_GS_BASE holds the user's gs_base (visible in ring 3 via GS).
-        // MSR_KERNEL_GS_BASE holds current_task_ptr so that swapgs in
-        // syscall_entry swaps in the kernel's task pointer, not user GS.
-        write_msr(MSR_GS_BASE, tasks[next]->gs_base);
-        write_msr(MSR_KERNEL_GS_BASE, (uint64_t)current_task_ptr);
+        // The scheduler runs with kernel GS active. Keep the task pointer active
+        // and place the next task's user GS in the swapgs shadow register.
+        write_msr(MSR_GS_BASE, (uint64_t)current_task_ptr);
+        write_msr(MSR_KERNEL_GS_BASE, tasks[next]->gs_base);
 
         // Eager FPU restore of the incoming task.  clts first so the
         // xrstor/fxrstor doesn't #NM (TS should already be clear in our
@@ -681,6 +734,21 @@ void schedule(void) {
         if (old_task != next && tasks[next]->fpu_area) {
             __asm__ volatile("clts");
             restore_fpu_state(tasks[next]->fpu_area);
+        }
+
+        if (exiting && old_ctx && old_ctx != &kernel_context) {
+            destroy_vmm_context(old_ctx);
+            old->ctx = NULL;
+        }
+
+        if (reap_old) {
+            old->stack_base = NULL;
+            if (old->kernel_stack) {
+                deferred_kernel_stacks[cpu_index] = old->kernel_stack;
+                old->kernel_stack = NULL;
+            }
+            if (old->fpu_area) { vfree(old->fpu_area); old->fpu_area = NULL; }
+            release_task_slot(old_task);
         }
     }
 }
@@ -724,17 +792,14 @@ void exit_task(int status) {
         current_task_ptr->fpu_area = NULL;
     }
 
-    if (current_task_ptr->ctx && current_task_ptr->ctx != &kernel_context) {
-        destroy_vmm_context(current_task_ptr->ctx);
-        current_task_ptr->ctx = NULL;
-    }
-
     // Notify parent with SIGCHLD and wake it if it is waiting
     for (int i = 0; i < MAX_TASKS; i++) {
         if (tasks[i]->state != TASK_DEAD && tasks[i]->pid == my_ppid) {
             tasks[i]->pending_signals |= (1ULL << SIGCHLD);
             // Wake parent if it was sleeping in wait4 (it will re-check)
-            if (tasks[i]->state == TASK_STOPPED && tasks[i]->waiting_for != 0) {
+            if (tasks[i]->state == TASK_STOPPED && (tasks[i]->waiting_for == -1 || tasks[i]->waiting_for == my_pid)) {
+                tasks[i]->waiting_for = 0;
+                tasks[i]->state = TASK_READY;
             } else if (tasks[i]->state == TASK_STOPPED || tasks[i]->state == TASK_READY) {
                 tasks[i]->state = TASK_READY;
             }
@@ -777,6 +842,11 @@ void init_sched(void) {
 
     current_task = 0;
     current_task_ptr = tasks[0];
+    cpus[0].idle_task = 0;
+    cpus[0].minimum_virtual_runtime = 0;
+    tasks[0]->state = TASK_RUNNING;
+    tasks[0]->running_cpu = 0;
+    tasks[0]->execution_start_us = get_monotonic_time_us();
     idle_time_us = 0;
     last_account_us = get_monotonic_time_us();
     last_load_update_us = last_account_us;
@@ -784,4 +854,24 @@ void init_sched(void) {
     sched_ready = true;
 
     log("sched: initialized sched\n");
+}
+
+void prepare_scheduler_cpu(int cpu_index) {
+    if (cpu_index <= 0 || cpu_index >= MAX_CPUS) return;
+    pid_t pid = create_task(idle_task, 0, &kernel_context, 0);
+    int task_index = task_index_by_pid(pid);
+    if (task_index < 0) panic("unable to create cpu idle task");
+    task_t *task = tasks[task_index];
+    task->pid = 0;
+    task->ppid = 0;
+    task->state = TASK_RUNNING;
+    task->running_cpu = cpu_index;
+    task->execution_start_us = get_monotonic_time_us();
+    next_pid = 1;
+    if (processes_created) processes_created--;
+    last_created_pid = 0;
+    cpus[cpu_index].task_index = task_index;
+    cpus[cpu_index].task = task;
+    cpus[cpu_index].idle_task = task_index;
+    cpus[cpu_index].minimum_virtual_runtime = 0;
 }

@@ -230,11 +230,7 @@ int64_t read_unix_handle(unix_handle_t *h, void *buf, size_t count, uint32_t fd_
         if (done || count == 0) return (int64_t)done;
         if (writers == 0) return 0;
         if (fd_flags & O_NONBLOCK) return -EAGAIN;
-        current_task_ptr->state = TASK_READY;
-        spin_unlock(&sched_lock);
-        __asm__ volatile("int $32");
-        spin_lock(&sched_lock);
-        current_task_ptr->state = TASK_RUNNING;
+        sleep_current_task_for(1000);
     }
     return (int64_t)done;
 }
@@ -263,11 +259,7 @@ int64_t write_unix_handle(unix_handle_t *h, const void *buf, size_t count, uint3
 
         if (done == count || count == 0) return (int64_t)done;
         if (fd_flags & O_NONBLOCK) return done ? (int64_t)done : -EAGAIN;
-        current_task_ptr->state = TASK_READY;
-        spin_unlock(&sched_lock);
-        __asm__ volatile("int $32");
-        spin_lock(&sched_lock);
-        current_task_ptr->state = TASK_RUNNING;
+        sleep_current_task_for(1000);
     }
     return (int64_t)done;
 }
@@ -331,8 +323,8 @@ int bind_unix_socket(unix_handle_t *h, const void *addr, uint32_t addrlen) {
     h->path[sizeof(h->path) - 1] = '\0';
     spin_unlock_irqrestore(&registry_lock, flags);
     if (path[0] != '@') {
-        int in = write_tmpfs(path, NULL, 0, S_IFSOCK | 0777,
-                             current_task_ptr->euid, current_task_ptr->egid);
+        mode_t mask = current_task_ptr ? current_task_ptr->umask : 0022;
+        int in = write_tmpfs(path, NULL, 0, S_IFSOCK | (0777 & ~mask), current_task_ptr->euid, current_task_ptr->egid);
         if (in < 0) {
             unbind_unix_registry(h);
             return in;
@@ -440,11 +432,7 @@ int accept_unix_socket(unix_handle_t *h, unix_handle_t **out) {
             return 0;
         }
         spin_unlock_irqrestore(&h->lock, flags);
-        current_task_ptr->state = TASK_READY;
-        spin_unlock(&sched_lock);
-        __asm__ volatile("int $32");
-        spin_lock(&sched_lock);
-        current_task_ptr->state = TASK_RUNNING;
+        sleep_current_task_for(1000);
     }
 }
 

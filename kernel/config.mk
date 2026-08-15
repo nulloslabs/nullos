@@ -1,5 +1,5 @@
 # This keeps debug info when compiling, and skips stripping.
-DEBUG := 0
+DEBUG := 1
 KERNEL := $(shell uname -s)
 ARCH := $(shell uname -m)
 

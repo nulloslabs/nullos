@@ -1,4 +1,5 @@
 .intel_syntax noprefix
+#include <main/smap.h>
 .global isr33
 
 .extern key_buffer
@@ -7,6 +8,7 @@
 .extern handle_ps2_scancode
 
 isr33:
+    SANITIZE_KERNEL_FLAGS
     push rax
     push rbx
     push rcx

@@ -121,6 +121,7 @@ typedef enum {
 #define TCP_RX_BUF_SIZE (16 * 1024)
 
 typedef struct {
+    uint32_t    refcount;
     tcp_state_t state;
     uint32_t    remote_ip;
     uint16_t    local_port;

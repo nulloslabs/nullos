@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <main/string.h>
 #include <mm/vma.h>
+#include <mm/vmm.h>
 
 static void set_name(char *dst, const char *src) {
     if (!src) { dst[0] = '\0'; return; }
@@ -28,9 +29,9 @@ static bool same_attrs(const vma_t *a, int prot, int flags, uint64_t offset,
     return true;
 }
 
-void add_vma(vma_table_t *tbl, uint64_t start, uint64_t end, int prot,
+bool add_vma(vma_table_t *tbl, uint64_t start, uint64_t end, int prot,
              int flags, uint64_t offset, const char *name) {
-    if (!tbl || start >= end) return;
+    if (!tbl || start >= end) return false;
 
     // First, drop anything inside [start,end) so we never record overlapping
     // regions; then attempt to merge with the immediate neighbors.
@@ -41,7 +42,7 @@ void add_vma(vma_table_t *tbl, uint64_t start, uint64_t end, int prot,
     for (int i = 0; i < VMA_MAX; i++) {
         if (!tbl->entries[i].used) { slot = i; break; }
     }
-    if (slot < 0) return;  // table full; the mapping still works, just untracked
+    if (slot < 0) return false;
 
     vma_t *v = &tbl->entries[slot];
     v->used   = true;
@@ -73,7 +74,7 @@ void add_vma(vma_table_t *tbl, uint64_t start, uint64_t end, int prot,
                 }
             }
             v->used = false;
-            return;
+            return true;
         }
     }
     // Try to merge with a region starting exactly at `end`.
@@ -86,9 +87,10 @@ void add_vma(vma_table_t *tbl, uint64_t start, uint64_t end, int prot,
             // file offset shifts backward by the size we prepended
             if (!(flags & VMA_FLAG_ANON)) q->offset = offset;
             v->used = false;
-            return;
+            return true;
         }
     }
+    return true;
 }
 
 void remove_vma(vma_table_t *tbl, uint64_t start, uint64_t end) {
@@ -174,6 +176,19 @@ void set_vma_heap(vma_table_t *tbl, uint64_t brk_start, uint64_t brk) {
                 VMA_PROT_READ | VMA_PROT_WRITE, VMA_FLAG_ANON | VMA_FLAG_HEAP,
                 0, "[heap]");
     }
+}
+
+uint64_t flagged_vma_pages_in_range(const vma_table_t *tbl, uint64_t start, uint64_t end, int flag) {
+    if (!tbl || start >= end) return 0;
+    uint64_t pages = 0;
+    for (int i = 0; i < VMA_MAX; i++) {
+        const vma_t *v = &tbl->entries[i];
+        if (!v->used || !(v->flags & flag) || v->end <= start || v->start >= end) continue;
+        uint64_t overlap_start = v->start > start ? v->start : start;
+        uint64_t overlap_end = v->end < end ? v->end : end;
+        pages += (overlap_end - overlap_start + PAGE_SIZE - 1) / PAGE_SIZE;
+    }
+    return pages;
 }
 
 static int cmp_vma(const void *a, const void *b) {

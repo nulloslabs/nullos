@@ -167,10 +167,7 @@ int read_pty_master(int idx, char *buf, int len) {
             // See read_pts(): release sched_lock so isr32 can poll the
             // USB keyboard and call schedule(). Otherwise the kernel spin
             // here while holding sched_lock, blocking ALL keyboard input.
-            current_task_ptr->state = TASK_READY;
-            spin_unlock(&sched_lock);
-            __asm__ volatile("int $32");
-            spin_lock(&sched_lock);
+            sleep_current_task_for(1000);
         }
     }
     return got;

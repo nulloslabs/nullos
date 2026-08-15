@@ -398,6 +398,12 @@ static tcp_socket_t *tcp_sockets[TCP_MAX_SOCKETS] = { NULL };
 
 static uint16_t tcp_next_port = 49152;  // ephemeral port range
 
+static void retain_tcp_socket(tcp_socket_t *sock) { __atomic_add_fetch(&sock->refcount, 1, __ATOMIC_ACQ_REL); }
+
+static void release_tcp_socket(tcp_socket_t *sock) {
+    if (__atomic_sub_fetch(&sock->refcount, 1, __ATOMIC_ACQ_REL) == 0) free(sock);
+}
+
 static uint16_t allocate_tcp_port(void) {
     uint64_t irq;
     spin_lock_irqsave(&net_lock, &irq);
@@ -465,7 +471,7 @@ void handle_tcp_packet(const uint8_t *frame, uint16_t len) {
         if (!tcp_sockets[i]) continue;
         if (tcp_sockets[i]->local_port  == dst_port &&
             tcp_sockets[i]->remote_port == ntohs(tcp->src_port) &&
-            tcp_sockets[i]->remote_ip   == src_ip) { sock = tcp_sockets[i]; break; }
+            tcp_sockets[i]->remote_ip   == src_ip) { sock = tcp_sockets[i]; retain_tcp_socket(sock); break; }
     }
     spin_unlock_irqrestore(&net_lock, irq);
     if (!sock) return;
@@ -533,6 +539,7 @@ void handle_tcp_packet(const uint8_t *frame, uint16_t len) {
     default:
         break;
     }
+    release_tcp_socket(sock);
 }
 
 tcp_socket_t *connect_tcp(uint32_t remote_ip, uint16_t remote_port) {
@@ -540,6 +547,7 @@ tcp_socket_t *connect_tcp(uint32_t remote_ip, uint16_t remote_port) {
     if (!sock) return NULL;
     memset(sock, 0, sizeof(tcp_socket_t));
 
+    sock->refcount   = 1;
     sock->remote_ip   = remote_ip;
     sock->remote_port = remote_port;
     sock->local_port  = allocate_tcp_port();
@@ -646,7 +654,7 @@ void free_tcp(tcp_socket_t *sock) {
     spin_lock_irqsave(&net_lock, &irq);
     for (int i = 0; i < TCP_MAX_SOCKETS; i++) { if (tcp_sockets[i] == sock) { tcp_sockets[i] = NULL; break; } }
     spin_unlock_irqrestore(&net_lock, irq);
-    free(sock);
+    release_tcp_socket(sock);
 }
 
 void poll_tcp(tcp_socket_t *sock) { (void)sock; poll_net_device(); }

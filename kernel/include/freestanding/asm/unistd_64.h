@@ -104,6 +104,8 @@
 #define __NR_getsid 124
 #define __NR_rt_sigtimedwait 128
 #define __NR_utime 132
+#define __NR_getpriority 140
+#define __NR_setpriority 141
 #define __NR_prctl 157
 #define __NR_arch_prctl 158
 #define __NR_setrlimit 160

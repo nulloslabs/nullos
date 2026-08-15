@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#define GDT_SYSRET_BASE 0x10
+
 #define GDT_KERNEL_CS 0x08
 #define GDT_KERNEL_DS 0x10
 #define GDT_USER_DS 0x18

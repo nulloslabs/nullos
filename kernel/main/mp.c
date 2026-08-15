@@ -29,14 +29,16 @@ static void ap_entry(struct limine_mp_info *info) {
 
     init_gdt_for_cpu(idx);
     load_idt_for_cpu();
+    init_apic_for_cpu();
 
-    cpus[idx].kernel_stack = alloc_kernel_stack();
+    cpus[idx].kernel_stack = cpus[idx].task->kernel_stack;
     if (!cpus[idx].kernel_stack) halt();
     set_tss_kernel_stack_for_cpu(idx, kernel_stack_top(cpus[idx].kernel_stack));
 
     init_sse_for_cpu();
+    enable_cpu_memory_protection();
     init_syscalls_for_cpu();
-    init_apic_for_cpu();
+    start_apic_timer_for_cpu();
 
     cpus[idx].active = 1;
     __sync_fetch_and_add(&ap_ready_count, 1);
@@ -95,7 +97,9 @@ void init_mp(void) {
         // No APIC, single CPU mode
         cpu_count = 1;
         cpus[0].lapic_id = 0;
-        cpus[0].current_task = 0;
+        cpus[0].task_index = current_task;
+        cpus[0].task = current_task_ptr;
+        cpus[0].idle_task = current_task;
         cpus[0].active = 1;
         map_cpu_index(0, 0);
         log("mp: no apic, running single cpu\n");
@@ -105,7 +109,9 @@ void init_mp(void) {
     if (!mp_req.response) {
         cpu_count = 1;
         cpus[0].lapic_id = get_apic_id();
-        cpus[0].current_task = 0;
+        cpus[0].task_index = current_task;
+        cpus[0].task = current_task_ptr;
+        cpus[0].idle_task = current_task;
         cpus[0].active = 1;
         map_cpu_index(cpus[0].lapic_id, 0);
         return;
@@ -116,11 +122,16 @@ void init_mp(void) {
     if (cpu_count > MAX_CPUS) cpu_count = MAX_CPUS;
 
     uint32_t bsp_id = get_apic_id();
+    int bsp_task_index = current_task;
+    task_t *bsp_task = current_task_ptr;
 
     // Initialize CPU array
     for (int i = 0; i < cpu_count; i++) {
         cpus[i].lapic_id = mp->cpus[i]->lapic_id;
-        cpus[i].current_task = -1;
+        cpus[i].task_index = -1;
+        cpus[i].task = NULL;
+        cpus[i].idle_task = -1;
+        cpus[i].minimum_virtual_runtime = 0;
         cpus[i].active = 0;
         map_cpu_index(cpus[i].lapic_id, i);
     }
@@ -129,9 +140,15 @@ void init_mp(void) {
     for (int i = 0; i < cpu_count; i++) {
         if (cpus[i].lapic_id == bsp_id) {
             cpus[i].active = 1;
-            cpus[i].current_task = 0;
+            cpus[i].task_index = bsp_task_index;
+            cpus[i].task = bsp_task;
+            cpus[i].idle_task = bsp_task_index;
             break;
         }
+    }
+
+    for (int i = 0; i < cpu_count; i++) {
+        if (cpus[i].lapic_id != bsp_id) prepare_scheduler_cpu(i);
     }
 
     // Start APs via Limine MP

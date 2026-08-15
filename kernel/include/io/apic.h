@@ -50,6 +50,7 @@ extern volatile uint8_t *lapic_base;
 void eoi_apic(void);
 uint32_t get_apic_id(void);
 void init_apic_timer(uint32_t frequency_hz);
+void start_apic_timer_for_cpu(void);
 void send_apic_ipi(uint32_t apic_id, uint32_t vector);
 void send_init_apic(uint32_t apic_id);
 enum apic_mode detect_apic(void);

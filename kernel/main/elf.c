@@ -387,7 +387,7 @@ int execute_elf(const char *path, char **argv, char **envp) {
         task->exe[sizeof(task->exe) - 1] = '\0';
         set_task_name_from_path(task, path);
         // Hand off the VMA table we accumulated during loading.
-        memcpy(&task->vmas, &local_vmas, sizeof(vma_table_t));
+        memcpy(&task->ctx->vmas, &local_vmas, sizeof(vma_table_t));
         // Save auxv for /proc/<pid>/auxv
         {
             int auxc = 0;
@@ -513,7 +513,7 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     strncpy(current_task_ptr->exe, path, sizeof(current_task_ptr->exe) - 1);
     current_task_ptr->exe[sizeof(current_task_ptr->exe) - 1] = '\0';
     set_task_name_from_path(current_task_ptr, path);
-    memcpy(&current_task_ptr->vmas, &local_vmas, sizeof(vma_table_t));
+    memcpy(&ctx->vmas, &local_vmas, sizeof(vma_table_t));
     // Save auxv for /proc/<pid>/auxv
     {
         int auxc = 0;
@@ -525,11 +525,13 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
         current_task_ptr->auxv_blob_words = words;
     }
 
+    vmm_context_t *old_ctx = current_task_ptr->ctx;
     current_task_ptr->ctx = ctx;
     current_task_ptr->stack_base = stack;
     current_task_ptr->fs_base = 0;
     write_msr(MSR_FS_BASE, 0);
     switch_vmm_context(ctx);
+    destroy_vmm_context(old_ctx);
 
     frame->rip = entry;
     frame->rdx = 0;

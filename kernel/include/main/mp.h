@@ -4,9 +4,14 @@
 #include <stdbool.h>
 #include <main/gdt.h>
 
+struct task;
+
 typedef struct {
     uint32_t lapic_id;
-    int current_task;
+    int task_index;
+    struct task *task;
+    int idle_task;
+    uint64_t minimum_virtual_runtime;
     void *kernel_stack;
     int active;
 } cpu_t;

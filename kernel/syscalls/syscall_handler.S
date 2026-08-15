@@ -1,17 +1,17 @@
 .intel_syntax noprefix
 .global syscall_entry
 .extern sched_lock
-.extern current_task_ptr
 .extern dispatch_syscall
 
 #include <main/sched.h>
+#include <main/smap.h>
 
 syscall_entry:
+    SANITIZE_KERNEL_FLAGS
     // switch to kernel stack
     swapgs
-    mov [rip + saved_user_rsp], rsp
-    mov rsp, [rip + current_task_ptr]
-    mov rsp, [rsp + 48]
+    mov qword ptr gs:[TASK_SYSCALL_USER_RSP_OFFSET], rsp
+    mov rsp, qword ptr gs:[TASK_KERNEL_STACK_OFFSET]
     add rsp, KERNEL_STACK_SIZE
 
     // build syscall_frame_t
@@ -26,7 +26,7 @@ syscall_entry:
     push r9                        // Arg 6
     push r8                        // Arg 5
     push rbp
-    push qword ptr [rip + saved_user_rsp] // user RSP
+    push qword ptr gs:[TASK_SYSCALL_USER_RSP_OFFSET] // user RSP
     push rdi                       // Arg 1
     push rsi                       // Arg 2
     push rdx                       // Arg 3
@@ -99,10 +99,5 @@ syscall_entry:
 
     swapgs
     iretq
-
-.section .bss
-.align 8
-saved_user_rsp:
-    .quad 0
 
 .section .note.GNU-stack,"",@progbits

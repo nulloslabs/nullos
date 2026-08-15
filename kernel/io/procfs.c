@@ -345,6 +345,7 @@ static size_t build_loadavg(char *out) {
 
 static char get_task_state(const task_t *task) {
     if (task->state == TASK_ZOMBIE) return 'Z';
+    if (task->state == TASK_SLEEPING) return 'S';
     if (task->state == TASK_STOPPED) return task->stopped_by_signal ? 'T' : 'S';
     return 'R';
 }
@@ -358,6 +359,12 @@ static int count_task_threads(int pid_idx) {
 static void append_stat_value(char *out, size_t *pos, uint64_t value) {
     buf_append(out, pos, PROCFS_MAX_CONTENT, " ");
     buf_append_u64(out, pos, PROCFS_MAX_CONTENT, value);
+}
+
+static void append_stat_signed_value(char *out, size_t *pos, int64_t value) {
+    buf_append(out, pos, PROCFS_MAX_CONTENT, " ");
+    if (value < 0) { buf_append(out, pos, PROCFS_MAX_CONTENT, "-"); value = -value; }
+    buf_append_u64(out, pos, PROCFS_MAX_CONTENT, (uint64_t)value);
 }
 
 static size_t build_stat(int pid_idx, char *out) {
@@ -375,8 +382,8 @@ static size_t build_stat(int pid_idx, char *out) {
     append_stat_value(out, &pos, 0);
     append_stat_value(out, &pos, task->pgid);
     for (int field = 9; field <= 17; field++) append_stat_value(out, &pos, 0);
-    append_stat_value(out, &pos, task->priority);
-    append_stat_value(out, &pos, 0);
+    append_stat_value(out, &pos, 20 + task->nice);
+    append_stat_signed_value(out, &pos, task->nice);
     append_stat_value(out, &pos, count_task_threads(pid_idx));
     for (int field = 21; field <= 52; field++) append_stat_value(out, &pos, field == 47 ? task->brk_start : 0);
     buf_append(out, &pos, PROCFS_MAX_CONTENT, "\n");

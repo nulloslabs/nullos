@@ -20,10 +20,7 @@ static uint64_t read_pts(int idx, void *buf, uint64_t count, uint64_t offset) {
 
         if (got == 0) {
             if (signal_pending()) return (uint64_t)-EINTR;
-            current_task_ptr->state = TASK_READY;
-            spin_unlock(&sched_lock);
-            __asm__ volatile("int $32");
-            spin_lock(&sched_lock);
+            sleep_current_task_for(1000);
         }
     }
     return (uint64_t)got;

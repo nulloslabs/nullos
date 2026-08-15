@@ -146,6 +146,11 @@ initrd:
 		done && \
 		find main -maxdepth 1 -type f -regextype posix-extended -regex 'main/\.[A-Z]+' -delete && \
 		(cd main && ln -sf /bin/busybox sbin/init && ln -sf sbin/init init) && \
+		if [ -f main/bin/bash ] && [ ! -e main/bin/sh ]; then \
+			(cd main && ln -sf bash bin/sh); \
+		elif [ -f main/bin/busybox ] && [ ! -e main/bin/sh ]; then \
+			(cd main && ln -sf /bin/busybox bin/sh); \
+		fi && \
 		rm -f main/linuxrc && \
 		printf "  %-7s %s\n" "CPIO" "$(SUBDIR)/$(OUTFILE)" && \
 		rm -f $(OUTFILE).cpio.part $(OUTFILE).part && \

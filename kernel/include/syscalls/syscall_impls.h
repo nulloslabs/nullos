@@ -78,6 +78,8 @@ void sys_nanosleep(syscall_frame_t *frame);
 void sys_getitimer(syscall_frame_t *frame);
 void sys_setitimer(syscall_frame_t *frame);
 void sys_getpid(syscall_frame_t *frame);
+void sys_getpriority(syscall_frame_t *frame);
+void sys_setpriority(syscall_frame_t *frame);
 void sys_getpgid(syscall_frame_t *frame);
 void sys_getpgrp(syscall_frame_t *frame);
 void sys_setsid(syscall_frame_t *frame);

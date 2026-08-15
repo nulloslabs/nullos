@@ -1,5 +1,7 @@
 .intel_syntax noprefix
 
+#include <main/smap.h>
+
 .section .text
 // We dont put our ISRS here, our macros already handle that
 .global isrrsv
@@ -70,6 +72,7 @@ isrrsv:
     jmp isrhdr
 
 isrhdr:
+    SANITIZE_KERNEL_FLAGS
     push r15
     push r14
     push r13

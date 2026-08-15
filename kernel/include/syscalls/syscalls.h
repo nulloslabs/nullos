@@ -1,7 +1,13 @@
 #pragma once
 
-#include <stddef.h>
 #include <stdint.h>
+#include <stddef.h>
+
+#define SYSCALL_RFLAG_TF (1ULL << 8)
+#define SYSCALL_RFLAG_IF (1ULL << 9)
+#define SYSCALL_RFLAG_DF (1ULL << 10)
+#define SYSCALL_RFLAG_NT (1ULL << 14)
+#define SYSCALL_RFLAG_AC (1ULL << 18)
 
 typedef struct {
     uint64_t rax;
