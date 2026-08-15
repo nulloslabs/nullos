@@ -1,13 +1,10 @@
 .intel_syntax noprefix
-
-#include <main/smap.h>
-
-.section .text
 // We dont put our ISRS here, our macros already handle that
 .global isrrsv
 .global isrhdr
-
 .extern exception_panic
+
+#include <main/smap.h>
 
 /*
 Table of all CPU faults:

@@ -1,7 +1,5 @@
 .intel_syntax noprefix
-#include <main/smap.h>
 .global isr32
-
 .extern schedule
 .extern get_current_task_ptr
 .extern current_apic_mode
@@ -11,6 +9,8 @@
 .extern record_timer_interrupt
 // The spinlock for the scheduler is just a uint32_t
 .extern sched_lock
+
+#include <main/smap.h>
 
 isr32:
     SANITIZE_KERNEL_FLAGS

@@ -1,9 +1,10 @@
 .intel_syntax noprefix
-#include <main/smap.h>
 .global isr43
 .extern pci_dispatch
 .extern current_apic_mode
 .extern lapic_base
+
+#include <main/smap.h>
 
 .macro MSI_STUB vec
 .global isr\vec

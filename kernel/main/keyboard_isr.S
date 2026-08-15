@@ -1,11 +1,11 @@
 .intel_syntax noprefix
-#include <main/smap.h>
 .global isr33
-
 .extern key_buffer
 .extern key_head
 .extern eoi_apic
 .extern handle_ps2_scancode
+
+#include <main/smap.h>
 
 isr33:
     SANITIZE_KERNEL_FLAGS

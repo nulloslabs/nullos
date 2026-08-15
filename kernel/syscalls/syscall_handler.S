@@ -3,8 +3,8 @@
 .extern sched_lock
 .extern dispatch_syscall
 
-#include <main/sched.h>
 #include <main/smap.h>
+#include <main/sched.h>
 
 syscall_entry:
     SANITIZE_KERNEL_FLAGS

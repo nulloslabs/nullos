@@ -1,9 +1,10 @@
 .intel_syntax noprefix
-#include <main/smap.h>
 .global isrspr
 .extern current_apic_mode
 .extern lapic_base
 .extern eoi_pic
+
+#include <main/smap.h>
 
 // Catch-all ISR for unhandled interrupt vectors.
 // Just sends EOI and returns — prevents #GP from missing IDT entries.

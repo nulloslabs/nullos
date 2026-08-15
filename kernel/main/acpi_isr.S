@@ -1,8 +1,9 @@
 .intel_syntax noprefix
-#include <main/smap.h>
 .global isr_acpi
 .extern uacpi_irq_dispatch
 .extern eoi_apic
+
+#include <main/smap.h>
 
 isr_acpi:
     SANITIZE_KERNEL_FLAGS
