@@ -50,6 +50,12 @@ initrd:
 		printf '%s\n' \
 			'::sysinit:/etc/init.d/rcS' \
 			'tty1::respawn:/sbin/getty -L tty1 115200 linux' \
+			'tty2::respawn:/sbin/getty -L tty2 115200 linux' \
+			'tty3::respawn:/sbin/getty -L tty3 115200 linux' \
+			'tty4::respawn:/sbin/getty -L tty4 115200 linux' \
+			'tty5::respawn:/sbin/getty -L tty5 115200 linux' \
+			'tty6::respawn:/sbin/getty -L tty6 115200 linux' \
+			'tty7::respawn:/sbin/getty -L tty7 115200 linux' \
 			'::ctrlaltdel:/sbin/reboot' \
 			'::shutdown:/bin/umount -a -r' \
 			> main/etc/inittab && \

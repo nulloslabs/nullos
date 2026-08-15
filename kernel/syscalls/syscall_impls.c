@@ -954,8 +954,10 @@ static int tty_rel_to_idx(const char *rel) {
         int idx = current_task_ptr->ctty_idx;
         return (idx >= 0) ? idx : 1;
     }
+    /* "/dev/tty0" is the foreground virtual terminal. */
+    if (rel[3] == '0' && rel[4] == '\0') return keyboard_tty;
     /* "/dev/ttyN" */
-    if (rel[3] >= '0' && rel[3] <= '7' && rel[4] == '\0')
+    if (rel[3] >= '1' && rel[3] <= '7' && rel[4] == '\0')
         return rel[3] - '0';
     return -1;
 }
@@ -2053,6 +2055,7 @@ void sys_read(syscall_frame_t *frame) {
 
 void sys_write(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
+    int tty_idx;
     const uint8_t *buf = (const uint8_t *)frame->rsi;
     uint64_t count = frame->rdx;
 
@@ -2069,6 +2072,7 @@ void sys_write(syscall_frame_t *frame) {
     uint8_t local_buf[4096];
 
     if (entry->type == FD_STREAM) {
+        tty_idx = current_task_ptr->ctty_idx >= 0 && current_task_ptr->ctty_idx < NUM_TTYS ? current_task_ptr->ctty_idx : keyboard_tty;
         uint64_t processed = 0;
         while (processed < count) {
             poll_usb_hcds();
@@ -2076,7 +2080,7 @@ void sys_write(syscall_frame_t *frame) {
             uint64_t chunk = count - processed;
             if (chunk > sizeof(local_buf)) chunk = sizeof(local_buf);
             read_vmm(current_task_ptr->ctx, local_buf, (uint64_t)buf + processed, chunk);
-            write_terminal((const char *)local_buf, chunk, false);
+            write_terminal_tty(tty_idx, (const char *)local_buf, chunk, false);
             processed += chunk;
         }
         frame->rax = !processed && signal_pending() ? (uint64_t)-EINTR : processed;
@@ -3315,6 +3319,26 @@ void sys_ioctl(syscall_frame_t *frame) {
     }
 
     switch (req) {
+        case KDGKBENT: {
+            struct kbentry entry_map;
+            if (!is_tty) { frame->rax = (uint64_t)-ENOTTY; return; }
+            if (copy_from_user(&entry_map, (const void *)argp, sizeof(entry_map)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+            entry_map.kb_value = get_tty_keymap(entry_map.kb_table, entry_map.kb_index);
+            if (copy_to_user((void *)argp, &entry_map, sizeof(entry_map)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+            frame->rax = 0;
+            return;
+        }
+
+        case KDSKBENT: {
+            struct kbentry entry_map;
+            if (!is_tty) { frame->rax = (uint64_t)-ENOTTY; return; }
+            if (!current_task_ptr || current_task_ptr->euid != 0) { frame->rax = (uint64_t)-EPERM; return; }
+            if (copy_from_user(&entry_map, (const void *)argp, sizeof(entry_map)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+            if (set_tty_keymap(entry_map.kb_table, entry_map.kb_index, entry_map.kb_value) < 0) { frame->rax = (uint64_t)-EINVAL; return; }
+            frame->rax = 0;
+            return;
+        }
+
         case KDFONTOP: {
             int idx = ioctl_tty_idx(entry);
             if (!is_tty || idx < 0 || idx >= 100) { frame->rax = (uint64_t)-ENOTTY; return; }
@@ -3543,7 +3567,6 @@ void sys_ioctl(syscall_frame_t *frame) {
                 if (!tty_ct) { frame->rax = (uint64_t)-ENOTTY; return; }
                 current_task_ptr->ctty_idx = tidx;
                 tty_ct->fg_pgrp = current_task_ptr->pgid;
-                set_keyboard_tty(tidx);
                 // Drop any keystrokes that arrived on this TTY before a
                 // reader existed (e.g. a key held during boot).  PS/2
                 // keyboards auto-repeat in hardware, so a single held key

@@ -17,6 +17,7 @@ uint8_t get_scancode(void);            // non-blocking, returns 0 if none
 char    scancode_to_ascii(uint8_t sc); // basic US QWERTY
 char    getc(void);                    // blocking: waits for a printable char
 bool    kbd_alt_pressed(void);         // Alt key held?
+bool    kbd_ctrl_pressed(void);
 uint8_t get_keyboard_led_state(void);
 void    handle_keyboard_lock_scancode(uint8_t sc);
 void    set_keyboard_cad_reboot(bool enabled);

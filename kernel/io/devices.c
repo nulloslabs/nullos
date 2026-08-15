@@ -7,6 +7,7 @@
 #include <main/panic.h>
 #include <main/strings.h>
 #include <main/rng.h>
+#include <main/sched.h>
 #include <io/terminal.h>
 #include <io/devices.h>
 #include <io/devtmpfs.h>
@@ -196,10 +197,20 @@ static uint64_t write_ptmx(const void *buf, uint64_t count, uint64_t offset, int
     return (uint64_t)-EIO;
 }
 
+static int get_tty_device_index(int dev_idx) {
+    task_t *task;
+    if (dev_idx == TTY_ACTIVE_INDEX) return keyboard_tty;
+    if (dev_idx != TTY_CTTY_INDEX) return dev_idx;
+    task = get_current_task_ptr();
+    if (task && task->ctty_idx >= 0 && task->ctty_idx < NUM_TTYS) return task->ctty_idx;
+    return keyboard_tty;
+}
+
 static uint64_t read_tty(void* buf, uint64_t count, uint64_t offset, int dev_idx) {
     (void)offset;
     spinlock_t *lk = &tty_lock;
     uint64_t irq;
+    dev_idx = get_tty_device_index(dev_idx);
     spin_lock_irqsave(lk, &irq);
     tty_t *t = get_tty(dev_idx);
     int got = 0;
@@ -210,12 +221,13 @@ static uint64_t read_tty(void* buf, uint64_t count, uint64_t offset, int dev_idx
 
 static uint64_t write_tty(const void* buf, uint64_t count, uint64_t offset, int dev_idx) {
     (void)offset;
+    dev_idx = get_tty_device_index(dev_idx);
     tty_t *t = get_tty(dev_idx);
     bool do_onlcr = false;
     if (t && (t->termios.c_oflag & OPOST) && (t->termios.c_oflag & ONLCR)) {
         do_onlcr = true;
     }
-    return write_terminal(buf, count, do_onlcr);
+    return write_terminal_tty(dev_idx, buf, count, do_onlcr);
 }
 
 static uint64_t read_urandom(void* buf, uint64_t count, uint64_t offset, int dev_idx) {
@@ -318,10 +330,9 @@ void init_devices(void) {
         }
     }
 
-    // tty0 is an alias for the primary console, not a separate terminal.
-    register_device_idx("tty",     read_tty, write_tty, 1);
-    register_device_idx("console", read_tty, write_tty, 1);
-    register_device_idx("tty0",    read_tty, write_tty, 1);
+    register_device_idx("tty",     read_tty, write_tty, TTY_CTTY_INDEX);
+    register_device_idx("console", read_tty, write_tty, TTY_ACTIVE_INDEX);
+    register_device_idx("tty0",    read_tty, write_tty, TTY_ACTIVE_INDEX);
     register_device_idx("tty1",    read_tty, write_tty, 1);
     register_device_idx("tty2",    read_tty, write_tty, 2);
     register_device_idx("tty3",    read_tty, write_tty, 3);

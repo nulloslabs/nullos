@@ -17,6 +17,7 @@ int keyboard_tty = 1;
 spinlock_t tty_lock = SPINLOCK_INIT;
 
 static bool extended_pending = false;
+static uint16_t tty_keymap[TTY_KEYMAP_TABLES][TTY_KEYMAP_KEYS];
 
 int get_tty_ring_count(tty_ring_t *r) { return (int)((r->head - r->tail + TTY_BUF_SIZE) % TTY_BUF_SIZE); }
 
@@ -56,11 +57,21 @@ static void write_tty_input_str(const char *s) {
     }
 }
 
+uint16_t get_tty_keymap(int table, int key) {
+    if (table < 0 || table >= TTY_KEYMAP_TABLES || key < 0 || key >= TTY_KEYMAP_KEYS) return KBD_KEY_HOLE;
+    return tty_keymap[table][key];
+}
+
+int set_tty_keymap(int table, int key, uint16_t value) {
+    if (table < 0 || table >= TTY_KEYMAP_TABLES || key < 0 || key >= TTY_KEYMAP_KEYS) return -1;
+    tty_keymap[table][key] = value;
+    return 0;
+}
+
 void tty_process_scancode(uint8_t sc) {
     handle_keyboard_cad_scancode(sc);
     // --- Alt key tracking ---
-    if (sc == 0x38) return;   // Alt press - already tracked in keyboard.c
-    if (sc == 0xB8) return;   // Alt release - already tracked in keyboard.c
+    if (sc == 0x38 || sc == 0xB8) { (void)scancode_to_ascii(sc); return; }
 
     // --- 0xE0 extended prefix (PS/2 arrow/nav keys) ---
     if (sc == 0xE0) {
@@ -127,6 +138,9 @@ void tty_process_scancode(uint8_t sc) {
     // since the lower[] table would return garbage for these scancodes.
     {
         const char *fseq = NULL;
+        int table = (kbd_alt_pressed() ? 8 : 0) | (kbd_ctrl_pressed() ? 4 : 0);
+        uint16_t keymap_value = get_tty_keymap(table, sc);
+        if ((keymap_value & 0xFF00) == KBD_KEY_CONSOLE && (keymap_value & 0xFF) < NUM_TTYS - 1) { set_keyboard_tty((keymap_value & 0xFF) + 1); return; }
         switch (sc) {
             case 0x3B: fseq = "\033OP";  break; // F1
             case 0x3C: fseq = "\033OQ";  break; // F2
@@ -242,14 +256,13 @@ void set_keyboard_tty(int tty_idx) {
     if (tty_idx >= 0 && tty_idx < NUM_TTYS) {
         keyboard_tty = tty_idx;
         keyboard_pty = -1;  // Switching to a real TTY disables PTY keyboard
-        uint64_t irq;
-        spin_lock_irqsave(&tty_lock, &irq);
-        ttys[tty_idx].input.head = ttys[tty_idx].input.tail = 0;
-        spin_unlock_irqrestore(&tty_lock, irq);
+        switch_terminal_tty(tty_idx);
     }
 }
 
 void init_tty(void) {
+    for (int table = 0; table < TTY_KEYMAP_TABLES; table++) for (int key = 0; key < TTY_KEYMAP_KEYS; key++) tty_keymap[table][key] = KBD_KEY_HOLE;
+    for (int tty_idx = 1; tty_idx < NUM_TTYS; tty_idx++) tty_keymap[8][0x3A + tty_idx] = KBD_KEY_CONSOLE | (tty_idx - 1);
     for (int i = 0; i < NUM_TTYS; i++) {
         ttys[i].input.head = ttys[i].input.tail = 0;
         ttys[i].active = true;

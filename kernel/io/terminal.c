@@ -75,6 +75,9 @@ static uint64_t fb_update_x = 0;
 static uint64_t fb_update_y = 0;
 static uint64_t fb_update_right = 0;
 static uint64_t fb_update_bottom = 0;
+static terminal_vt_t terminal_vts[NUM_TTYS];
+static int active_terminal_tty = 1;
+static bool terminal_display_enabled = true;
 
 uint32_t *back_buffer = NULL;
 uint64_t back_buffer_width = 0;
@@ -134,10 +137,16 @@ static uint64_t next_tab_stop(uint64_t column, uint64_t columns) {
 }
 
 static void backbuffer_reload_from_fb(struct limine_framebuffer *fb);
+static bool init_terminal_vt(terminal_vt_t *vt);
+static void reset_terminal_vt(terminal_vt_t *vt);
+static void save_terminal_vt(int tty_idx);
+static void load_terminal_vt(int tty_idx);
+static void select_terminal_vt(int tty_idx, bool display);
 
 static void begin_fb_batch(void) { fb_batch_depth++; }
 
 static void update_terminal_fb(uint64_t x, uint64_t y, uint64_t width, uint64_t height) {
+    if (!terminal_display_enabled) return;
     if (!fb_batch_depth) { (void)update_fb(x, y, width, height); return; }
     uint64_t right = x + width;
     uint64_t bottom = y + height;
@@ -157,6 +166,7 @@ static void update_terminal_fb(uint64_t x, uint64_t y, uint64_t width, uint64_t 
 
 static void end_fb_batch(void) {
     if (!fb_batch_depth || --fb_batch_depth || !fb_update_pending) return;
+    if (!terminal_display_enabled) { fb_update_pending = false; return; }
     (void)update_fb(fb_update_x, fb_update_y, fb_update_right - fb_update_x, fb_update_bottom - fb_update_y);
     fb_update_pending = false;
 }
@@ -238,6 +248,7 @@ static inline bool fb_format_matches_backbuffer(struct limine_framebuffer *fb) {
 }
 
 static void flush_backbuffer(struct limine_framebuffer *fb) {
+    if (!terminal_display_enabled) return;
     if (!back_buffer_initialized || !back_buffer || !back_buffer_available) return;
     if (!fb || !fb->address) return;
 
@@ -312,6 +323,7 @@ static void flush_backbuffer(struct limine_framebuffer *fb) {
 }
 
 static void flush_region_backbuffer(struct limine_framebuffer *fb, uint64_t x, uint64_t y, uint64_t w, uint64_t h) {
+    if (!terminal_display_enabled) return;
     if (!back_buffer_initialized || !back_buffer || !back_buffer_available) return;
     if (!fb || !fb->address) return;
     if (x >= fb->width || y >= fb->height) return;
@@ -407,6 +419,98 @@ static void blank_cells(terminal_cell_t *cells, uint64_t count, uint32_t backgro
         cells[i].foreground = default_color;
         cells[i].background = background;
     }
+}
+
+static bool init_terminal_vt(terminal_vt_t *vt) {
+    uint64_t pixel_count = back_buffer_width * back_buffer_height;
+    uint64_t cell_count = cell_columns * cell_rows;
+    if (!pixel_count || !back_buffer_width || !back_buffer_height) return false;
+    memset(vt, 0, sizeof(*vt));
+    vt->back_buffer = (uint32_t *)malloc(pixel_count * sizeof(uint32_t));
+    vt->alt_back_buffer = (uint32_t *)malloc(pixel_count * sizeof(uint32_t));
+    vt->cell_buffer = cell_count ? (terminal_cell_t *)malloc(cell_count * sizeof(terminal_cell_t)) : NULL;
+    vt->alt_cell_buffer = cell_count ? (terminal_cell_t *)malloc(cell_count * sizeof(terminal_cell_t)) : NULL;
+    if (!vt->back_buffer || !vt->alt_back_buffer || (cell_count && (!vt->cell_buffer || !vt->alt_cell_buffer))) {
+        reset_terminal_vt(vt);
+        return false;
+    }
+    for (uint64_t i = 0; i < pixel_count; i++) { vt->back_buffer[i] = 0; vt->alt_back_buffer[i] = 0; }
+    blank_cells(vt->cell_buffer, cell_count, 0);
+    blank_cells(vt->alt_cell_buffer, cell_count, 0);
+    vt->state = STATE_NORMAL;
+    vt->last_printable_char = ' ';
+    vt->cursor_enabled = true;
+    vt->fg_color = 0x00AAAAAA;
+    vt->default_color = 0x00AAAAAA;
+    vt->initialized = true;
+    return true;
+}
+
+static void reset_terminal_vt(terminal_vt_t *vt) {
+    free(vt->back_buffer);
+    free(vt->alt_back_buffer);
+    free(vt->cell_buffer);
+    free(vt->alt_cell_buffer);
+    memset(vt, 0, sizeof(*vt));
+}
+
+static void save_terminal_vt(int tty_idx) {
+    terminal_vt_t *vt = &terminal_vts[tty_idx];
+    vt->state = state;
+    memcpy(vt->ansi_buffer, ansi_buffer, sizeof(ansi_buffer));
+    vt->ansi_idx = ansi_idx;
+    vt->is_bold = is_bold; vt->is_reverse = is_reverse; vt->reverse_bg = reverse_bg;
+    vt->last_printable_char = last_printable_char; vt->acs_active = acs_active; vt->expect_charset_designator = expect_charset_designator;
+    vt->cursor_visible = cursor_visible; vt->cursor_enabled = cursor_enabled;
+    memcpy(vt->tab_stops, tab_stops, sizeof(tab_stops)); vt->tab_stops_initialized = tab_stops_initialized;
+    memcpy(vt->cursor_saved_pixels, cursor_saved_pixels, sizeof(cursor_saved_pixels));
+    vt->cursor_saved_x = cursor_saved_x; vt->cursor_saved_y = cursor_saved_y; vt->cursor_saved_w = cursor_saved_w; vt->cursor_saved_h = cursor_saved_h;
+    vt->region_set = region_set; vt->region_top = region_top; vt->region_bottom = region_bottom;
+    vt->saved_cursor_x = saved_cursor_x; vt->saved_cursor_y = saved_cursor_y; vt->saved_fg = saved_fg; vt->saved_bg = saved_bg;
+    vt->saved_bold = saved_bold; vt->saved_reverse = saved_reverse;
+    vt->alt_active = alt_active; vt->alt_saved_cursor_x = alt_saved_cursor_x; vt->alt_saved_cursor_y = alt_saved_cursor_y;
+    vt->alt_saved_fg = alt_saved_fg; vt->alt_saved_bg = alt_saved_bg; vt->alt_saved_bold = alt_saved_bold; vt->alt_saved_reverse = alt_saved_reverse;
+    vt->back_buffer = back_buffer; vt->alt_back_buffer = alt_back_buffer; vt->cell_buffer = cell_buffer; vt->alt_cell_buffer = alt_cell_buffer;
+    vt->cursor_x = cursor_x; vt->cursor_y = cursor_y; vt->fg_color = fg_color; vt->bg_color = bg_color; vt->default_color = default_color; vt->line_start_y = line_start_y;
+    vt->initialized = true;
+}
+
+static void load_terminal_vt(int tty_idx) {
+    terminal_vt_t *vt = &terminal_vts[tty_idx];
+    state = vt->state;
+    memcpy(ansi_buffer, vt->ansi_buffer, sizeof(ansi_buffer));
+    ansi_idx = vt->ansi_idx;
+    is_bold = vt->is_bold; is_reverse = vt->is_reverse; reverse_bg = vt->reverse_bg;
+    last_printable_char = vt->last_printable_char; acs_active = vt->acs_active; expect_charset_designator = vt->expect_charset_designator;
+    cursor_visible = vt->cursor_visible; cursor_enabled = vt->cursor_enabled;
+    memcpy(tab_stops, vt->tab_stops, sizeof(tab_stops)); tab_stops_initialized = vt->tab_stops_initialized;
+    memcpy(cursor_saved_pixels, vt->cursor_saved_pixels, sizeof(cursor_saved_pixels));
+    cursor_saved_x = vt->cursor_saved_x; cursor_saved_y = vt->cursor_saved_y; cursor_saved_w = vt->cursor_saved_w; cursor_saved_h = vt->cursor_saved_h;
+    region_set = vt->region_set; region_top = vt->region_top; region_bottom = vt->region_bottom;
+    saved_cursor_x = vt->saved_cursor_x; saved_cursor_y = vt->saved_cursor_y; saved_fg = vt->saved_fg; saved_bg = vt->saved_bg;
+    saved_bold = vt->saved_bold; saved_reverse = vt->saved_reverse;
+    alt_active = vt->alt_active; alt_saved_cursor_x = vt->alt_saved_cursor_x; alt_saved_cursor_y = vt->alt_saved_cursor_y;
+    alt_saved_fg = vt->alt_saved_fg; alt_saved_bg = vt->alt_saved_bg; alt_saved_bold = vt->alt_saved_bold; alt_saved_reverse = vt->alt_saved_reverse;
+    back_buffer = vt->back_buffer; alt_back_buffer = vt->alt_back_buffer; cell_buffer = vt->cell_buffer; alt_cell_buffer = vt->alt_cell_buffer;
+    cursor_x = vt->cursor_x; cursor_y = vt->cursor_y; fg_color = vt->fg_color; bg_color = vt->bg_color; default_color = vt->default_color; line_start_y = vt->line_start_y;
+}
+
+static void select_terminal_vt(int tty_idx, bool display) {
+    if (tty_idx < 0 || tty_idx >= NUM_TTYS) return;
+    if (!terminal_vts[tty_idx].initialized && !init_terminal_vt(&terminal_vts[tty_idx])) return;
+    uint64_t flags;
+    spin_lock_irqsave(&term_lock, &flags);
+    if (active_terminal_tty != tty_idx) {
+        if (cursor_visible) show_cursor(false);
+        save_terminal_vt(active_terminal_tty);
+        load_terminal_vt(tty_idx);
+        active_terminal_tty = tty_idx;
+    }
+    if (display && fb_req.response && fb_req.response->framebuffer_count > 0) {
+        flush_backbuffer(fb_req.response->framebuffers[0]);
+        if (cursor_enabled) show_cursor(true);
+    }
+    spin_unlock_irqrestore(&term_lock, flags);
 }
 
 static void clear_cell_range(uint64_t row, uint64_t first, uint64_t end, uint32_t background) {
@@ -1362,6 +1466,12 @@ void sync_terminal(void) {
         }
     }
 
+    if (resized) {
+        for (int i = 0; i < NUM_TTYS; i++) {
+            if (i != active_terminal_tty) reset_terminal_vt(&terminal_vts[i]);
+        }
+    }
+
     uint64_t rflags;
     spin_lock_irqsave(&term_lock, &rflags);
 
@@ -1492,6 +1602,7 @@ void sync_terminal(void) {
 
     flush_backbuffer(fb);
     if (font_changed && cursor_enabled) show_cursor(true);
+    save_terminal_vt(active_terminal_tty);
     spin_unlock_irqrestore(&term_lock, rflags);
     free(old_back_buffer);
     free(old_alt_back_buffer);
@@ -1673,6 +1784,25 @@ uint64_t write_terminal(const char *buf, uint64_t count, bool onlcr) {
     end_fb_batch();
     spin_unlock_irqrestore(&term_lock, rflags);
     return count;
+}
+
+uint64_t write_terminal_tty(int tty_idx, const char *buf, uint64_t count, bool onlcr) {
+    int previous_tty = active_terminal_tty;
+    if (tty_idx < 0 || tty_idx >= NUM_TTYS) tty_idx = previous_tty;
+    if (tty_idx != previous_tty) {
+        select_terminal_vt(tty_idx, false);
+        terminal_display_enabled = false;
+    }
+    uint64_t result = write_terminal(buf, count, onlcr);
+    if (tty_idx != previous_tty) {
+        terminal_display_enabled = true;
+        select_terminal_vt(previous_tty, true);
+    }
+    return result;
+}
+
+void switch_terminal_tty(int tty_idx) {
+    select_terminal_vt(tty_idx, true);
 }
 
 int puts(const char *s) {
@@ -1883,5 +2013,6 @@ void init_terminal_backbuffer(void) {
         back_buffer_initialized = true;
         back_buffer_available = false;
     }
+    save_terminal_vt(active_terminal_tty);
     log("terminal: initialized terminal backbuffer\n");
 }

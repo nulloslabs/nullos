@@ -1,6 +1,8 @@
 #pragma once
 
 #define KDFONTOP 0x4B72
+#define KDGKBENT 0x4B46
+#define KDSKBENT 0x4B47
 #define TCGETS 0x5401
 #define TCSETS 0x5402
 #define TCSETSW 0x5403
@@ -36,4 +38,10 @@ struct console_font_op {
     unsigned int height;
     unsigned int charcount;
     unsigned char *data;
+};
+
+struct kbentry {
+    unsigned char kb_table;
+    unsigned char kb_index;
+    unsigned short kb_value;
 };

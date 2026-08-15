@@ -26,6 +26,7 @@ static bool cad_reboot_enabled = false;
 static uint8_t lock_leds = 0;
 
 bool kbd_alt_pressed(void) { return alt_pressed; }
+bool kbd_ctrl_pressed(void) { return ctrl_pressed; }
 
 void set_keyboard_cad_reboot(bool enabled) { cad_reboot_enabled = enabled; }
 
