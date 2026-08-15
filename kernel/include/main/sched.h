@@ -38,6 +38,12 @@
 #define TASK_KERNEL_STACK_OFFSET 48
 #define TASK_SYSCALL_USER_RSP_OFFSET 56
 
+#define NICE_MIN (-20)
+#define NICE_MAX 19
+#define NICE_0_LOAD 1024U
+
+#define SCHED_WAKEUP_GRANULARITY_US 4000ULL
+
 #ifndef __ASSEMBLY__
 // TODO (maybe): Make this shit of a struct less messier
 typedef struct task {

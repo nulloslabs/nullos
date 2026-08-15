@@ -21,24 +21,9 @@
 #include <mm/vmm.h>
 #include <syscalls/syscall_impls.h>
 
-static task_t *dead_task;
-task_t *tasks[MAX_TASKS];
-
-#define NICE_MIN (-20)
-#define NICE_MAX 19
-#define NICE_0_LOAD 1024U
-#define SCHED_WAKEUP_GRANULARITY_US 4000ULL
-
-static const uint32_t nice_weights[40] = {
-    88761, 71755, 56483, 46273, 36291, 29154, 23254, 18705, 14949, 11916,
-    9548, 7620, 6100, 4904, 3906, 3121, 2501, 1991, 1586, 1277,
-    1024, 820, 655, 526, 423, 335, 272, 215, 172, 137,
-    110, 87, 70, 56, 45, 36, 29, 23, 18, 15
-};
-
 _Static_assert(__builtin_offsetof(task_t, kernel_stack) == TASK_KERNEL_STACK_OFFSET, "task kernel stack offset changed");
 _Static_assert(__builtin_offsetof(task_t, syscall_user_rsp) == TASK_SYSCALL_USER_RSP_OFFSET, "task syscall RSP offset changed");
-static spinlock_t task_lock = SPINLOCK_INIT;
+
 static pid_t next_pid = 0;
 static bool sched_ready = false;
 static uint64_t idle_time_us = 0;
@@ -50,6 +35,20 @@ static uint64_t processes_created = 0;
 static uint64_t timer_interrupt_count = 0;
 static pid_t last_created_pid = 0;
 static void *deferred_kernel_stacks[MAX_CPUS];
+static task_t *dead_task;
+static spinlock_t task_lock = SPINLOCK_INIT;
+
+spinlock_t sched_lock = SPINLOCK_INIT; // Let's keep this public since other functions use it.
+task_t *tasks[MAX_TASKS];
+
+static const uint32_t nice_weights[40] = {
+    88761, 71755, 56483, 46273, 36291, 29154, 23254, 18705, 14949, 11916,
+    9548, 7620, 6100, 4904, 3906, 3121, 2501, 1991, 1586, 1277,
+    1024, 820, 655, 526, 423, 335, 272, 215, 172, 137,
+    110, 87, 70, 56, 45, 36, 29, 23, 18, 15
+};
+
+static void idle_task(void) { idle(); }
 
 static uint32_t get_weight_for_nice(int nice) {
     if (nice < NICE_MIN) nice = NICE_MIN;
@@ -73,28 +72,6 @@ static void wake_sleeping_tasks(uint64_t now) {
         task->sleep_deadline_us = 0;
         task->state = TASK_READY;
     }
-}
-
-task_t *get_current_task_ptr(void) { return current_task_ptr; }
-int get_task_nice(task_t *task) { return task ? task->nice : 0; }
-
-void sleep_current_task_for(uint64_t duration_us) {
-    uint64_t now = get_monotonic_time_us();
-    current_task_ptr->sleep_deadline_us = duration_us > UINT64_MAX - now ? UINT64_MAX : now + duration_us;
-    current_task_ptr->state = TASK_SLEEPING;
-    spin_unlock(&sched_lock);
-    __asm__ volatile("int $32" ::: "memory");
-    spin_lock(&sched_lock);
-    current_task_ptr->sleep_deadline_us = 0;
-}
-
-int set_task_nice(task_t *task, int nice) {
-    if (!task) return -ESRCH;
-    if (nice < NICE_MIN) nice = NICE_MIN;
-    if (nice > NICE_MAX) nice = NICE_MAX;
-    task->nice = nice;
-    task->weight = get_weight_for_nice(nice);
-    return 0;
 }
 
 static pid_t alloc_pid_locked(void) {
@@ -122,24 +99,6 @@ static bool alloc_task_slot(int i) {
     return true;
 }
 
-task_t *task_by_pid(pid_t pid) {
-    int idx = task_index_by_pid(pid);
-    return idx < 0 ? NULL : tasks[idx];
-}
-
-int task_index_by_pid(pid_t pid) {
-    for (int i = 0; i < MAX_TASKS; i++) if (tasks[i] != dead_task && tasks[i]->state != TASK_DEAD && tasks[i]->pid == pid) return i;
-    return -1;
-}
-
-void release_task_slot(int task_idx) {
-    if (task_idx < 0 || task_idx >= MAX_TASKS || tasks[task_idx] == dead_task) return;
-    if ((tasks[task_idx]->state == TASK_ZOMBIE || tasks[task_idx]->state == TASK_REAPED) && tasks[task_idx]->running_cpu >= 0) { tasks[task_idx]->state = TASK_REAPED; return; }
-    if (tasks[task_idx]->kernel_stack) free_kernel_stack(tasks[task_idx]->kernel_stack);
-    if (tasks[task_idx]->fpu_area) vfree(tasks[task_idx]->fpu_area);
-    free(tasks[task_idx]);
-    tasks[task_idx] = dead_task;
-}
 
 static unsigned long calc_load(unsigned long load, unsigned long exp, unsigned long active) {
     return (load * exp + active * (LOAD_FIXED_1 - exp)) >> 11;
@@ -161,6 +120,47 @@ static void update_load_averages(void) {
         load_averages[2] = calc_load(load_averages[2], LOAD_EXP_15, active);
         last_load_update_us += LOAD_UPDATE_US;
     }
+}
+
+task_t *get_current_task_ptr(void) { return current_task_ptr; }
+int get_task_nice(task_t *task) { return task ? task->nice : 0; }
+
+void sleep_current_task_for(uint64_t duration_us) {
+    uint64_t now = get_monotonic_time_us();
+    current_task_ptr->sleep_deadline_us = duration_us > UINT64_MAX - now ? UINT64_MAX : now + duration_us;
+    current_task_ptr->state = TASK_SLEEPING;
+    spin_unlock(&sched_lock);
+    __asm__ volatile("int $32" ::: "memory");
+    spin_lock(&sched_lock);
+    current_task_ptr->sleep_deadline_us = 0;
+}
+
+int set_task_nice(task_t *task, int nice) {
+    if (!task) return -ESRCH;
+    if (nice < NICE_MIN) nice = NICE_MIN;
+    if (nice > NICE_MAX) nice = NICE_MAX;
+    task->nice = nice;
+    task->weight = get_weight_for_nice(nice);
+    return 0;
+}
+
+task_t *task_by_pid(pid_t pid) {
+    int idx = task_index_by_pid(pid);
+    return idx < 0 ? NULL : tasks[idx];
+}
+
+int task_index_by_pid(pid_t pid) {
+    for (int i = 0; i < MAX_TASKS; i++) if (tasks[i] != dead_task && tasks[i]->state != TASK_DEAD && tasks[i]->pid == pid) return i;
+    return -1;
+}
+
+void release_task_slot(int task_idx) {
+    if (task_idx < 0 || task_idx >= MAX_TASKS || tasks[task_idx] == dead_task) return;
+    if ((tasks[task_idx]->state == TASK_ZOMBIE || tasks[task_idx]->state == TASK_REAPED) && tasks[task_idx]->running_cpu >= 0) { tasks[task_idx]->state = TASK_REAPED; return; }
+    if (tasks[task_idx]->kernel_stack) free_kernel_stack(tasks[task_idx]->kernel_stack);
+    if (tasks[task_idx]->fpu_area) vfree(tasks[task_idx]->fpu_area);
+    free(tasks[task_idx]);
+    tasks[task_idx] = dead_task;
 }
 
 uint64_t get_idle_time_us(void) {
@@ -204,11 +204,6 @@ const vma_table_t *task_vma_table(int pid_idx) {
     if (tasks[pid_idx]->state == TASK_DEAD) return NULL;
     return tasks[pid_idx]->ctx ? &tasks[pid_idx]->ctx->vmas : NULL;
 }
-
-// Let's keep this public and not private, other functions change it.
-spinlock_t sched_lock = SPINLOCK_INIT;
-
-static void idle_task(void) { idle(); }
 
 pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_t initial_rsp) {
     uint64_t flags;
@@ -831,6 +826,26 @@ bool signal_pending(void) {
     uint64_t blocked_shifted = current_task_ptr->blocked_signals << 1;
     return (current_task_ptr->pending_signals & (~blocked_shifted | unblockable)) != 0;
 }
+void prepare_scheduler_cpu(int cpu_index) {
+    if (cpu_index <= 0 || cpu_index >= MAX_CPUS) return;
+    pid_t pid = create_task(idle_task, 0, &kernel_context, 0);
+    int task_index = task_index_by_pid(pid);
+    if (task_index < 0) panic("unable to create cpu idle task");
+    task_t *task = tasks[task_index];
+    task->pid = 0;
+    task->ppid = 0;
+    task->state = TASK_RUNNING;
+    task->running_cpu = cpu_index;
+    task->execution_start_us = get_monotonic_time_us();
+    next_pid = 1;
+    if (processes_created) processes_created--;
+    last_created_pid = 0;
+    cpus[cpu_index].task_index = task_index;
+    cpus[cpu_index].task = task;
+    cpus[cpu_index].idle_task = task_index;
+    cpus[cpu_index].minimum_virtual_runtime = 0;
+}
+
 
 void init_sched(void) {
     dead_task = malloc(sizeof(*dead_task));
@@ -854,24 +869,4 @@ void init_sched(void) {
     sched_ready = true;
 
     log("sched: initialized sched\n");
-}
-
-void prepare_scheduler_cpu(int cpu_index) {
-    if (cpu_index <= 0 || cpu_index >= MAX_CPUS) return;
-    pid_t pid = create_task(idle_task, 0, &kernel_context, 0);
-    int task_index = task_index_by_pid(pid);
-    if (task_index < 0) panic("unable to create cpu idle task");
-    task_t *task = tasks[task_index];
-    task->pid = 0;
-    task->ppid = 0;
-    task->state = TASK_RUNNING;
-    task->running_cpu = cpu_index;
-    task->execution_start_us = get_monotonic_time_us();
-    next_pid = 1;
-    if (processes_created) processes_created--;
-    last_created_pid = 0;
-    cpus[cpu_index].task_index = task_index;
-    cpus[cpu_index].task = task;
-    cpus[cpu_index].idle_task = task_index;
-    cpus[cpu_index].minimum_virtual_runtime = 0;
 }
