@@ -18,11 +18,11 @@ all: $(OBJ)
 
 vmm.o: mm.o
 
-%.o: %.c ../Makefile ../config.mk ../include/limine/limine.h
+%.o: %.c Makefile ../Makefile ../config.mk ../include/limine/limine.h
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/mm/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
-%.o: %.S ../Makefile ../config.mk ../include/limine/limine.h
+%.o: %.S Makefile ../Makefile ../config.mk ../include/limine/limine.h
 	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/mm/$@"
 	@$(AS) $(AFLAGS) -c $< -o $@
 

@@ -16,11 +16,23 @@ all: $(OBJ)
 
 -include $(DEP)
 
-%.o: %.c ../Makefile ../config.mk ../include/limine/limine.h
+# kernel.h is special since it holds our kernel version.
+GIT_HEAD := $(shell git rev-parse --git-path HEAD)
+GIT_REF := $(shell git symbolic-ref -q HEAD)
+GIT_REF_FILE := $(shell git rev-parse --git-path $(GIT_REF))
+
+../include/main/kernel.h: $(GIT_HEAD) $(GIT_REF_FILE)
+	@touch $@
+
+undefine GET_REF_FILE
+undefine GET_REF
+undefine GIT_HEAD
+
+%.o: %.c Makefile ../Makefile ../config.mk ../include/limine/limine.h
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/main/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
-%.o: %.S ../Makefile ../config.mk ../include/limine/limine.h
+%.o: %.S Makefile ../Makefile ../config.mk ../include/limine/limine.h
 	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/main/$@"
 	@$(AS) $(AFLAGS) -c $< -o $@
 
