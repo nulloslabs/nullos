@@ -19,13 +19,13 @@ all: $(OBJ)
 # kernel.h is special since it holds our kernel version.
 GIT_HEAD := $(shell git rev-parse --git-path HEAD)
 GIT_REF := $(shell git symbolic-ref -q HEAD)
-GIT_REF_FILE := $(shell git rev-parse --git-path $(GIT_REF))
+GIT_REF_FILE := $(if $(GIT_REF),$(shell git rev-parse --git-path $(GIT_REF)))
 
 ../include/main/kernel.h: $(GIT_HEAD) $(GIT_REF_FILE)
 	@touch $@
 
-undefine GET_REF_FILE
-undefine GET_REF
+undefine GIT_REF_FILE
+undefine GIT_REF
 undefine GIT_HEAD
 
 %.o: %.c Makefile ../Makefile ../config.mk ../include/limine/limine.h
