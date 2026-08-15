@@ -66,20 +66,11 @@ jobs:
           notes="Automated NullOS build for commit [$GITHUB_SHA]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA)."
 
           if gh release view rolling >/dev/null 2>&1; then
-            while IFS= read -r asset; do
-              if [ -n "$asset" ]; then
-                gh release delete-asset rolling "$asset" --yes
-              fi
-            done < <(gh release view rolling --json assets --jq '.assets[].name')
-            gh release edit rolling \
-              --title "NullOS ($SHORT_SHA)" \
-              --notes "$notes" \
-              --latest
-            gh release upload rolling "$ISO_NAME"
-          else
-            gh release create rolling "$ISO_NAME" \
-              --title "NullOS ($SHORT_SHA)" \
-              --notes "$notes" \
-              --latest \
-              --verify-tag
+            gh release delete rolling --yes
           fi
+
+          gh release create rolling "$ISO_NAME" \
+            --title "NullOS ($SHORT_SHA)" \
+            --notes "$notes" \
+            --latest \
+            --verify-tag
