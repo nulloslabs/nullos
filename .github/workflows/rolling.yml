@@ -60,7 +60,9 @@ jobs:
           ISO_NAME: ${{ steps.build.outputs.iso_name }}
           SHORT_SHA: ${{ steps.build.outputs.short_sha }}
         run: |
-          release_tag="rolling-$SHORT_SHA"
+          commit_timestamp="$(git show -s --format=%ct "$GITHUB_SHA")"
+          release_datetime="$(date -u -d "@$commit_timestamp" +%Y%m%d-%H%M%S)"
+          release_tag="rolling-$release_datetime-$SHORT_SHA"
 
           # Remove the legacy single rolling release and tag during migration.
           if gh release view rolling >/dev/null 2>&1; then
