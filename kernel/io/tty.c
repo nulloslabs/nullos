@@ -13,7 +13,7 @@
 #include <io/terminal.h>
 
 tty_t ttys[NUM_TTYS];
-int keyboard_tty = 0;
+int keyboard_tty = 1;
 spinlock_t tty_lock = SPINLOCK_INIT;
 
 static bool extended_pending = false;

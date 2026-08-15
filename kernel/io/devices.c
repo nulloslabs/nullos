@@ -318,9 +318,10 @@ void init_devices(void) {
         }
     }
 
-    register_device_idx("tty",     read_tty, write_tty, 0);
-    register_device_idx("console", read_tty, write_tty, 0);
-    register_device_idx("tty0",    read_tty, write_tty, 0);
+    // tty0 is an alias for the primary console, not a separate terminal.
+    register_device_idx("tty",     read_tty, write_tty, 1);
+    register_device_idx("console", read_tty, write_tty, 1);
+    register_device_idx("tty0",    read_tty, write_tty, 1);
     register_device_idx("tty1",    read_tty, write_tty, 1);
     register_device_idx("tty2",    read_tty, write_tty, 2);
     register_device_idx("tty3",    read_tty, write_tty, 3);

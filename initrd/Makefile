@@ -49,7 +49,7 @@ initrd:
 		ln -snf usr/lib64 main/lib64 && \
 		printf '%s\n' \
 			'::sysinit:/etc/init.d/rcS' \
-			'tty0::respawn:/sbin/getty -L tty0 115200 linux' \
+			'tty1::respawn:/sbin/getty -L tty1 115200 linux' \
 			'::ctrlaltdel:/sbin/reboot' \
 			'::shutdown:/bin/umount -a -r' \
 			> main/etc/inittab && \

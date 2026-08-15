@@ -261,7 +261,7 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
             tasks[i]->umask = current_task_ptr ? current_task_ptr->umask : 0022;
             tasks[i]->fs_base = 0;
             tasks[i]->gs_base = 0;
-            tasks[i]->ctty_idx = current_task_ptr ? current_task_ptr->ctty_idx : 0;
+            tasks[i]->ctty_idx = current_task_ptr ? current_task_ptr->ctty_idx : 1;
 
             init_fd_table(&tasks[i]->fd_table);
             strcpy(tasks[i]->cwd, "/");

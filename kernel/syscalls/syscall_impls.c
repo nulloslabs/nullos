@@ -607,7 +607,7 @@ static bool stat_proc(const char *abs_path, const char *orig_path, struct stat *
             } else {
                 resolve_link_target(abs_path, linkbuf, target_abs, sizeof(target_abs));
             }
-            // Try virtual device first (e.g. /dev/tty0), then initrd.
+            // Try virtual device first (e.g. /dev/tty1), then initrd.
             if (stat_virtual_device(target_abs, kst)) return true;
             if (stat_initrd_to_kst(target_abs, kst, true)) return true;
         }
@@ -952,7 +952,7 @@ static int tty_rel_to_idx(const char *rel) {
     /* bare "/dev/tty" = controlling terminal */
     if (rel[3] == '\0') {
         int idx = current_task_ptr->ctty_idx;
-        return (idx >= 0) ? idx : 0;
+        return (idx >= 0) ? idx : 1;
     }
     /* "/dev/ttyN" */
     if (rel[3] >= '0' && rel[3] <= '7' && rel[4] == '\0')
@@ -1150,7 +1150,7 @@ static int select_check_fd(int fd) {
 
     // readable?
     if (entry->type == FD_STREAM) {
-        int tty_idx = current_task_ptr->ctty_idx >= 0 ? current_task_ptr->ctty_idx : 0;
+        int tty_idx = current_task_ptr->ctty_idx >= 0 ? current_task_ptr->ctty_idx : 1;
         tty_t *t = get_tty(tty_idx);
         if (t && get_tty_ring_count(&t->input) > 0) result |= 1;
         // In canonical (cooked) mode, read_dev_tty() drains the ring into the
@@ -1282,7 +1282,7 @@ static int epoll_check_ready(int watched_fd, uint32_t req_events) {
     // Check readable
     if (req_events & (EPOLLIN | EPOLLRDNORM | EPOLLRDBAND | EPOLLPRI)) {
         if (entry->type == FD_STREAM) {
-            int tty_idx = current_task_ptr->ctty_idx >= 0 ? current_task_ptr->ctty_idx : 0;
+            int tty_idx = current_task_ptr->ctty_idx >= 0 ? current_task_ptr->ctty_idx : 1;
             tty_t *t = get_tty(tty_idx);
             if (t && get_tty_ring_count(&t->input) > 0) result |= 1;
             if (current_task_ptr->stdin_buf_pos < current_task_ptr->stdin_buf_len)
@@ -1837,7 +1837,7 @@ static int stat_fd_to_kst(int fd, struct stat *kst) {
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) return -EBADF;
     if (entry->type == FD_DEV && stat_virtual_device(entry->path, kst)) return 0;
-    if (entry->type == FD_STREAM && stat_virtual_device("/dev/tty0", kst)) return 0;
+    if (entry->type == FD_STREAM && stat_virtual_device("/dev/tty1", kst)) return 0;
     if (entry->type == FD_FILE) return stat_initrd_to_kst(entry->path, kst, true) ? 0 : -ENOENT;
     if (entry->type == FD_TMPFS) return stat_tmpfs_to_kst(entry->path, kst, true) ? 0 : -ENOENT;
     if (entry->type == FD_EXT4) return stat_ext4(entry->path, kst, true);
@@ -1933,9 +1933,9 @@ void sys_read(syscall_frame_t *frame) {
         if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
         // For FD_STREAM, use the process's controlling terminal if set
         // This handles cases where a process has been assigned a TTY via TIOCSCTTY
-        int tty_idx = current_task_ptr->ctty_idx >= 0 ? current_task_ptr->ctty_idx : 0;
-        // If ctty_idx not set, try to parse from path (e.g., /dev/tty1 -> 1, /dev/tty0 -> 0)
-        if (tty_idx == 0) {
+        int tty_idx = current_task_ptr->ctty_idx >= 0 ? current_task_ptr->ctty_idx : 1;
+        // If ctty_idx is not set, try to parse the device path (e.g. /dev/tty1).
+        if (current_task_ptr->ctty_idx < 0) {
             const char *path = entry->path;
             if (strstr(path, "tty")) {
                 const char *p = strstr(path, "tty");
@@ -2442,11 +2442,11 @@ void sys_fstat(syscall_frame_t *frame) {
         }
     }
 
-    // FD_STREAM fds (init's stdin/stdout/stderr) point at /dev/tty0: stat them
+    // FD_STREAM fds (init's stdin/stdout/stderr) point at /dev/tty1: stat them
     // as that character device so fstat()/ttyname() behave correctly.
     if (entry->type == FD_STREAM) {
         struct stat kst = {0};
-        if (stat_virtual_device("/dev/tty0", &kst)) {
+        if (stat_virtual_device("/dev/tty1", &kst)) {
             write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat));
             frame->rax = 0;
             return;
@@ -2560,7 +2560,7 @@ void sys_poll(syscall_frame_t *frame) {
             if (!entry || !entry->open) { k_fds[i].revents |= POLLNVAL; (events)++; continue; } \
             if (k_fds[i].events & POLLIN) { \
                 if (entry->type == FD_STREAM) { \
-                    int tty_idx = current_task_ptr->ctty_idx >= 0 ? current_task_ptr->ctty_idx : 0; \
+                    int tty_idx = current_task_ptr->ctty_idx >= 0 ? current_task_ptr->ctty_idx : 1; \
                     tty_t *t = get_tty(tty_idx); \
                     if (t && get_tty_ring_count(&t->input) > 0) k_fds[i].revents |= POLLIN; \
                 } else if (entry->type == FD_DEV) { \
