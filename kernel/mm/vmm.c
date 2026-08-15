@@ -590,6 +590,8 @@ void* vmap_user_at(vmm_context_t* ctx, uint64_t virt, size_t size, uint64_t flag
     if (!ctx || size == 0 || virt >= USER_VIRTUAL_LIMIT || size > USER_VIRTUAL_LIMIT - virt) return NULL;
     uint64_t num_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
     uint64_t curr_addr = virt & ~0xFFFULL;
+    uint64_t map_size = num_pages * PAGE_SIZE;
+    if (curr_addr > USER_VIRTUAL_LIMIT || map_size > USER_VIRTUAL_LIMIT - curr_addr) return NULL;
 
     for (uint64_t i = 0; i < num_pages; i++) {
         uint64_t phys = get_vmm_phys(ctx, curr_addr);

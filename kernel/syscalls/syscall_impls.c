@@ -111,6 +111,19 @@ static bool user_write_range_ok(vmm_context_t *ctx, uint64_t addr, uint64_t size
     return user_address_range_ok(addr, size) && vmm_user_range_valid(ctx, addr, size, true);
 }
 
+static bool user_page_range_ok(uint64_t addr, uint64_t size, uint64_t *start, uint64_t *end) {
+    if (!start || !end || size == 0 || !user_address_range_ok(addr, size)) return false;
+
+    uint64_t last = addr + size - 1;
+    uint64_t page_start = addr & ~(uint64_t)(PAGE_SIZE - 1);
+    uint64_t page_end = (last & ~(uint64_t)(PAGE_SIZE - 1)) + PAGE_SIZE;
+    if (page_end < page_start || page_end > USER_ADDR_MAX) return false;
+
+    *start = page_start;
+    *end = page_end;
+    return true;
+}
+
 static bool fd_allows_read(const fd_entry_t *entry) {
     return entry && (entry->flags & O_ACCMODE) != O_WRONLY;
 }
@@ -126,9 +139,9 @@ static mode_t apply_current_umask(mode_t mode) {
 }
 
 static bool user_range_is_mapped(vmm_context_t *ctx, uint64_t addr, uint64_t size) {
-    if (!ctx || !user_address_range_ok(addr, size)) return true;
-    uint64_t start = addr & ~(uint64_t)(PAGE_SIZE - 1);
-    uint64_t end = (addr + size + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+    uint64_t start;
+    uint64_t end;
+    if (!ctx || !user_page_range_ok(addr, size, &start, &end)) return false;
     for (uint64_t page = start; page < end; page += PAGE_SIZE) {
         uint64_t pte = get_vmm_pte(ctx, page);
         if (pte & (VMM_PRESENT | VMM_DEMAND)) return true;
@@ -2733,8 +2746,13 @@ void sys_mmap(syscall_frame_t *frame) {
     // Guard against integer overflow in page-count calculation
     if (length > USER_ADDR_MAX) { frame->rax = (uint64_t)-EINVAL; return; }
 
-    // Validate addr if MAP_FIXED or hint provided
-    if (addr != 0 && !user_address_range_ok(addr, length)) { frame->rax = (uint64_t)-EINVAL; return; }
+    uint64_t ignored_start;
+    uint64_t ignored_end;
+    // Validate addr if MAP_FIXED or hint provided, including page rounding.
+    if (addr != 0 && !user_page_range_ok(addr, length, &ignored_start, &ignored_end)) {
+        frame->rax = (uint64_t)-EINVAL;
+        return;
+    }
     bool fixed = (flags & MAP_FIXED) != 0;
     bool fixed_noreplace = (flags & MAP_FIXED_NOREPLACE) != 0;
     if ((fixed || fixed_noreplace) && (addr & (PAGE_SIZE - 1))) { frame->rax = (uint64_t)-EINVAL; return; }
@@ -2747,8 +2765,13 @@ void sys_mmap(syscall_frame_t *frame) {
     uint64_t num_pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
     // Overflow check: ensure num_pages * PAGE_SIZE doesn't wrap
     if (num_pages > (USER_ADDR_MAX / PAGE_SIZE)) { frame->rax = (uint64_t)-EINVAL; return; }
-
+    uint64_t map_size = num_pages * PAGE_SIZE;
+    if (addr != 0 && !user_page_range_ok(addr, map_size, &ignored_start, &ignored_end)) {
+        frame->rax = (uint64_t)-EINVAL;
+        return;
+    }
     bool anonymous = (flags & MAP_ANONYMOUS) != 0;
+    if (!anonymous && offset > UINT64_MAX - map_size) { frame->rax = (uint64_t)-EINVAL; return; }
     bool requested_fb = false;
     struct limine_framebuffer *mapped_fb = NULL;
     fd_entry_t *mapping_entry = NULL;
@@ -2835,7 +2858,8 @@ void sys_mmap(syscall_frame_t *frame) {
     bool fb_mapped = false;
     if (requested_fb && mapped_fb) {
         uint64_t phys_base = virt_to_phys((void *)mapped_fb->address);
-        if (phys_base & (PAGE_SIZE - 1)) {
+        if ((phys_base & (PAGE_SIZE - 1)) || phys_base > UINT64_MAX - offset ||
+            phys_base + offset > UINT64_MAX - map_size) {
             rollback_mmap(ptr, num_pages, retained_pages);
             frame->rax = (uint64_t)-EINVAL;
             return;
@@ -2939,8 +2963,12 @@ void sys_mprotect(syscall_frame_t *frame) {
         frame->rax = (uint64_t)-EACCES; return;
     }
 
-    uint64_t start = addr & ~(uint64_t)(PAGE_SIZE - 1);
-    uint64_t end   = (addr + length + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+    uint64_t start;
+    uint64_t end;
+    if (!user_page_range_ok(addr, length, &start, &end)) {
+        frame->rax = (uint64_t)-EINVAL;
+        return;
+    }
 
     for (uint64_t a = start; a < end; a += PAGE_SIZE) {
         uint64_t phys = get_vmm_phys(current_task_ptr->ctx, a);
@@ -2971,8 +2999,12 @@ void sys_munmap(syscall_frame_t *frame) {
     // Ensure entire range is in user-space
     if (!user_range_ok(current_task_ptr->ctx, (uint64_t)addr, length)) { frame->rax = (uint64_t)-EINVAL; return; }
 
-    uint64_t start = addr & ~(uint64_t)(PAGE_SIZE - 1);
-    uint64_t end   = (addr + length + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+    uint64_t start;
+    uint64_t end;
+    if (!user_page_range_ok(addr, length, &start, &end)) {
+        frame->rax = (uint64_t)-EINVAL;
+        return;
+    }
 
     uint64_t removed_pages = flagged_vma_pages_in_range(&current_task_ptr->ctx->vmas, start, end, VMA_FLAG_MMAP);
     for (uint64_t a = start; a < end; a += PAGE_SIZE) {
@@ -3013,7 +3045,11 @@ void sys_brk(syscall_frame_t *frame) {
 
     // Align to page boundary
     uint64_t old_brk = current_task_ptr->brk & ~0xFFFULL;
-    uint64_t new_brk = (addr + 0xFFF) & ~0xFFFULL;
+    if (addr > UINT64_MAX - (PAGE_SIZE - 1)) {
+        frame->rax = current_task_ptr->brk;
+        return;
+    }
+    uint64_t new_brk = (addr + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 
     if (new_brk > old_brk) {
         // Map new pages

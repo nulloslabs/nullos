@@ -422,9 +422,14 @@ static void blank_cells(terminal_cell_t *cells, uint64_t count, uint32_t backgro
 }
 
 static bool init_terminal_vt(terminal_vt_t *vt) {
+    if (!vt || !back_buffer_width || !back_buffer_height ||
+        back_buffer_width > 8192 || back_buffer_height > 8192 ||
+        back_buffer_width > UINT64_MAX / back_buffer_height) return false;
     uint64_t pixel_count = back_buffer_width * back_buffer_height;
+    if (cell_columns && cell_rows > UINT64_MAX / cell_columns) return false;
     uint64_t cell_count = cell_columns * cell_rows;
-    if (!pixel_count || !back_buffer_width || !back_buffer_height) return false;
+    if (!pixel_count || pixel_count > UINT64_MAX / sizeof(uint32_t) ||
+        (cell_count && cell_count > UINT64_MAX / sizeof(terminal_cell_t))) return false;
     memset(vt, 0, sizeof(*vt));
     vt->back_buffer = (uint32_t *)malloc(pixel_count * sizeof(uint32_t));
     vt->alt_back_buffer = (uint32_t *)malloc(pixel_count * sizeof(uint32_t));
@@ -1969,18 +1974,23 @@ void init_terminal_backbuffer(void) {
     if (hhdm_offset == 0) return;
     if (!fb_req.response || fb_req.response->framebuffer_count < 1) return;
     struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
+    if (!fb || !fb->address || !fb->width || !fb->height || fb->width > 8192 || fb->height > 8192 ||
+        fb->width > UINT64_MAX / sizeof(uint32_t) || fb->pitch < fb->width * sizeof(uint32_t) ||
+        fb->pitch > UINT64_MAX / fb->height) return;
 
+    uint64_t prepared_columns = current_font_w ? fb->width / current_font_w : 0;
+    uint64_t prepared_rows = current_font_h ? fb->height / current_font_h : 0;
+    if (prepared_columns && prepared_rows > UINT64_MAX / prepared_columns) return;
+    uint64_t cell_count = prepared_columns * prepared_rows;
+    if (cell_count > UINT64_MAX / sizeof(terminal_cell_t)) return;
     back_buffer_width = fb->width;
     back_buffer_height = fb->height;
     back_buffer_pitch = fb->width * sizeof(uint32_t);
 
     uint64_t required_size = back_buffer_pitch * fb->height;
-
     uint32_t *prepared_back_buffer = (uint32_t *)malloc(required_size);
     uint32_t *prepared_alt_back_buffer = (uint32_t *)malloc(required_size);
-    uint64_t prepared_columns = current_font_w ? fb->width / current_font_w : 0;
-    uint64_t prepared_rows = current_font_h ? fb->height / current_font_h : 0;
-    uint64_t cell_size = prepared_columns * prepared_rows * sizeof(terminal_cell_t);
+    uint64_t cell_size = cell_count * sizeof(terminal_cell_t);
     terminal_cell_t *prepared_cell_buffer = cell_size ? (terminal_cell_t *)malloc(cell_size) : NULL;
     terminal_cell_t *prepared_alt_cell_buffer = cell_size ? (terminal_cell_t *)malloc(cell_size) : NULL;
 
