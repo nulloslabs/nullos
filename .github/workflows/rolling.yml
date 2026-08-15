@@ -60,15 +60,12 @@ jobs:
           ISO_NAME: ${{ steps.build.outputs.iso_name }}
           SHORT_SHA: ${{ steps.build.outputs.short_sha }}
         run: |
-          commit_timestamp="$(git show -s --format=%ct "$GITHUB_SHA")"
-          release_datetime="$(date -u -d "@$commit_timestamp" +%Y%m%d-%H%M%S)"
-          release_tag="rolling-$release_datetime-$SHORT_SHA"
+          release_tag="rolling"
 
-          # Remove the legacy single rolling release and tag during migration.
-          if gh release view rolling >/dev/null 2>&1; then
-            gh release delete rolling --yes --cleanup-tag
-          elif git ls-remote --exit-code --tags origin refs/tags/rolling >/dev/null 2>&1; then
-            git push --delete origin rolling
+          if gh release view "$release_tag" >/dev/null 2>&1; then
+            gh release delete "$release_tag" --yes --cleanup-tag
+          elif git ls-remote --exit-code --tags origin refs/tags/"$release_tag" >/dev/null 2>&1; then
+            git push --delete origin "$release_tag"
           fi
 
           git tag --force "$release_tag" "$GITHUB_SHA"
@@ -76,28 +73,19 @@ jobs:
 
           notes="Automated NullOS build for commit [$GITHUB_SHA]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA)."
 
-          # A manual rerun for the same commit replaces that commit's release.
-          if gh release view "$release_tag" >/dev/null 2>&1; then
-            gh release delete "$release_tag" --yes
-          fi
-
           gh release create "$release_tag" "$ISO_NAME" \
             --title "NullOS ($SHORT_SHA)" \
             --notes "$notes" \
             --latest \
             --verify-tag
 
-          # Keep only the three newest rolling releases, deleting their tags too.
+          # Clean up any legacy rolling releases (rolling-YYYYMMDD-HHMMSS-SHA)
           while IFS= read -r old_tag; do
             if [ -n "$old_tag" ]; then
               gh release delete "$old_tag" --yes --cleanup-tag
             fi
           done < <(
-            gh release list --limit 100 --json tagName,createdAt --jq '
-              map(select(.tagName | startswith("rolling-")))
-              | sort_by(.createdAt)
-              | reverse
-              | .[3:][]
-              | .tagName
+            gh release list --limit 500 --json tagName --jq '
+              .[].tagName | select(startswith("rolling-"))
             '
           )
