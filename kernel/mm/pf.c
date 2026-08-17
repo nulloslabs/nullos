@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <errno.h>
+#include <main/assert.h>
 #include <main/sched.h>
 #include <main/string.h>
 #include <mm/pmm.h>
@@ -8,6 +9,7 @@
 #include <mm/pf.h>
 
 int handle_pf(uint64_t cr2, uint64_t error_code) {
+    assert(current_task_ptr != NULL);
     // error_code bit 0: 0 = not-present fault, 1 = protection violation
     if (error_code & 1) return -EACCES;
 

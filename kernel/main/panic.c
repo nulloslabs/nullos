@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdarg.h>
 #include <signal.h>
+#include <main/assert.h>
 #include <main/log.h>
 #include <main/elf.h>
 #include <main/limine_req.h>
@@ -166,6 +167,7 @@ __attribute__((noreturn)) void dopanic(const char *func, const char *msg, ...) {
 }
 
 void exception_panic(exception_frame_t *frame) {
+    assert(frame != NULL);
     const char *reason = "";
 
     switch (frame->vector) {

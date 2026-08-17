@@ -1,4 +1,5 @@
 #include <stddef.h>
+#include <main/assert.h>
 #include <main/spinlocks.h>
 #include <mm/kstack.h>
 #include <mm/pmm.h>
@@ -51,8 +52,9 @@ void *alloc_kstack(void) {
 }
 
 void free_kstack(void *stack) {
+    assert(stack != NULL);
     int slot = kstack_slot(stack);
-    if (slot < 0) return;
+    assert(slot >= 0);
     uint64_t irq;
     spin_lock_irqsave(&kstack_lock, &irq);
     if (!kstack_slots[slot]) {

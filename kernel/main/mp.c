@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <main/assert.h>
 #include <main/log.h>
 #include <main/rng.h>
 #include <main/mp.h>
@@ -27,7 +28,7 @@ static void ap_entry(struct limine_mp_info *info) {
     for (int i = 0; i < cpu_count; i++) {
         if (cpus[i].lapic_id == (uint32_t)info->lapic_id) { idx = i; break; }
     }
-    if (idx < 0) halt();
+    assert(idx >= 0 && idx < cpu_count);
 
     init_gdt_for_cpu(idx);
     load_idt_for_cpu();
@@ -64,6 +65,7 @@ void clear_cpu_index_map(void) {
 }
 
 void map_cpu_index(uint32_t lapic_id, int cpu_index) {
+    assert(cpu_index >= 0 && cpu_index < MAX_CPUS);
     uint32_t slot = hash_cpu_index(lapic_id);
 
     for (int i = 0; i < CPU_INDEX_MAP_SIZE; i++) {

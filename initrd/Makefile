@@ -145,8 +145,11 @@ initrd:
 			package_tmp=packages/$$name.pkg.tar.zst.part && \
 			{ [ ! -f $$package_file ] || zstd -tq $$package_file || rm -f $$package_file; } && \
 			{ [ -f $$package_file ] || { rm -f $$package_tmp && \
-			(curl -fsL -o $$package_tmp https://archlinux.org/packages/$$repo/x86_64/$$name/download/ || \
-			 curl -fsL -o $$package_tmp https://archlinux.org/packages/$$repo/any/$$name/download/) && \
+			(attempt=0; while [ $$attempt -lt 3 ]; do \
+				curl --retry 3 --retry-delay 2 --retry-all-errors -fsSL -o $$package_tmp https://archlinux.org/packages/$$repo/x86_64/$$name/download/ 2>/dev/null && break; \
+				curl --retry 3 --retry-delay 2 --retry-all-errors -fsSL -o $$package_tmp https://archlinux.org/packages/$$repo/any/$$name/download/ 2>/dev/null && break; \
+				attempt=$$((attempt + 1)); sleep $$((attempt * 2)); \
+		done) && \
 			zstd -tq $$package_tmp && mv $$package_tmp $$package_file; }; } && \
 			tar --zstd -xf $$package_file -C main || exit 1; \
 		done && \

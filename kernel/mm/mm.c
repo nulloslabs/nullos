@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <main/assert.h>
 #include <main/log.h>
 #include <main/string.h>
 #include <main/panic.h>
@@ -38,7 +39,8 @@ static struct memory_header *find_header_locked(void *ptr) {
     if (!ptr) return NULL;
     struct memory_header *wanted = (struct memory_header *)ptr - 1;
     for (struct memory_header *block = free_list_start; block; block = block->next) {
-        if (block == wanted && block->magic == HEAP_BLOCK_MAGIC) return block;
+        assert(block->magic == HEAP_BLOCK_MAGIC);
+        if (block == wanted) return block;
     }
     return NULL;
 }
@@ -46,6 +48,7 @@ static struct memory_header *find_header_locked(void *ptr) {
 static void coalesce_free_list_locked(void) {
     struct memory_header *block = free_list_start;
     while (block && block->next) {
+        assert(block->magic == HEAP_BLOCK_MAGIC);
         uint8_t *end = (uint8_t *)(block + 1) + block->size;
         if (block->is_free && block->next->is_free && end == (uint8_t *)block->next) {
             block->size += sizeof(struct memory_header) + block->next->size;
@@ -76,6 +79,7 @@ static void insert_region_locked(void *region, size_t region_size) {
 }
 
 static void split_block_locked(struct memory_header *block, size_t wanted) {
+    assert(block != NULL && block->is_free && block->magic == HEAP_BLOCK_MAGIC);
     size_t remainder = block->size - wanted;
     if (remainder < sizeof(struct memory_header) + HEAP_MIN_SPLIT) return;
 

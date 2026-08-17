@@ -1,3 +1,4 @@
+#include <main/assert.h>
 #include <main/log.h>
 #include <main/gdt.h>
 #include <main/string.h>
@@ -41,6 +42,7 @@ static void write_tss(cpu_gdt_t *g) {
 }
 
 void init_gdt_for_cpu(int cpu_index) {
+    assert(cpu_index >= 0 && cpu_index < MAX_CPUS);
     cpu_gdt_t *g = &cpu_gdts[cpu_index];
 
     set_gdt_entry(g->entries, 0, 0, 0, 0x00, 0x00);   // 0x00: Null
@@ -58,6 +60,6 @@ void init_gdt_for_cpu(int cpu_index) {
     flush_tss();
 }
 
-void set_tss_kstack_for_cpu(int cpu_index, void *stack) { cpu_gdts[cpu_index].tss.rsp0 = (uint64_t)stack; }
+void set_tss_kstack_for_cpu(int cpu_index, void *stack) { assert(cpu_index >= 0 && cpu_index < MAX_CPUS); cpu_gdts[cpu_index].tss.rsp0 = (uint64_t)stack; }
 void set_tss_kstack(void *stack) { set_tss_kstack_for_cpu(0, stack); }
 void init_gdt(void) { init_gdt_for_cpu(0); log("gdt: initialized gdt\n"); }

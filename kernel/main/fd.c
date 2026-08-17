@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/epoll.h>
+#include <main/assert.h>
 #include <main/fd.h>
 #include <main/string.h>
 #include <main/sched.h>
@@ -108,6 +109,7 @@ fd_entry_t *get_current_fd(int fd) {
 
 void retain_fd_entry(fd_entry_t *entry) {
     if (!entry || !entry->open) return;
+    assert(entry->type != FD_NONE);
     if (entry->type == FD_PTY_MASTER) {
         int idx = -1;
         if (strncmp(entry->path, "ptm:", 4) == 0) {

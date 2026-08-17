@@ -13,6 +13,7 @@
 #include <main/fd.h>
 #include <main/msr.h>
 #include <main/mp.h>
+#include <main/assert.h>
 #include <main/timekeeping.h>
 #include <io/time.h>
 #include <io/usb.h>
@@ -123,6 +124,7 @@ task_t *get_current_task_ptr(void) { return current_task_ptr; }
 int get_task_nice(task_t *task) { return task ? task->nice : 0; }
 
 void let_current_task_sleep(uint64_t duration_us) {
+    assert(current_task_ptr != NULL);
     uint64_t now = get_monotonic_time_us();
     current_task_ptr->sleep_deadline_us = duration_us > UINT64_MAX - now ? UINT64_MAX : now + duration_us;
     current_task_ptr->state = TASK_SLEEPING;
@@ -153,6 +155,7 @@ int task_index_by_pid(pid_t pid) {
 
 void release_task_slot(int task_idx) {
     if (task_idx < 0 || task_idx >= MAX_TASKS || tasks[task_idx] == dead_task) return;
+    assert(tasks[task_idx] != NULL && tasks[task_idx] != dead_task);
     if ((tasks[task_idx]->state == TASK_ZOMBIE || tasks[task_idx]->state == TASK_REAPED) && tasks[task_idx]->running_cpu >= 0) { tasks[task_idx]->state = TASK_REAPED; return; }
     if (tasks[task_idx]->kstack) free_kstack(tasks[task_idx]->kstack);
     if (tasks[task_idx]->fpu_area) vfree(tasks[task_idx]->fpu_area);
@@ -203,6 +206,7 @@ const vma_table_t *task_vma_table(int pid_idx) {
 }
 
 pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_t initial_rsp) {
+    assert(ring == 0 || ring == 3);
     uint64_t flags;
     spin_lock_irqsave(&task_lock, &flags);
 

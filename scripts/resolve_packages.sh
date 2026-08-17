@@ -5,10 +5,26 @@ set -euo pipefail
 temporary_directory=$(mktemp -d)
 trap 'rm -rf -- "$temporary_directory"' EXIT HUP INT TERM
 
+fetch_db() {
+    local repo=$1
+    local mirrors=(
+        "https://mirror.archlinux.org/$repo/os/x86_64/$repo.db"
+        "https://mirror.rackspace.com/archlinux/$repo/os/x86_64/$repo.db"
+        "https://mirrors.mit.edu/archlinux/$repo/os/x86_64/$repo.db"
+        "https://geo.mirror.pkgbuild.com/$repo/os/x86_64/$repo.db"
+    )
+    for url in "${mirrors[@]}"; do
+        if curl --retry 3 --retry-delay 2 --retry-all-errors -fsSL "$url" 2>/dev/null | zstd -dc 2>/dev/null | tar -xf - -C "$temporary_directory/$repo" 2>/dev/null; then
+            return 0
+        fi
+    done
+    echo "error: failed to download $repo.db from all mirrors" >&2
+    return 1
+}
+
 for repository in core extra; do
     mkdir -p "$temporary_directory/$repository"
-
-    (curl -fsSL "https://mirror.pkgbuild.com/$repository/os/x86_64/$repository.db" || curl -fsSL "https://geo.mirror.pkgbuild.com/$repository/os/x86_64/$repository.db") | zstd -dc | tar -xf - -C "$temporary_directory/$repository"
+    fetch_db "$repository"
 done
 
 requested=$(printf '%s\n' "$@")
