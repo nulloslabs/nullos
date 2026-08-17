@@ -35,7 +35,7 @@
 #define TASK_REAPED 5
 #define TASK_SLEEPING 6
 
-#define TASK_KERNEL_STACK_OFFSET 48
+#define TASK_KSTACK_OFFSET 48
 #define TASK_SYSCALL_USER_RSP_OFFSET 56
 
 #define NICE_MIN (-20)
@@ -56,7 +56,7 @@ typedef struct task {
     uint8_t ring;
     uint64_t rsp;
     void *stack_base;
-    void *kernel_stack;
+    void *kstack;
     uint64_t syscall_user_rsp;
     vmm_context_t *ctx;
     uint64_t brk_start;
@@ -123,7 +123,7 @@ pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *child_ctx, uint64_
 void schedule(void);
 task_t *get_current_task_ptr(void);
 void prepare_scheduler_cpu(int cpu_index);
-void sleep_current_task_for(uint64_t duration_us);
+void let_current_task_sleep(uint64_t duration_us);
 int get_task_nice(task_t *task);
 int set_task_nice(task_t *task, int nice);
 void exit_task(int status);
@@ -142,5 +142,6 @@ pid_t get_last_created_pid(void);
 void record_timer_interrupt(void);
 uint16_t get_process_count(void);
 void get_load_averages(unsigned long loads[3]);
+void yield_sched(void);
 void init_sched(void);
 #endif

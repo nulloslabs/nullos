@@ -37,7 +37,7 @@ static void process_kernel_workqueue(void) {
         if (kernel_work_tail == kernel_work_head) {
             current_task_ptr->state = TASK_STOPPED;
             spin_unlock_irqrestore(&kernel_work_lock, flags);
-            __asm__ volatile("int $32");
+            yield_sched();
             continue;
         }
         kernel_work_t work = kernel_work[kernel_work_tail];

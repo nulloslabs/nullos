@@ -59,6 +59,6 @@ void init_gdt_for_cpu(int cpu_index) {
     flush_tss();
 }
 
-void set_tss_kernel_stack_for_cpu(int cpu_index, void *stack) { cpu_gdts[cpu_index].tss.rsp0 = (uint64_t)stack; }
-void set_tss_kernel_stack(void *stack) { set_tss_kernel_stack_for_cpu(0, stack); }
+void set_tss_kstack_for_cpu(int cpu_index, void *stack) { cpu_gdts[cpu_index].tss.rsp0 = (uint64_t)stack; }
+void set_tss_kstack(void *stack) { set_tss_kstack_for_cpu(0, stack); }
 void init_gdt(void) { init_gdt_for_cpu(0); log("gdt: initialized gdt\n"); }

@@ -11,6 +11,7 @@
 #define MAX_IOV 1024
 #define MAX_IO_COUNT (16 * 1024 * 1024)
 #define MAX_FUTEX_WAITERS 256
+#define SHMEM_BOGO_DIRENT_SIZE 20
 
 #define FW_FREE       0
 #define FW_WAITING    1
@@ -19,7 +20,6 @@
 
 #define FD_SETSIZE 1024
 #define FD_SET_BYTES (FD_SETSIZE / 8)
-
 
 typedef struct {
     int      state;
@@ -72,6 +72,7 @@ void sys_faccessat(syscall_frame_t *frame);
 void sys_faccessat2(syscall_frame_t *frame);
 void sys_pipe(syscall_frame_t *frame);
 void sys_select(syscall_frame_t *frame);
+void sys_sched_yield(syscall_frame_t *frame);
 void sys_dup(syscall_frame_t *frame);
 void sys_dup2(syscall_frame_t *frame);
 void sys_nanosleep(syscall_frame_t *frame);

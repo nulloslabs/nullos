@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <main/log.h>
+#include <main/rng.h>
 #include <main/mp.h>
 #include <main/idt.h>
 #include <main/gdt.h>
@@ -14,6 +15,7 @@
 #include <mm/kstack.h>
 #include <mm/vmm.h>
 #include <syscalls/syscalls.h>
+
 cpu_t cpus[MAX_CPUS];
 int cpu_count = 0;
 volatile int ap_ready_count = 0;
@@ -31,9 +33,9 @@ static void ap_entry(struct limine_mp_info *info) {
     load_idt_for_cpu();
     init_apic_for_cpu();
 
-    cpus[idx].kernel_stack = cpus[idx].task->kernel_stack;
-    if (!cpus[idx].kernel_stack) halt();
-    set_tss_kernel_stack_for_cpu(idx, kernel_stack_top(cpus[idx].kernel_stack));
+    cpus[idx].kstack = cpus[idx].task->kstack;
+    if (!cpus[idx].kstack) halt();
+    set_tss_kstack_for_cpu(idx, kstack_top(cpus[idx].kstack));
 
     init_sse_for_cpu();
     enable_cpu_memory_protection();
@@ -47,8 +49,12 @@ static void ap_entry(struct limine_mp_info *info) {
     idle();
 }
 
-uint32_t cpu_index_hash(uint32_t lapic_id) {
-    return (lapic_id * 2654435761u) % CPU_INDEX_MAP_SIZE;
+uint32_t hash_cpu_index(uint32_t lapic_id) {
+    static uint64_t seed;
+    if (!seed) get_random_bytes(&seed, sizeof(seed));
+    #define GOLDEN_RATIO 0x9E3779B97F4A7C15ULL
+    return (((uint64_t)lapic_id ^ seed) * GOLDEN_RATIO) % CPU_INDEX_MAP_SIZE;
+    #undef GOLDEN_RATIO
 }
 
 void clear_cpu_index_map(void) {
@@ -58,7 +64,7 @@ void clear_cpu_index_map(void) {
 }
 
 void map_cpu_index(uint32_t lapic_id, int cpu_index) {
-    uint32_t slot = cpu_index_hash(lapic_id);
+    uint32_t slot = hash_cpu_index(lapic_id);
 
     for (int i = 0; i < CPU_INDEX_MAP_SIZE; i++) {
         cpu_index_map_entry_t *entry = &cpu_index_map[slot];
@@ -75,7 +81,7 @@ void map_cpu_index(uint32_t lapic_id, int cpu_index) {
 int get_cpu_index(void) {
     uint32_t id = get_apic_id();
 
-    uint32_t slot = cpu_index_hash(id);
+    uint32_t slot = hash_cpu_index(id);
     for (int i = 0; i < CPU_INDEX_MAP_SIZE; i++) {
         cpu_index_map_entry_t *entry = &cpu_index_map[slot];
         if (!entry->used) break;

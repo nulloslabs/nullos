@@ -33,6 +33,7 @@ const syscall_fn_t syscall_table[] = {
     [__NR_access]          = sys_access,
     [__NR_pipe]            = sys_pipe,
     [__NR_select]          = sys_select,
+    [__NR_sched_yield]     = sys_sched_yield,
     [__NR_dup]             = sys_dup,
     [__NR_dup2]            = sys_dup2,
     [__NR_nanosleep]       = sys_nanosleep,

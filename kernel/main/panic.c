@@ -191,7 +191,7 @@ void exception_panic(exception_frame_t *frame) {
         case 512: reason = "a reserved exception was called"; break;
         default: reason = "an unknown exception occurred"; break;
     }
-    if ((frame->vector == 8 || frame->vector == 14) && !(frame->cs & 3) && is_kernel_stack_guard(frame->cr2)) reason = "a kernel stack overflow occurred";
+    if ((frame->vector == 8 || frame->vector == 14) && !(frame->cs & 3) && is_kstack_guard(frame->cr2)) reason = "a kernel stack overflow occurred";
 
     // Check if the fault came from user mode (Ring 3)
     if ((frame->cs & 3) != 0) {

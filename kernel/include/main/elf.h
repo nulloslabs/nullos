@@ -5,11 +5,15 @@
 #include <mm/vmm.h>
 #include <main/sched.h>
 
+#define ELF_USER_ADDR_MAX 0x0000800000000000ULL
+#define ELF_MAX_PHNUM 128
+
 #define ELF_MAGIC 0x464C457F
 #define ELF_CLASS64 2
 #define ELF_DATA2LSB 1
 #define EM_X86_64 62
 
+// Executable types
 #define ET_NONE   0
 #define ET_REL    1
 #define ET_EXEC   2
@@ -154,6 +158,7 @@
 #define R_X86_64_JUMP_SLOT 7
 #define R_X86_64_RELATIVE 8
 
+// auxv types
 #define AT_NULL   0
 #define AT_PHDR   3
 #define AT_PHENT  4

@@ -1,5 +1,6 @@
 # This keeps debug info when compiling, and skips stripping.
-DEBUG := 0
+DEBUG ?= 0
+
 KERNEL := $(shell uname -s)
 ARCH := $(shell uname -m)
 
@@ -33,11 +34,22 @@ STRIP = $(CROSS)strip
 STRIPFLAGS =
 UACPI_STRIPFLAGS = $(STRIPFLAGS) --strip-debug
 
+OBJDUMP = $(CROSS)objdump
+OBJDUMP_FLAGS = 
+
 OUTFILE = nullkrnl
 UACPI_OUTFILE = uacpi/build/libuacpi.a
 UACPI_BUILD = uacpi/build
 SUBDIR = kernel
 
+CHECK_OBJ := $(firstword $(wildcard main/*.o io/*.o mm/*.o syscalls/*.o))
+ifneq ($(CHECK_OBJ),)
+	ifneq ($(DEBUG),$(shell $(OBJDUMP) $(OBJDUMP_FLAGS) -h $(CHECK_OBJ) 2>/dev/null | grep -q '\.debug' && printf 1 || printf 0))
+		FORCE_REBUILD := FORCE
+	endif
+endif
+
+undefine CHECK_OBJ
 undefine KERNEL_RELEASE
 undefine ARCH
 undefine KERNEL

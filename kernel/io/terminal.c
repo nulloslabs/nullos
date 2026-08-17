@@ -500,13 +500,43 @@ static void load_terminal_vt(int tty_idx) {
     cursor_x = vt->cursor_x; cursor_y = vt->cursor_y; fg_color = vt->fg_color; bg_color = vt->bg_color; default_color = vt->default_color; line_start_y = vt->line_start_y;
 }
 
+// Replay the current cell_buffer to serial so the serial console shows
+// what is actually on screen after a VT switch.
+static void serial_replay_screen(void) {
+    if (!cell_buffer || !cell_columns || !cell_rows) return;
+
+    // Clear the serial terminal and move cursor to home
+    serial_puts(COM1, "\033[2J\033[H");
+
+    for (uint64_t row = 0; row < cell_rows; row++) {
+        // Find the last non-empty cell in this row to avoid trailing spaces
+        uint64_t last_col = 0;
+        for (uint64_t col = 0; col < cell_columns; col++) {
+            terminal_cell_t *cell = &cell_buffer[row * cell_columns + col];
+            if (cell->character && cell->character != ' ') last_col = col + 1;
+        }
+
+        for (uint64_t col = 0; col < last_col; col++) {
+            terminal_cell_t *cell = &cell_buffer[row * cell_columns + col];
+            unsigned char ch = cell->character;
+            if (ch < 0x20 || ch == 0x7F) ch = ' '; // sanitize control chars
+            serial_putchar(COM1, ch);
+        }
+        serial_putchar(COM1, '\n');
+    }
+}
+
 static void select_terminal_vt(int tty_idx, bool display) {
     if (tty_idx < 0 || tty_idx >= NUM_TTYS) return;
     if (!terminal_vts[tty_idx].initialized && !init_terminal_vt(&terminal_vts[tty_idx])) return;
     uint64_t flags;
     spin_lock_irqsave(&term_lock, &flags);
-    if (active_terminal_tty != tty_idx) {
-        if (cursor_visible) show_cursor(false);
+    bool actually_switched = (active_terminal_tty != tty_idx);
+    if (actually_switched) {
+        // Only hide/show cursor on the live framebuffer when we are actually
+        // switching what the user sees. For background-TTY writes (display=false)
+        // we must NOT touch the cursor on screen — that is what caused the flash.
+        if (display && cursor_visible) show_cursor(false);
         save_terminal_vt(active_terminal_tty);
         load_terminal_vt(tty_idx);
         active_terminal_tty = tty_idx;
@@ -1808,6 +1838,12 @@ uint64_t write_terminal_tty(int tty_idx, const char *buf, uint64_t count, bool o
 
 void switch_terminal_tty(int tty_idx) {
     select_terminal_vt(tty_idx, true);
+    // Replay the new VT's screen to serial AFTER the spinlock is released.
+    // Called here (not inside select_terminal_vt) so that:
+    //   1. We don't hold the IRQ-disabled spinlock while doing slow UART I/O.
+    //   2. This only fires on user-initiated switches, not on the internal
+    //      select_terminal_vt(prev, true) restore call inside write_terminal_tty.
+    serial_replay_screen();
 }
 
 int puts(const char *s) {

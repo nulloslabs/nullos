@@ -34,6 +34,8 @@ A secure, fast and privacy-focused hobby OS.
 | gcc | x86_64-elf-gcc | x86_64-elf-gcc | Target C compiler |
 | ld | x86_64-elf-ld | x86_64-elf-ld | |
 | strip | x86_64-elf-strip | x86_64-elf-strip | |
+| objcopy | objcopy | objcopy | Host objcopy |
+| objcopy | x86_64-elf-objcopy | x86_64-elf-objcopy | Target objcopy |
 | make | gmake | gmake | |
 | xorriso | xorriso | xorriso | |
 | qemu-system-x86_64 | qemu-system-x86_64 | qemu-system-x86_64 | |
@@ -57,13 +59,13 @@ cd nullos
 **2. Build the kernel and ISO:**
 
 ```bash
-make
+make # Or 'gmake' if you aren't using Linux
 ```
 
 **3. Run in QEMU:**
 
 ```bash
-make qemu
+make qemu # Or 'gmake qemu' if you aren't using Linux
 ```
 
 > [!NOTE]

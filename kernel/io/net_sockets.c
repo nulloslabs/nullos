@@ -149,10 +149,10 @@ static int64_t inet_op_recvfrom(socket_t *sock, void *buf, size_t len, int flags
             }
         } else {
             // isr32 skips schedule() while sched_lock is held, so we must
-            // release it and fire int $32 to actually yield to the scheduler,
+            // release it and fire cpu_yield() to actually yield to the scheduler,
             // letting NIC interrupts deliver incoming datagrams.
             spin_unlock(&sched_lock);
-            do { __asm__ volatile("int $32"); } while (inet->udp_count == 0);
+            do { yield_sched(); } while (inet->udp_count == 0);
             spin_lock(&sched_lock);
 
             spin_lock_irqsave(&inet->lock, &flags_lock);

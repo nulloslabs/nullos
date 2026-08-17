@@ -43,12 +43,20 @@ uacpi: config.mk Makefile
 
 $(UACPI_OUTFILE): $(UACPI_OBJ) FORCE
 	@needs_archive=0; \
-	for obj in $(UACPI_OBJ); do \
-		if [ ! -f "$(UACPI_OUTFILE)" ] || [ "config.mk" -nt "$(UACPI_OUTFILE)" ] || [ "Makefile" -nt "$(UACPI_OUTFILE)" ] || [ "$$obj" -nt "$(UACPI_OUTFILE)" ]; then \
-			needs_archive=1; \
-			break; \
-		fi; \
-	done; \
+	has_debug=0; \
+	if [ -f "$(UACPI_OUTFILE)" ] && $(OBJDUMP) -h "$(UACPI_OUTFILE)" 2>/dev/null | grep -q '\.debug'; then \
+		has_debug=1; \
+	fi; \
+	if [ ! -f "$(UACPI_OUTFILE)" ] || [ "$(DEBUG)" != "$$has_debug" ]; then \
+		needs_archive=1; \
+	else \
+		for obj in $(UACPI_OBJ); do \
+			if [ "config.mk" -nt "$(UACPI_OUTFILE)" ] || [ "Makefile" -nt "$(UACPI_OUTFILE)" ] || [ "$$obj" -nt "$(UACPI_OUTFILE)" ]; then \
+				needs_archive=1; \
+				break; \
+			fi; \
+		done; \
+	fi; \
 	if [ $$needs_archive -eq 1 ]; then \
 		printf "  %-7s %s\n" "AR" "$(SUBDIR)/$(UACPI_OUTFILE)" && \
 		$(AR) rcs $(UACPI_OUTFILE) $(UACPI_OBJ) && \
@@ -60,7 +68,7 @@ $(UACPI_OUTFILE): $(UACPI_OBJ) FORCE
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/$(UACPI_OUTFILE) is already up to date"; \
 	fi
 
-$(UACPI_BUILD)/%.o: uacpi/source/%.c config.mk Makefile
+$(UACPI_BUILD)/%.o: uacpi/source/%.c config.mk Makefile $(FORCE_REBUILD)
 	@mkdir -p $(UACPI_BUILD)
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/$@"
 	@$(CC) $(UACPI_CFLAGS) -c $< -o $@
@@ -74,17 +82,25 @@ kernel: config.mk Makefile linker.ld
 	@$(MAKE) $(SUBDIRS)
 	@$(MAKE) $(UACPI_OUTFILE)
 	@needs_link=0; \
-	for obj in $(OBJ); do \
-		if [ ! -f "$(OUTFILE)" ] || [ "$(UACPI_OUTFILE)" -nt "$(OUTFILE)" ] || [ "config.mk" -nt "$(OUTFILE)" ] || [ "linker.ld" -nt "$(OUTFILE)" ] || [ "Makefile" -nt "$(OUTFILE)" ] || [ "$$obj" -nt "$(OUTFILE)" ]; then \
-			needs_link=1 && \
-			break; \
-		fi; \
-	done; \
+	has_debug=0; \
+	if [ -f "$(OUTFILE)" ] && $(OBJDUMP) -h "$(OUTFILE)" 2>/dev/null | grep -q '\.debug'; then \
+		has_debug=1; \
+	fi; \
+	if [ ! -f "$(OUTFILE)" ] || [ "$(DEBUG)" != "$$has_debug" ]; then \
+		needs_link=1; \
+	else \
+		for obj in $(OBJ); do \
+			if [ "$(UACPI_OUTFILE)" -nt "$(OUTFILE)" ] || [ "config.mk" -nt "$(OUTFILE)" ] || [ "linker.ld" -nt "$(OUTFILE)" ] || [ "Makefile" -nt "$(OUTFILE)" ] || [ "$$obj" -nt "$(OUTFILE)" ]; then \
+				needs_link=1 && \
+				break; \
+			fi; \
+		done; \
+	fi; \
 	if [ $$needs_link -eq 1 ]; then \
-		printf "  %-7s %s\n" "LD" "$(OUTFILE)" && \
+		printf "  %-7s %s\n" "LD" "$(SUBDIR)/$(OUTFILE)" && \
 		$(LD) $(LDFLAGS) -o $(OUTFILE) $(OBJ) $(LIBS) && \
 		if [ "$(DEBUG)" -eq 0 ]; then \
-			printf "  %-7s %s\n" "STRIP" "$(OUTFILE)" && \
+			printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/$(OUTFILE)" && \
 			$(STRIP) $(STRIPFLAGS) $(OUTFILE); \
 		fi; \
 	else \

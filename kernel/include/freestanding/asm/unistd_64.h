@@ -23,6 +23,7 @@
 #define __NR_access 21
 #define __NR_pipe 22
 #define __NR_select 23
+#define __NR_sched_yield 24
 #define __NR_dup 32
 #define __NR_dup2 33
 #define __NR_nanosleep 35

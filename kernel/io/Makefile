@@ -16,13 +16,15 @@ all: $(OBJ)
 
 -include $(DEP)
 
-%.o: %.c Makefile ../Makefile ../config.mk ../include/limine/limine.h
+%.o: %.c Makefile ../Makefile ../config.mk $(FORCE_REBUILD) ../include/limine/limine.h
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/io/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
-%.o: %.S Makefile ../Makefile ../config.mk ../include/limine/limine.h
+%.o: %.S Makefile ../Makefile ../config.mk $(FORCE_REBUILD) ../include/limine/limine.h
 	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/io/$@"
 	@$(AS) $(AFLAGS) -c $< -o $@
+
+FORCE:
 
 clean:
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/io/*.o $(SUBDIR)/io/*.d"
@@ -30,4 +32,4 @@ clean:
 
 mrproper: clean
 
-.PHONY: all clean mrproper
+.PHONY: all FORCE clean mrproper

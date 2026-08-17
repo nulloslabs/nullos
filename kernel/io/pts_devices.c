@@ -20,7 +20,7 @@ static uint64_t read_pts(int idx, void *buf, uint64_t count, uint64_t offset) {
 
         if (got == 0) {
             if (signal_pending()) return (uint64_t)-EINTR;
-            sleep_current_task_for(1000);
+            let_current_task_sleep(1000);
         }
     }
     return (uint64_t)got;

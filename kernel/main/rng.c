@@ -69,14 +69,16 @@ static void collect_jitter_entropy(uint64_t out[16]) {
     uint64_t mix = previous ^ get_raw_time_counter() ^ (uint64_t)read_pit_counter();
     for (int i = 0; i < 16; i++) {
         for (int sample = 0; sample < 32; sample++) {
+            #define GOLDEN_RATIO 0x9E3779B97F4A7C15ULL
             uint64_t now = read_tsc();
             uint64_t delta = now - previous;
             previous = now;
-            mix ^= delta + 0x9E3779B97F4A7C15ULL + (mix << 6) + (mix >> 2);
+            mix ^= delta + GOLDEN_RATIO + (mix << 6) + (mix >> 2);
             mix ^= get_raw_time_counter() + ((uint64_t)read_pit_counter() << 32);
             for (uint64_t pause = 0; pause < ((mix & 0x1f) + 1); pause++) {
                 __asm__ volatile("pause");
             }
+            #undef GOLDEN_RATIO
         }
         out[i] = mix ^ (previous << (i & 31));
     }
@@ -222,5 +224,5 @@ void init_rng(void) {
     memset(jitter, 0, sizeof(jitter));
     memset(cpu_entropy, 0, sizeof(cpu_entropy));
     rng_seeded = true;
-    log("rng: initialized rng%s\n", cpu_words ? " with CPU entropy" : " with jitter entropy");
+    log("rng: initialized rng\n");
 }

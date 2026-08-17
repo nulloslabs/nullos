@@ -22,8 +22,6 @@ struct _fpstate {
     uint32_t reserved3[12];
 } __attribute__((packed));
 
-_Static_assert(sizeof(struct _fpstate) == 512, "FXSAVE area must be 512 bytes");
-
 struct sigcontext {
     uint64_t r8;
     uint64_t r9;
@@ -54,7 +52,15 @@ struct sigcontext {
     uint64_t fpstate;
     uint64_t reserved1[8];
 };
+struct ucontext {
+    uint64_t           uc_flags;
+    struct ucontext   *uc_link;
+    stack_t            uc_stack;
+    struct sigcontext  uc_mcontext;
+    sigset_t           uc_sigmask;
+};
 
+_Static_assert(sizeof(struct _fpstate) == 512, "FXSAVE area must be 512 bytes");
 _Static_assert(offsetof(struct sigcontext, r8)   ==   0, "sigcontext.r8 offset");
 _Static_assert(offsetof(struct sigcontext, r15)  ==  56, "sigcontext.r15 offset");
 _Static_assert(offsetof(struct sigcontext, rdi)  ==  64, "sigcontext.rdi offset");
@@ -64,15 +70,6 @@ _Static_assert(offsetof(struct sigcontext, eflags) == 136, "sigcontext.eflags of
 _Static_assert(offsetof(struct sigcontext, cs)   == 144, "sigcontext.cs offset");
 _Static_assert(offsetof(struct sigcontext, fpstate) == 184, "sigcontext.fpstate offset");
 _Static_assert(sizeof(struct sigcontext) == 256, "sigcontext must be 256 bytes");
-
-struct ucontext {
-    uint64_t           uc_flags;
-    struct ucontext   *uc_link;
-    stack_t            uc_stack;
-    struct sigcontext  uc_mcontext;
-    sigset_t           uc_sigmask;
-};
-
 _Static_assert(offsetof(struct ucontext, uc_flags)   ==   0, "uc.uc_flags offset");
 _Static_assert(offsetof(struct ucontext, uc_link)    ==   8, "uc.uc_link offset");
 _Static_assert(offsetof(struct ucontext, uc_stack)   ==  16, "uc.uc_stack offset");

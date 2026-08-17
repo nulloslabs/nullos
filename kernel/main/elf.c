@@ -17,9 +17,6 @@
 #include <mm/vma.h>
 #include <syscalls/syscalls.h>
 
-#define ELF_USER_ADDR_MAX 0x0000800000000000ULL
-#define ELF_MAX_PHNUM 128
-
 static bool elf_range_valid(uint64_t offset, uint64_t length, uint64_t size) {
     return offset <= size && length <= size - offset;
 }

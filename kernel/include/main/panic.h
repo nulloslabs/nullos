@@ -44,5 +44,6 @@ typedef struct {
 } kernel_symbol_table_t;
 
 bool are_kernel_symbols_available(void);
+
 __attribute__((noreturn)) void dopanic(const char *func, const char *msg, ...);
 void exception_panic(exception_frame_t *frame);

@@ -11,8 +11,8 @@ syscall_entry:
     // switch to kernel stack
     swapgs
     mov qword ptr gs:[TASK_SYSCALL_USER_RSP_OFFSET], rsp
-    mov rsp, qword ptr gs:[TASK_KERNEL_STACK_OFFSET]
-    add rsp, KERNEL_STACK_SIZE
+    mov rsp, qword ptr gs:[TASK_KSTACK_OFFSET]
+    add rsp, KSTACK_SIZE
 
     // build syscall_frame_t
     push r11                       // user RFLAGS

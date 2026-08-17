@@ -28,13 +28,15 @@ undefine GIT_REF_FILE
 undefine GIT_REF
 undefine GIT_HEAD
 
-%.o: %.c Makefile ../Makefile ../config.mk ../include/limine/limine.h
+%.o: %.c Makefile ../Makefile ../config.mk $(FORCE_REBUILD) ../include/limine/limine.h
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/main/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
-%.o: %.S Makefile ../Makefile ../config.mk ../include/limine/limine.h
+%.o: %.S Makefile ../Makefile ../config.mk $(FORCE_REBUILD) ../include/limine/limine.h
 	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/main/$@"
 	@$(AS) $(AFLAGS) -c $< -o $@
+
+FORCE:
 
 clean:
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/*.o $(SUBDIR)/main/*.d"
@@ -42,4 +44,4 @@ clean:
 
 mrproper: clean
 
-.PHONY: all clean mrproper
+.PHONY: all FORCE clean mrproper

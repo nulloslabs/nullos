@@ -230,7 +230,7 @@ int64_t read_unix_handle(unix_handle_t *h, void *buf, size_t count, uint32_t fd_
         if (done || count == 0) return (int64_t)done;
         if (writers == 0) return 0;
         if (fd_flags & O_NONBLOCK) return -EAGAIN;
-        sleep_current_task_for(1000);
+        let_current_task_sleep(1000);
     }
     return (int64_t)done;
 }
@@ -259,7 +259,7 @@ int64_t write_unix_handle(unix_handle_t *h, const void *buf, size_t count, uint3
 
         if (done == count || count == 0) return (int64_t)done;
         if (fd_flags & O_NONBLOCK) return done ? (int64_t)done : -EAGAIN;
-        sleep_current_task_for(1000);
+        let_current_task_sleep(1000);
     }
     return (int64_t)done;
 }
@@ -432,7 +432,7 @@ int accept_unix_socket(unix_handle_t *h, unix_handle_t **out) {
             return 0;
         }
         spin_unlock_irqrestore(&h->lock, flags);
-        sleep_current_task_for(1000);
+        let_current_task_sleep(1000);
     }
 }
 

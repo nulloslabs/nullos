@@ -441,8 +441,6 @@ static void stat_set_synthetic_times(struct stat *kst) {
     kst->st_ctim = timestamp;
 }
 
-#define SHMEM_BOGO_DIRENT_SIZE 20
-
 static void stat_set_shmem_directory_size(struct stat *kst, int child_count) {
     if (!kst || child_count < 0) return;
     kst->st_size = (2 + child_count) * SHMEM_BOGO_DIRENT_SIZE;
@@ -809,7 +807,7 @@ static void wait_futex(syscall_frame_t *frame, uint64_t phys, uint32_t val, stru
 
     while (1) {
         spin_unlock(&sched_lock);
-        __asm__ volatile("int $32" ::: "memory");
+        yield_sched();
         spin_lock(&sched_lock);
 
         spin_lock_irqsave(&futex_lock, &irq_flags);
@@ -1042,22 +1040,14 @@ static int64_t read_dev_tty(char *kbuf, uint64_t count, int tty_idx) {
 
             if (signal_pending()) return (int64_t)-EINTR;
 
-            // An asynchronous stop signal (SIGTSTP/SIGSTOP from the
-            // keyboard ISR) marks our state TASK_STOPPED directly,
-            // WITHOUT setting a pending bit, so signal_pending() can't
-            // see it. Detect it here and yield until we are continued.
             if (current_task_ptr->state == TASK_STOPPED) {
                 spin_unlock(&sched_lock);
-                do { __asm__ volatile("int $32"); } while (current_task_ptr->state == TASK_STOPPED);
+                do { yield_sched(); } while (current_task_ptr->state == TASK_STOPPED);
                 spin_lock(&sched_lock);
                 return (int64_t)-EINTR;
             }
 
-            // Nothing available: yield and let the scheduler run.
-            // syscall_entry holds sched_lock across the whole syscall, and
-            // isr32 skips schedule() while sched_lock is held, so we MUST
-            // release it here for the timer to actually switch away.
-            sleep_current_task_for(1000);
+            let_current_task_sleep(1000);
         }
         return (int64_t)total;
     }
@@ -1105,7 +1095,7 @@ static int64_t read_dev_tty(char *kbuf, uint64_t count, int tty_idx) {
             // the interruption to the caller.
             if (current_task_ptr->state == TASK_STOPPED) {
                 spin_unlock(&sched_lock);
-                do { __asm__ volatile("int $32"); } while (current_task_ptr->state == TASK_STOPPED);
+                do { yield_sched(); } while (current_task_ptr->state == TASK_STOPPED);
                 spin_lock(&sched_lock);
                 spin_lock_irqsave(&stdin_lock, &irq);
                 *sbuf_len = 0;
@@ -1115,7 +1105,7 @@ static int64_t read_dev_tty(char *kbuf, uint64_t count, int tty_idx) {
             }
             // Yield properly: release sched_lock so isr32 is allowed to
             // call schedule() (it skips switching while sched_lock is held).
-            sleep_current_task_for(1000);
+            let_current_task_sleep(1000);
         }
 
         spin_lock_irqsave(&stdin_lock, &irq);
@@ -1284,9 +1274,179 @@ static int64_t do_select(int nfds, uint8_t *k_read, uint8_t *k_write, uint8_t *k
             return 0;
         }
 
-        sleep_current_task_for(1000);
+        let_current_task_sleep(1000);
     }
 }
+
+static int sleep_clock_status(int clock_id) {
+    switch (clock_id) {
+    case CLOCK_REALTIME:
+    case CLOCK_MONOTONIC:
+    case CLOCK_BOOTTIME:
+        return 0;
+    case CLOCK_PROCESS_CPUTIME_ID:
+    case CLOCK_THREAD_CPUTIME_ID:
+    case CLOCK_MONOTONIC_RAW:
+    case CLOCK_REALTIME_COARSE:
+    case CLOCK_MONOTONIC_COARSE:
+    case CLOCK_REALTIME_ALARM:
+    case CLOCK_BOOTTIME_ALARM:
+    case CLOCK_TAI:
+        return -EOPNOTSUPP;
+    default:
+        return -EINVAL;
+    }
+}
+
+static ktime_t sleep_clock_now_ns(int clock_id) {
+    uint64_t now_us = clock_id == CLOCK_REALTIME ? time_get_realtime_us() : get_monotonic_time_us();
+    if (now_us >= (uint64_t)INT64_MAX / 1000ULL) return INT64_MAX;
+    return (ktime_t)(now_us * 1000ULL);
+}
+
+static ktime_t sleep_timespec_to_ns(const struct timespec *time) {
+    if ((uint64_t)time->tv_sec >= (uint64_t)(INT64_MAX / 1000000000LL)) return INT64_MAX;
+    return (ktime_t)time->tv_sec * 1000000000LL + time->tv_nsec;
+}
+
+static ktime_t sleep_ns_add(ktime_t left, ktime_t right) {
+    if (right > INT64_MAX - left) return INT64_MAX;
+    return left + right;
+}
+
+static struct timespec sleep_ns_to_timespec(ktime_t ns) {
+    struct timespec result = { .tv_sec = ns / 1000000000LL, .tv_nsec = ns % 1000000000LL };
+    return result;
+}
+
+static int do_clock_nanosleep(int clock_id, int flags, const struct timespec *req, struct timespec *rem) {
+    int clock_status = sleep_clock_status(clock_id);
+    if (clock_status < 0) return clock_status;
+    if (flags & ~TIMER_ABSTIME) return -EINVAL;
+
+    struct timespec request;
+    if (!req || copy_from_user(&request, req, sizeof(request)) < 0) return -EFAULT;
+    if (request.tv_sec < 0 || request.tv_nsec < 0 || request.tv_nsec >= 1000000000L) return -EINVAL;
+
+    bool absolute = (flags & TIMER_ABSTIME) != 0;
+    int wait_clock = absolute ? clock_id : CLOCK_MONOTONIC;
+    ktime_t request_ns = sleep_timespec_to_ns(&request);
+    ktime_t deadline = absolute ? request_ns : sleep_ns_add(sleep_clock_now_ns(wait_clock), request_ns);
+
+    while (sleep_clock_now_ns(wait_clock) < deadline) {
+        if (signal_pending()) {
+            if (!absolute && rem) {
+                ktime_t now = sleep_clock_now_ns(wait_clock);
+                struct timespec remaining = sleep_ns_to_timespec(now < deadline ? deadline - now : 0);
+                if (copy_to_user(rem, &remaining, sizeof(remaining)) < 0) return -EFAULT;
+            }
+            return -EINTR;
+        }
+
+        ktime_t remaining_ns = deadline - sleep_clock_now_ns(wait_clock);
+        uint64_t remaining_us = ((uint64_t)remaining_ns + 999) / 1000;
+        uint64_t now_us = get_monotonic_time_us();
+        current_task_ptr->sleep_deadline_us = remaining_us > UINT64_MAX - now_us ? UINT64_MAX : now_us + remaining_us;
+        current_task_ptr->state = TASK_SLEEPING;
+        spin_unlock(&sched_lock);
+        yield_sched();
+        spin_lock(&sched_lock);
+    }
+
+    current_task_ptr->sleep_deadline_us = 0;
+    return 0;
+}
+
+static task_t *find_priority_task(int which, id_t who) {
+    if (which != PRIO_PROCESS) return NULL;
+    if (who == 0 || who == (id_t)current_task_ptr->pid) return current_task_ptr;
+    return task_by_pid((pid_t)who);
+}
+
+static int prepare_unix_socket_path(uint8_t *addr, uint32_t *addrlen, bool binding) {
+    if (!addr || !addrlen || *addrlen < sizeof(sa_family_t) + 1) return -EINVAL;
+    sockaddr_un_t *un = (sockaddr_un_t *)addr;
+    if (un->sun_family != AF_UNIX && un->sun_family != AF_LOCAL) return 0;
+    if (un->sun_path[0] == '\0') return 0;
+    size_t supplied = *addrlen - sizeof(sa_family_t);
+    if (supplied > sizeof(un->sun_path)) supplied = sizeof(un->sun_path);
+    size_t path_len = strnlen(un->sun_path, supplied);
+    if (path_len == supplied) return -ENAMETOOLONG;
+    char path[sizeof(un->sun_path)];
+    memcpy(path, un->sun_path, path_len + 1);
+    char absolute[256];
+    get_absolute_path(path, absolute, sizeof(absolute));
+    if (strlen(absolute) >= sizeof(un->sun_path)) return -ENAMETOOLONG;
+    int access = check_parent_access(absolute, binding);
+    if (access < 0) return access;
+    if (!binding) {
+        struct stat st;
+        if (!stat_tmpfs_to_kst(absolute, &st, false)) return -ECONNREFUSED;
+        if (!S_ISSOCK(st.st_mode)) return -ENOTSOCK;
+        if (!can_access_stat_mode(&st, 0, 1, 0)) return -EACCES;
+    }
+    memset(un->sun_path, 0, sizeof(un->sun_path));
+    strlcpy(un->sun_path, absolute, sizeof(un->sun_path));
+    *addrlen = sizeof(sa_family_t) + strlen(un->sun_path) + 1;
+    return 0;
+}
+
+
+static int reject_procfs_mutation(const char *path) {
+    if (check_ext4_path(path)) return -EROFS;
+    if (is_procfs_path(path)) return -EROFS;
+    return 0;
+}
+
+static int reject_virtual_removal(const char *path) {
+    int status = reject_procfs_mutation(path);
+    if (status < 0) return status;
+    if (match_vfs_path(path, "devtmpfs", NULL) || match_vfs_path(path, "devpts", NULL)) return -EPERM;
+    return 0;
+}
+
+static int change_path_ownership(const char *path, uid_t uid, gid_t gid, bool follow) {
+    if (current_task_ptr->euid != 0) return -EPERM;
+    if (check_ext4_path(path)) return -EROFS;
+    if (match_vfs_path(path, "devtmpfs", NULL) || match_vfs_path(path, "devpts", NULL) || is_procfs_path(path)) return -EPERM;
+    if (is_tmpfs_dir(path)) return chown_tmpfs(path, uid, gid, follow);
+    return chown_initrd(path, uid, gid, follow);
+}
+
+
+static int set_path_times(const char *path, struct timespec atime, bool set_atime, struct timespec mtime, bool set_mtime, bool follow) {
+    struct stat st = {0};
+    bool is_virtual = stat_virtual_device(path, &st);
+    bool is_tmpfs = !is_virtual && stat_tmpfs_to_kst(path, &st, follow);
+    bool is_ext4 = !is_virtual && !is_tmpfs && stat_ext4_to_kst(path, &st, follow);
+    bool is_proc = !is_virtual && !is_tmpfs && !is_ext4 && stat_proc(path, path, &st, follow);
+    bool is_initrd = !is_virtual && !is_tmpfs && !is_ext4 && !is_proc && stat_initrd_to_kst(path, &st, follow);
+    if (!is_virtual && !is_tmpfs && !is_ext4 && !is_proc && !is_initrd) return -ENOENT;
+    if (!set_atime && !set_mtime) return 0;
+
+    bool owner = current_task_ptr->fsuid == 0 || current_task_ptr->fsuid == st.st_uid;
+    if (!owner && !can_access_stat_mode(&st, 0, 1, 0)) return -EACCES;
+    if (is_ext4 || is_virtual || is_proc) return -EROFS;
+    if (is_tmpfs) return set_tmpfs_times(path, atime, set_atime, mtime, set_mtime, follow);
+    return set_initrd_times(path, atime, set_atime, mtime, set_mtime, follow);
+}
+
+static int get_utimens_times(const struct timespec *user_times, struct timespec *atime, bool *set_atime, struct timespec *mtime, bool *set_mtime) {
+    struct timespec now = time_get_realtime_ts();
+    if (!user_times) { *atime = *mtime = now; *set_atime = *set_mtime = true; return 0; }
+
+    struct timespec times[2];
+    if (copy_from_user(times, user_times, sizeof(times)) < 0) return -EFAULT;
+    if ((times[0].tv_nsec < 0 || times[0].tv_nsec >= 1000000000L) && times[0].tv_nsec != UTIME_NOW && times[0].tv_nsec != UTIME_OMIT) return -EINVAL;
+    if ((times[1].tv_nsec < 0 || times[1].tv_nsec >= 1000000000L) && times[1].tv_nsec != UTIME_NOW && times[1].tv_nsec != UTIME_OMIT) return -EINVAL;
+
+    *set_atime = times[0].tv_nsec != UTIME_OMIT;
+    *set_mtime = times[1].tv_nsec != UTIME_OMIT;
+    *atime = times[0].tv_nsec == UTIME_NOW ? now : times[0];
+    *mtime = times[1].tv_nsec == UTIME_NOW ? now : times[1];
+    return 0;
+}
+
 
 static int epoll_check_ready(int watched_fd, uint32_t req_events) {
     fd_entry_t *entry = get_current_fd(watched_fd);
@@ -1520,7 +1680,7 @@ static int do_epoll_wait(syscall_frame_t *frame, int64_t timeout_us, uint64_t si
         }
 
         // Yield CPU and retry
-        sleep_current_task_for(1000);
+        let_current_task_sleep(1000);
     }
 }
 
@@ -1607,7 +1767,7 @@ static void check_signals_context(syscall_frame_t *frame, bool from_syscall, boo
                     // to actually switch to another task (otherwise bash's
                     // tcgetpgrp/kill(0, SIGTTIN) loop spins forever).
                     if (sched_locked) spin_unlock(&sched_lock);
-                    __asm__ volatile("int $32");
+                    yield_sched();
                     if (sched_locked) spin_lock(&sched_lock);
                     continue;
                 } else if (i == SIGCONT) {
@@ -2624,7 +2784,7 @@ void sys_poll(syscall_frame_t *frame) {
             EVAL_FDS(events);
             if (events > 0) break;
             if (timeout > 0 && get_monotonic_time_us() - start_time >= total_us) break;
-            __asm__ volatile("int $32");
+            yield_sched();
         }
     }
 
@@ -3975,8 +4135,7 @@ void sys_select(syscall_frame_t *frame) {
         if (exceptfds) copy_from_user(k_except, exceptfds, set_bytes);
     }
 
-    int64_t ret = do_select(nfds, k_read, k_write, k_except,
-                            o_read, o_write, o_except, qword_bytes, timeout_us);
+    int64_t ret = do_select(nfds, k_read, k_write, k_except, o_read, o_write, o_except, qword_bytes, timeout_us);
 
     if (ret >= 0) {
         if (readfds   && set_bytes > 0) write_vmm(current_task_ptr->ctx, (uint64_t)readfds,   o_read,   set_bytes);
@@ -3990,6 +4149,12 @@ void sys_select(syscall_frame_t *frame) {
     frame->rax = (uint64_t)ret;
 }
 
+void sys_sched_yield(syscall_frame_t *frame) {
+    spin_unlock(&sched_lock);
+    yield_sched();
+    spin_lock(&sched_lock);
+    frame->rax = 0;
+}
 
 void sys_dup(syscall_frame_t *frame) {
     int oldfd = (int)frame->rdi;
@@ -4025,92 +4190,12 @@ void sys_dup2(syscall_frame_t *frame) {
     fd_table_t *table = &current_task_ptr->fd_table;
 
     // Close newfd if it's already open
-    if (table->entries[newfd].open)
-        free_fd(table, newfd);
+    if (table->entries[newfd].open) free_fd(table, newfd);
 
     table->entries[newfd] = *src;
     table->entries[newfd].open = true;
     retain_fd_entry(&table->entries[newfd]);
     frame->rax = (uint64_t)newfd;
-}
-
-static int sleep_clock_status(int clock_id) {
-    switch (clock_id) {
-    case CLOCK_REALTIME:
-    case CLOCK_MONOTONIC:
-    case CLOCK_BOOTTIME:
-        return 0;
-    case CLOCK_PROCESS_CPUTIME_ID:
-    case CLOCK_THREAD_CPUTIME_ID:
-    case CLOCK_MONOTONIC_RAW:
-    case CLOCK_REALTIME_COARSE:
-    case CLOCK_MONOTONIC_COARSE:
-    case CLOCK_REALTIME_ALARM:
-    case CLOCK_BOOTTIME_ALARM:
-    case CLOCK_TAI:
-        return -EOPNOTSUPP;
-    default:
-        return -EINVAL;
-    }
-}
-
-static ktime_t sleep_clock_now_ns(int clock_id) {
-    uint64_t now_us = clock_id == CLOCK_REALTIME ? time_get_realtime_us() : get_monotonic_time_us();
-    if (now_us >= (uint64_t)INT64_MAX / 1000ULL) return INT64_MAX;
-    return (ktime_t)(now_us * 1000ULL);
-}
-
-static ktime_t sleep_timespec_to_ns(const struct timespec *time) {
-    if ((uint64_t)time->tv_sec >= (uint64_t)(INT64_MAX / 1000000000LL)) return INT64_MAX;
-    return (ktime_t)time->tv_sec * 1000000000LL + time->tv_nsec;
-}
-
-static ktime_t sleep_ns_add(ktime_t left, ktime_t right) {
-    if (right > INT64_MAX - left) return INT64_MAX;
-    return left + right;
-}
-
-static struct timespec sleep_ns_to_timespec(ktime_t ns) {
-    struct timespec result = { .tv_sec = ns / 1000000000LL, .tv_nsec = ns % 1000000000LL };
-    return result;
-}
-
-static int do_clock_nanosleep(int clock_id, int flags, const struct timespec *req, struct timespec *rem) {
-    int clock_status = sleep_clock_status(clock_id);
-    if (clock_status < 0) return clock_status;
-    if (flags & ~TIMER_ABSTIME) return -EINVAL;
-
-    struct timespec request;
-    if (!req || copy_from_user(&request, req, sizeof(request)) < 0) return -EFAULT;
-    if (request.tv_sec < 0 || request.tv_nsec < 0 || request.tv_nsec >= 1000000000L) return -EINVAL;
-
-    bool absolute = (flags & TIMER_ABSTIME) != 0;
-    int wait_clock = absolute ? clock_id : CLOCK_MONOTONIC;
-    ktime_t request_ns = sleep_timespec_to_ns(&request);
-    ktime_t deadline = absolute ? request_ns : sleep_ns_add(sleep_clock_now_ns(wait_clock), request_ns);
-
-    while (sleep_clock_now_ns(wait_clock) < deadline) {
-        if (signal_pending()) {
-            if (!absolute && rem) {
-                ktime_t now = sleep_clock_now_ns(wait_clock);
-                struct timespec remaining = sleep_ns_to_timespec(now < deadline ? deadline - now : 0);
-                if (copy_to_user(rem, &remaining, sizeof(remaining)) < 0) return -EFAULT;
-            }
-            return -EINTR;
-        }
-
-        ktime_t remaining_ns = deadline - sleep_clock_now_ns(wait_clock);
-        uint64_t remaining_us = ((uint64_t)remaining_ns + 999) / 1000;
-        uint64_t now_us = get_monotonic_time_us();
-        current_task_ptr->sleep_deadline_us = remaining_us > UINT64_MAX - now_us ? UINT64_MAX : now_us + remaining_us;
-        current_task_ptr->state = TASK_SLEEPING;
-        spin_unlock(&sched_lock);
-        __asm__ volatile("int $32");
-        spin_lock(&sched_lock);
-    }
-
-    current_task_ptr->sleep_deadline_us = 0;
-    return 0;
 }
 
 void sys_nanosleep(syscall_frame_t *frame) {
@@ -4180,12 +4265,6 @@ void sys_setitimer(syscall_frame_t *frame) {
 
 void sys_getpid(syscall_frame_t *frame) {
     frame->rax = (uint64_t)current_task_ptr->pid;
-}
-
-static task_t *find_priority_task(int which, id_t who) {
-    if (which != PRIO_PROCESS) return NULL;
-    if (who == 0 || who == (id_t)current_task_ptr->pid) return current_task_ptr;
-    return task_by_pid((pid_t)who);
 }
 
 void sys_getpriority(syscall_frame_t *frame) {
@@ -4317,34 +4396,6 @@ void sys_socket(syscall_frame_t *frame) {
         return;
     }
     frame->rax = (uint64_t)fd;
-}
-
-static int prepare_unix_socket_path(uint8_t *addr, uint32_t *addrlen, bool binding) {
-    if (!addr || !addrlen || *addrlen < sizeof(sa_family_t) + 1) return -EINVAL;
-    sockaddr_un_t *un = (sockaddr_un_t *)addr;
-    if (un->sun_family != AF_UNIX && un->sun_family != AF_LOCAL) return 0;
-    if (un->sun_path[0] == '\0') return 0;
-    size_t supplied = *addrlen - sizeof(sa_family_t);
-    if (supplied > sizeof(un->sun_path)) supplied = sizeof(un->sun_path);
-    size_t path_len = strnlen(un->sun_path, supplied);
-    if (path_len == supplied) return -ENAMETOOLONG;
-    char path[sizeof(un->sun_path)];
-    memcpy(path, un->sun_path, path_len + 1);
-    char absolute[256];
-    get_absolute_path(path, absolute, sizeof(absolute));
-    if (strlen(absolute) >= sizeof(un->sun_path)) return -ENAMETOOLONG;
-    int access = check_parent_access(absolute, binding);
-    if (access < 0) return access;
-    if (!binding) {
-        struct stat st;
-        if (!stat_tmpfs_to_kst(absolute, &st, false)) return -ECONNREFUSED;
-        if (!S_ISSOCK(st.st_mode)) return -ENOTSOCK;
-        if (!can_access_stat_mode(&st, 0, 1, 0)) return -EACCES;
-    }
-    memset(un->sun_path, 0, sizeof(un->sun_path));
-    strlcpy(un->sun_path, absolute, sizeof(un->sun_path));
-    *addrlen = sizeof(sa_family_t) + strlen(un->sun_path) + 1;
-    return 0;
 }
 
 void sys_connect(syscall_frame_t *frame) {
@@ -4853,7 +4904,7 @@ void sys_clone(syscall_frame_t *frame) {
         current_task_ptr->stopped_by_signal = 0;
         spin_unlock(&sched_lock);
         sti();
-        __asm__ volatile ("int $32");
+        yield_sched();
         spin_lock(&sched_lock);
         cli();
     }
@@ -4888,7 +4939,7 @@ void sys_vfork(syscall_frame_t *frame) {
 
     spin_unlock(&sched_lock);
     sti();
-    __asm__ volatile ("int $32");
+    yield_sched();
     spin_lock(&sched_lock);
     cli();
 }
@@ -5143,7 +5194,7 @@ void sys_wait4(syscall_frame_t *frame) {
         current_task_ptr->waiting_for = pid > 0 ? pid : -1;
         current_task_ptr->state = TASK_STOPPED;
         spin_unlock(&sched_lock);
-        __asm__ volatile("int $32");
+        yield_sched();
         spin_lock(&sched_lock);
         current_task_ptr->waiting_for = 0;
     }
@@ -5767,19 +5818,6 @@ void sys_fchdir(syscall_frame_t *frame) {
     frame->rax = (uint64_t)(status == -ENOENT ? -ENOTDIR : status);
 }
 
-static int reject_procfs_mutation(const char *path) {
-    if (check_ext4_path(path)) return -EROFS;
-    if (is_procfs_path(path)) return -EROFS;
-    return 0;
-}
-
-static int reject_virtual_removal(const char *path) {
-    int status = reject_procfs_mutation(path);
-    if (status < 0) return status;
-    if (match_vfs_path(path, "devtmpfs", NULL) || match_vfs_path(path, "devpts", NULL)) return -EPERM;
-    return 0;
-}
-
 void sys_rename(syscall_frame_t *frame) {
     const char *oldpath = (const char *)frame->rdi;
     const char *newpath = (const char *)frame->rsi;
@@ -6120,14 +6158,6 @@ void sys_fchmod(syscall_frame_t *frame) {
     frame->rax = (uint64_t)chmod_initrd(entry->path, mode & 0777);
 }
 
-static int change_path_ownership(const char *path, uid_t uid, gid_t gid, bool follow) {
-    if (current_task_ptr->euid != 0) return -EPERM;
-    if (check_ext4_path(path)) return -EROFS;
-    if (match_vfs_path(path, "devtmpfs", NULL) || match_vfs_path(path, "devpts", NULL) || is_procfs_path(path)) return -EPERM;
-    if (is_tmpfs_dir(path)) return chown_tmpfs(path, uid, gid, follow);
-    return chown_initrd(path, uid, gid, follow);
-}
-
 void sys_chown(syscall_frame_t *frame) {
     const char *user_path = (const char *)frame->rdi;
     uid_t uid = (uid_t)frame->rsi;
@@ -6235,11 +6265,10 @@ void sys_getrusage(syscall_frame_t *frame) {
     if (who != RUSAGE_SELF && who != RUSAGE_CHILDREN) { frame->rax = (uint64_t)-EINVAL; return; }
 
     struct rusage ru = {0};
-    if (who == RUSAGE_SELF) {
-        uint64_t usec = get_monotonic_time_us();
-        ru.ru_stime.tv_sec = (time_t)(usec / 1000000ULL);
-        ru.ru_stime.tv_usec = (suseconds_t)(usec % 1000000ULL);
-    }
+    // TODO: populate ru_utime/ru_stime with real per-task CPU accounting.
+    // Previously this incorrectly used get_monotonic_time_us() (system uptime)
+    // as ru_stime, causing `time` to report sys ≈ real for any sleeping process.
+    (void)who;
 
     write_vmm(current_task_ptr->ctx, (uint64_t)usage, &ru, sizeof(ru));
     frame->rax = 0;
@@ -6263,18 +6292,21 @@ void sys_sysinfo(syscall_frame_t *frame) {
 
 void sys_times(syscall_frame_t *frame) {
     tms_t *buf = (tms_t *)frame->rdi;
-    uint64_t ticks = get_monotonic_time_us() / 10000ULL;
+    // TODO: use real per-task CPU tick accounting for tms_utime/tms_stime.
+    // Previously tms_stime was set to system uptime ticks, making sys time
+    // appear equal to real elapsed time for any blocking/sleeping process.
+    uint64_t elapsed_ticks = get_monotonic_time_us() / 10000ULL;
 
     if (buf) {
         if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)buf, sizeof(*buf))) {
             frame->rax = (uint64_t)-EFAULT; return;
         }
         tms_t t = {0};
-        t.tms_stime = (clock_t)ticks;
+        // tms_utime and tms_stime remain 0 until per-task CPU accounting is added
         write_vmm(current_task_ptr->ctx, (uint64_t)buf, &t, sizeof(t));
     }
 
-    frame->rax = (uint64_t)ticks;
+    frame->rax = (uint64_t)elapsed_ticks;
 }
 
 void sys_syslog(syscall_frame_t *frame) {
@@ -6304,7 +6336,7 @@ void sys_syslog(syscall_frame_t *frame) {
             if (type == SYSLOG_ACTION_READ) {
                 while (!(length = read_stream_log(buffer, capacity))) {
                     if (signal_pending()) { free(buffer); frame->rax = (uint64_t)-EINTR; return; }
-                    sleep_current_task_for(1000);
+                    let_current_task_sleep(1000);
                 }
             } else {
                 length = type == SYSLOG_ACTION_READ_CLEAR ? read_clear_log(buffer, capacity) : read_log(buffer, capacity);
@@ -6740,41 +6772,8 @@ void sys_rt_sigtimedwait(syscall_frame_t *frame) {
         }
 
         // Yield to the scheduler until something changes.
-        sleep_current_task_for(1000);
+        let_current_task_sleep(1000);
     }
-}
-
-static int set_path_times(const char *path, struct timespec atime, bool set_atime, struct timespec mtime, bool set_mtime, bool follow) {
-    struct stat st = {0};
-    bool is_virtual = stat_virtual_device(path, &st);
-    bool is_tmpfs = !is_virtual && stat_tmpfs_to_kst(path, &st, follow);
-    bool is_ext4 = !is_virtual && !is_tmpfs && stat_ext4_to_kst(path, &st, follow);
-    bool is_proc = !is_virtual && !is_tmpfs && !is_ext4 && stat_proc(path, path, &st, follow);
-    bool is_initrd = !is_virtual && !is_tmpfs && !is_ext4 && !is_proc && stat_initrd_to_kst(path, &st, follow);
-    if (!is_virtual && !is_tmpfs && !is_ext4 && !is_proc && !is_initrd) return -ENOENT;
-    if (!set_atime && !set_mtime) return 0;
-
-    bool owner = current_task_ptr->fsuid == 0 || current_task_ptr->fsuid == st.st_uid;
-    if (!owner && !can_access_stat_mode(&st, 0, 1, 0)) return -EACCES;
-    if (is_ext4 || is_virtual || is_proc) return -EROFS;
-    if (is_tmpfs) return set_tmpfs_times(path, atime, set_atime, mtime, set_mtime, follow);
-    return set_initrd_times(path, atime, set_atime, mtime, set_mtime, follow);
-}
-
-static int get_utimens_times(const struct timespec *user_times, struct timespec *atime, bool *set_atime, struct timespec *mtime, bool *set_mtime) {
-    struct timespec now = time_get_realtime_ts();
-    if (!user_times) { *atime = *mtime = now; *set_atime = *set_mtime = true; return 0; }
-
-    struct timespec times[2];
-    if (copy_from_user(times, user_times, sizeof(times)) < 0) return -EFAULT;
-    if ((times[0].tv_nsec < 0 || times[0].tv_nsec >= 1000000000L) && times[0].tv_nsec != UTIME_NOW && times[0].tv_nsec != UTIME_OMIT) return -EINVAL;
-    if ((times[1].tv_nsec < 0 || times[1].tv_nsec >= 1000000000L) && times[1].tv_nsec != UTIME_NOW && times[1].tv_nsec != UTIME_OMIT) return -EINVAL;
-
-    *set_atime = times[0].tv_nsec != UTIME_OMIT;
-    *set_mtime = times[1].tv_nsec != UTIME_OMIT;
-    *atime = times[0].tv_nsec == UTIME_NOW ? now : times[0];
-    *mtime = times[1].tv_nsec == UTIME_NOW ? now : times[1];
-    return 0;
 }
 
 void sys_utime(syscall_frame_t *frame) {
@@ -8539,7 +8538,7 @@ void sys_epoll_pwait(syscall_frame_t *frame) {
         }
 
         spin_lock(&sched_lock);
-        sleep_current_task_for(1000);
+        let_current_task_sleep(1000);
         spin_unlock(&sched_lock);
 
         count = epoll_collect(epi, k_events, maxevents);
@@ -8862,7 +8861,7 @@ void sys_epoll_pwait2(syscall_frame_t *frame) {
         }
 
         spin_lock(&sched_lock);
-        sleep_current_task_for(1000);
+        let_current_task_sleep(1000);
         spin_unlock(&sched_lock);
 
         count = epoll_collect(epi, k_events, maxevents);

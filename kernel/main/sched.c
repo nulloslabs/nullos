@@ -16,12 +16,12 @@
 #include <main/timekeeping.h>
 #include <io/time.h>
 #include <io/usb.h>
+#include <mm/vmm.h>
 #include <mm/mm.h>
 #include <mm/kstack.h>
-#include <mm/vmm.h>
 #include <syscalls/syscall_impls.h>
 
-_Static_assert(__builtin_offsetof(task_t, kernel_stack) == TASK_KERNEL_STACK_OFFSET, "task kernel stack offset changed");
+_Static_assert(__builtin_offsetof(task_t, kstack) == TASK_KSTACK_OFFSET, "task kernel stack offset changed");
 _Static_assert(__builtin_offsetof(task_t, syscall_user_rsp) == TASK_SYSCALL_USER_RSP_OFFSET, "task syscall RSP offset changed");
 
 static pid_t next_pid = 0;
@@ -34,7 +34,7 @@ static uint64_t context_switch_count = 0;
 static uint64_t processes_created = 0;
 static uint64_t timer_interrupt_count = 0;
 static pid_t last_created_pid = 0;
-static void *deferred_kernel_stacks[MAX_CPUS];
+static void *deferred_kstacks[MAX_CPUS];
 static task_t *dead_task;
 static spinlock_t task_lock = SPINLOCK_INIT;
 
@@ -125,12 +125,12 @@ static void update_load_averages(void) {
 task_t *get_current_task_ptr(void) { return current_task_ptr; }
 int get_task_nice(task_t *task) { return task ? task->nice : 0; }
 
-void sleep_current_task_for(uint64_t duration_us) {
+void let_current_task_sleep(uint64_t duration_us) {
     uint64_t now = get_monotonic_time_us();
     current_task_ptr->sleep_deadline_us = duration_us > UINT64_MAX - now ? UINT64_MAX : now + duration_us;
     current_task_ptr->state = TASK_SLEEPING;
     spin_unlock(&sched_lock);
-    __asm__ volatile("int $32" ::: "memory");
+    yield_sched();
     spin_lock(&sched_lock);
     current_task_ptr->sleep_deadline_us = 0;
 }
@@ -157,7 +157,7 @@ int task_index_by_pid(pid_t pid) {
 void release_task_slot(int task_idx) {
     if (task_idx < 0 || task_idx >= MAX_TASKS || tasks[task_idx] == dead_task) return;
     if ((tasks[task_idx]->state == TASK_ZOMBIE || tasks[task_idx]->state == TASK_REAPED) && tasks[task_idx]->running_cpu >= 0) { tasks[task_idx]->state = TASK_REAPED; return; }
-    if (tasks[task_idx]->kernel_stack) free_kernel_stack(tasks[task_idx]->kernel_stack);
+    if (tasks[task_idx]->kstack) free_kstack(tasks[task_idx]->kstack);
     if (tasks[task_idx]->fpu_area) vfree(tasks[task_idx]->fpu_area);
     free(tasks[task_idx]);
     tasks[task_idx] = dead_task;
@@ -219,14 +219,14 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
             if (ring == 0) {
                 cs = 0x08;
                 ss = 0x10;
-                stack = alloc_kernel_stack();
+                stack = alloc_kstack();
                 if (!stack) {
                     release_task_slot(i);
                     spin_unlock_irqrestore(&task_lock, flags);
                     return -ENOMEM;
                 }
                 tasks[i]->ctx = ctx ? ctx : &kernel_context;
-                tasks[i]->kernel_stack = stack;
+                tasks[i]->kstack = stack;
             } else {
                 cs = 0x23;
                 ss = 0x1B;
@@ -241,8 +241,8 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
                     }
                 }
                 tasks[i]->ctx = ctx;
-                tasks[i]->kernel_stack = alloc_kernel_stack();
-                if (!tasks[i]->kernel_stack) {
+                tasks[i]->kstack = alloc_kstack();
+                if (!tasks[i]->kstack) {
                     release_task_slot(i);
                     spin_unlock_irqrestore(&task_lock, flags);
                     return -ENOMEM;
@@ -297,12 +297,12 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
 
             uint64_t v_rsp;
             if (ring == 0) {
-                v_rsp = initial_rsp ? initial_rsp : ((uint64_t)stack + KERNEL_STACK_SIZE);
+                v_rsp = initial_rsp ? initial_rsp : ((uint64_t)stack + KSTACK_SIZE);
             } else {
                 v_rsp = initial_rsp ? initial_rsp : ((uint64_t)stack + USER_STACK_SIZE);
             }
 
-            uint64_t k_rsp = (uint64_t)kernel_stack_top(tasks[i]->kernel_stack);
+            uint64_t k_rsp = (uint64_t)kstack_top(tasks[i]->kstack);
 
             #define PUSH(val) do { \
                 k_rsp -= 8; \
@@ -408,20 +408,20 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
                 }
             }
 
-            void *kstack = alloc_kernel_stack();
+            void *kstack = alloc_kstack();
             if (!kstack) {
                 release_task_slot(i);
                 spin_unlock_irqrestore(&task_lock, flags);
                 return -ENOMEM;
             }
-            tasks[i]->kernel_stack = kstack;
+            tasks[i]->kstack = kstack;
 
             memcpy(&tasks[i]->fd_table, &current_task_ptr->fd_table, sizeof(fd_table_t));
             for (int fd = 0; fd < FD_MAX; fd++) {
                 if (tasks[i]->fd_table.entries[fd].open) retain_fd_entry(&tasks[i]->fd_table.entries[fd]);
             }
 
-            uint64_t v_rsp = (uint64_t)kernel_stack_top(kstack);
+            uint64_t v_rsp = (uint64_t)kstack_top(kstack);
 
             #define PUSH(val) do { \
                 v_rsp -= 8; \
@@ -541,13 +541,13 @@ pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *ctx, uint64_t flag
                 memcpy(tasks[i]->fpu_area, current_task_ptr->fpu_area, get_fpu_state_size());
         }
 
-        void *kstack = alloc_kernel_stack();
+        void *kstack = alloc_kstack();
         if (!kstack) {
             release_task_slot(i);
             spin_unlock_irqrestore(&task_lock, iflags);
             return -ENOMEM;
         }
-        tasks[i]->kernel_stack = kstack;
+        tasks[i]->kstack = kstack;
 
         // CLONE_FILES shares the file descriptor table.  We do not implement
         // reference-counted shared tables, so we always copy.  This is
@@ -565,7 +565,7 @@ pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *ctx, uint64_t flag
             write_vmm(current_task_ptr->ctx, (uint64_t)parent_tidptr, &pid, sizeof(int));
         }
 
-        uint64_t v_rsp = (uint64_t)kernel_stack_top(kstack);
+        uint64_t v_rsp = (uint64_t)kstack_top(kstack);
 
         #define PUSH(val) do { \
             v_rsp -= 8; \
@@ -654,9 +654,9 @@ void update_interval_timers(void) {
 void schedule(void) {
     int cpu_index = get_cpu_index();
     cpu_t *cpu = &cpus[cpu_index];
-    if (deferred_kernel_stacks[cpu_index]) {
-        free_kernel_stack(deferred_kernel_stacks[cpu_index]);
-        deferred_kernel_stacks[cpu_index] = NULL;
+    if (deferred_kstacks[cpu_index]) {
+        free_kstack(deferred_kstacks[cpu_index]);
+        deferred_kstacks[cpu_index] = NULL;
     }
     uint64_t now = get_monotonic_time_us();
     if (current_task == cpu->idle_task && now >= last_account_us) idle_time_us += now - last_account_us;
@@ -709,8 +709,8 @@ void schedule(void) {
 
         // Ensure TSS.RSP0 is updated so Ring 3 -> Ring 0 interrupts use the correct stack!
         // Use get_cpu_index() so APs update their own TSS, not always CPU 0's.
-        if (tasks[next]->kernel_stack) {
-            set_tss_kernel_stack_for_cpu(cpu_index, kernel_stack_top(tasks[next]->kernel_stack));
+        if (tasks[next]->kstack) {
+            set_tss_kstack_for_cpu(cpu_index, kstack_top(tasks[next]->kstack));
         }
 
         if (tasks[next]->ctx && tasks[next]->ctx != old_ctx) {
@@ -738,9 +738,9 @@ void schedule(void) {
 
         if (reap_old) {
             old->stack_base = NULL;
-            if (old->kernel_stack) {
-                deferred_kernel_stacks[cpu_index] = old->kernel_stack;
-                old->kernel_stack = NULL;
+            if (old->kstack) {
+                deferred_kstacks[cpu_index] = old->kstack;
+                old->kstack = NULL;
             }
             if (old->fpu_area) { vfree(old->fpu_area); old->fpu_area = NULL; }
             release_task_slot(old_task);
@@ -814,7 +814,7 @@ void exit_task(int status) {
 
     spin_unlock(&sched_lock);
     sti();
-    __asm__ volatile("int $32");
+    yield_sched();
 
     idle();
 }
@@ -826,6 +826,7 @@ bool signal_pending(void) {
     uint64_t blocked_shifted = current_task_ptr->blocked_signals << 1;
     return (current_task_ptr->pending_signals & (~blocked_shifted | unblockable)) != 0;
 }
+
 void prepare_scheduler_cpu(int cpu_index) {
     if (cpu_index <= 0 || cpu_index >= MAX_CPUS) return;
     pid_t pid = create_task(idle_task, 0, &kernel_context, 0);

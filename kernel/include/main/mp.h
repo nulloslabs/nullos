@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <main/gdt.h>
 
+#define CPU_INDEX_MAP_SIZE (MAX_CPUS * 2)
+
 struct task;
 
 typedef struct {
@@ -12,7 +14,7 @@ typedef struct {
     struct task *task;
     int idle_task;
     uint64_t minimum_virtual_runtime;
-    void *kernel_stack;
+    void *kstack;
     int active;
 } cpu_t;
 
@@ -22,14 +24,12 @@ typedef struct {
     bool used;
 } cpu_index_map_entry_t;
 
-#define CPU_INDEX_MAP_SIZE (MAX_CPUS * 2)
-
 extern cpu_t cpus[MAX_CPUS];
 extern int cpu_count;
 extern volatile int ap_ready_count;
 extern cpu_index_map_entry_t cpu_index_map[CPU_INDEX_MAP_SIZE];
 
-uint32_t cpu_index_hash(uint32_t lapic_id);
+uint32_t hash_cpu_index(uint32_t lapic_id);
 void clear_cpu_index_map(void);
 void map_cpu_index(uint32_t lapic_id, int cpu_index);
 int get_cpu_index(void);
