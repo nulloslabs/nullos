@@ -228,12 +228,10 @@ bool ping_icmp(uint32_t dest_ip) {
 }
 
 
-typedef void (*udp_rx_callback_t)(uint32_t src_ip, uint16_t src_port,
-                                   uint16_t dst_port, const uint8_t *data, uint16_t len);
+typedef void (*udp_rx_callback_t)(uint32_t src_ip, uint16_t src_port, uint16_t dst_port, const uint8_t *data, uint16_t len);
 static udp_rx_callback_t udp_callback = NULL;
 
-bool send_udp_packet(uint32_t dest_ip, uint16_t src_port, uint16_t dst_port,
-                     const void *data, uint16_t data_len) {
+bool send_udp_packet(uint32_t dest_ip, uint16_t src_port, uint16_t dst_port, const void *data, uint16_t data_len) {
     if ((!data && data_len) || data_len > NET_MAX_FRAME_SIZE - 14 - 20 - sizeof(udp_hdr_t)) return false;
     uint16_t udp_len = sizeof(udp_hdr_t) + data_len;
     uint8_t buf[udp_len];
@@ -348,8 +346,7 @@ void handle_dns_response(const uint8_t *payload, uint16_t len) {
     }
 }
 
-static void handle_dns_udp(uint32_t src_ip, uint16_t src_port, uint16_t dst_port,
-                           const uint8_t *data, uint16_t len) {
+static void handle_dns_udp(uint32_t src_ip, uint16_t src_port, uint16_t dst_port, const uint8_t *data, uint16_t len) {
     (void)src_ip;
     if (dst_port == DNS_SRC_PORT && src_port == DNS_PORT)
         handle_dns_response(data, len);
@@ -414,8 +411,7 @@ static uint16_t allocate_tcp_port(void) {
 }
 
 // Send a raw TCP segment
-static bool send_tcp_segment(tcp_socket_t *sock, uint8_t flags,
-                             const void *data, uint16_t data_len) {
+static bool send_tcp_segment(tcp_socket_t *sock, uint8_t flags, const void *data, uint16_t data_len) {
     uint16_t tcp_len = TCP_HDR_LEN + data_len;
     uint8_t buf[tcp_len];
     memset(buf, 0, tcp_len);
@@ -432,8 +428,7 @@ static bool send_tcp_segment(tcp_socket_t *sock, uint8_t flags,
     if (data && data_len)
         memcpy(buf + TCP_HDR_LEN, data, data_len);
 
-    tcp->checksum = calculate_transport_checksum(net_local_ip, sock->remote_ip,
-                                                 IP_PROTO_TCP, buf, tcp_len);
+    tcp->checksum = calculate_transport_checksum(net_local_ip, sock->remote_ip, IP_PROTO_TCP, buf, tcp_len);
     return send_ip_packet(sock->remote_ip, IP_PROTO_TCP, buf, tcp_len);
 }
 
@@ -469,9 +464,7 @@ void handle_tcp_packet(const uint8_t *frame, uint16_t len) {
     spin_lock_irqsave(&net_lock, &irq);
     for (int i = 0; i < TCP_MAX_SOCKETS; i++) {
         if (!tcp_sockets[i]) continue;
-        if (tcp_sockets[i]->local_port  == dst_port &&
-            tcp_sockets[i]->remote_port == ntohs(tcp->src_port) &&
-            tcp_sockets[i]->remote_ip   == src_ip) { sock = tcp_sockets[i]; retain_tcp_socket(sock); break; }
+        if (tcp_sockets[i]->local_port  == dst_port && tcp_sockets[i]->remote_port == ntohs(tcp->src_port) && tcp_sockets[i]->remote_ip   == src_ip) { sock = tcp_sockets[i]; retain_tcp_socket(sock); break; }
     }
     spin_unlock_irqrestore(&net_lock, irq);
     if (!sock) return;

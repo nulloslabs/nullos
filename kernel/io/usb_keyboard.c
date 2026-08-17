@@ -63,8 +63,7 @@ static const uint8_t hid_to_scancode[256] = {
     [0x33] = 0x27,  // ;
     [0x34] = 0x28,  // '
     [0x35] = 0x29,  // `
-    [0x36] = 0x33,  // ,
-    [0x37] = 0x34,  // .
+    [0x36] = 0x33,  // , [0x37] = 0x34,  // .
     [0x38] = 0x35,  // /
     [0x39] = 0x3A,  // Caps Lock
     [0x3A] = 0x3B,  // F1
@@ -264,16 +263,9 @@ void poll_usb_keyboard(void) {
         if (kbd_list[k].leds_dirty) {
             usb_setup_packet_t setup = {
                 .bmRequestType = USB_REQTYPE_DIR_OUT | USB_REQTYPE_CLASS |
-                                 USB_REQTYPE_INTERFACE,
-                .bRequest = USB_REQ_SET_REPORT,
-                .wValue = 0x0200,
-                .wIndex = kbd_list[k].interface_number,
-                .wLength = 1,
-            };
+                                 USB_REQTYPE_INTERFACE, .bRequest = USB_REQ_SET_REPORT, .wValue = 0x0200, .wIndex = kbd_list[k].interface_number, .wLength = 1, };
             uint8_t leds = kbd_list[k].pending_leds;
-            if (kbd_list[k].hcd->control_transfer(kbd_list[k].hcd,
-                                                  kbd_list[k].dev, &setup,
-                                                  &leds, 1) >= 0) {
+            if (kbd_list[k].hcd->control_transfer(kbd_list[k].hcd, kbd_list[k].dev, &setup, &leds, 1) >= 0) {
                 kbd_list[k].applied_leds = leds;
                 kbd_list[k].leds_dirty =
                     kbd_list[k].pending_leds != kbd_list[k].applied_leds;
@@ -324,21 +316,13 @@ static int usb_find_boot_keyboard_interface(uint8_t *buf, uint16_t total_len, ui
             uint8_t iface_subclass = buf[offset + 6];
             uint8_t iface_protocol = buf[offset + 7];
             interface_number = -1;
-            if (iface_class    == USB_HID_CLASS             &&
-                iface_subclass == USB_HID_SUBCLASS_BOOT     &&
-                iface_protocol == USB_HID_PROTOCOL_KEYBOARD &&
-                buf[offset + 3] == 0)
+            if (iface_class    == USB_HID_CLASS             && iface_subclass == USB_HID_SUBCLASS_BOOT     && iface_protocol == USB_HID_PROTOCOL_KEYBOARD && buf[offset + 3] == 0)
                 interface_number = buf[offset + 2];
-        } else if (interface_number >= 0 &&
-                   desc_type == USB_DESC_ENDPOINT &&
-                   offset + sizeof(usb_endpoint_descriptor_t) <= total_len) {
+        } else if (interface_number >= 0 && desc_type == USB_DESC_ENDPOINT && offset + sizeof(usb_endpoint_descriptor_t) <= total_len) {
             usb_endpoint_descriptor_t *endpoint =
                 (usb_endpoint_descriptor_t *)&buf[offset];
             uint16_t packet_size = endpoint->wMaxPacketSize & 0x7FF;
-            if ((endpoint->bEndpointAddress & 0x80) &&
-                (endpoint->bmAttributes & 3) == USB_EP_TYPE_INTERRUPT &&
-                (endpoint->bEndpointAddress & 0x0F) != 0 &&
-                packet_size >= 8 && packet_size <= 64) {
+            if ((endpoint->bEndpointAddress & 0x80) && (endpoint->bmAttributes & 3) == USB_EP_TYPE_INTERRUPT && (endpoint->bEndpointAddress & 0x0F) != 0 && packet_size >= 8 && packet_size <= 64) {
                 *endpoint_number = endpoint->bEndpointAddress & 0x0F;
                 *max_packet = packet_size;
                 return interface_number;
@@ -381,10 +365,7 @@ static void usb_free_dma_scratch(usb_dma_scratch_t *scratch) {
     scratch->page = NULL;
 }
 
-static int usb_control_transfer_retry(usb_hcd_t *hcd, usb_device_t *dev,
-                                      usb_setup_packet_t *setup, void *data,
-                                      uint16_t length, int retries,
-                                      uint64_t retry_delay_ms) {
+static int usb_control_transfer_retry(usb_hcd_t *hcd, usb_device_t *dev, usb_setup_packet_t *setup, void *data, uint16_t length, int retries, uint64_t retry_delay_ms) {
     if (retries < 1) retries = 1;
     int ret = -1;
     for (int i = 0; i < retries; i++) {
@@ -441,8 +422,7 @@ void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
 
     // Duplicate port check
     for (int i = 0; i < kbd_total; i++) {
-        if (kbd_list[i].hcd == hcd && kbd_list[i].dev &&
-            kbd_list[i].dev->port_id == port_id) return;
+        if (kbd_list[i].hcd == hcd && kbd_list[i].dev && kbd_list[i].dev->port_id == port_id) return;
     }
 
     usb_device_t *dev = usb_allocate_device();
@@ -545,8 +525,7 @@ void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
     setup->wValue        = (USB_DESC_CONFIGURATION << 8) | 0;
     setup->wIndex        = 0;
     setup->wLength       = sizeof(usb_config_descriptor_t);
-    if (usb_control_transfer_retry(hcd, dev, setup, cfg_buf,
-                                   sizeof(usb_config_descriptor_t), 4, 10) < 0) {
+    if (usb_control_transfer_retry(hcd, dev, setup, cfg_buf, sizeof(usb_config_descriptor_t), 4, 10) < 0) {
         goto fail_probe_with_addr;
     }
 
@@ -560,8 +539,7 @@ void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
     if (cfg_read_len > sizeof(usb_config_descriptor_t)) {
         memset(cfg_buf, 0, 512);
         setup->wLength = cfg_read_len;
-        if (usb_control_transfer_retry(hcd, dev, setup, cfg_buf,
-                                       cfg_read_len, 4, 10) < 0) {
+        if (usb_control_transfer_retry(hcd, dev, setup, cfg_buf, cfg_read_len, 4, 10) < 0) {
             goto fail_probe_with_addr;
         }
     }

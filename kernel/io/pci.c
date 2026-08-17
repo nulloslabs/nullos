@@ -66,8 +66,7 @@ uint16_t read_pci_word(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg) {
     return inw(0xCFC + (reg & 2));
 }
 
-void write_pci_word(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg,
-                    uint16_t val) {
+void write_pci_word(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg, uint16_t val) {
     outl(0xCF8, 0x80000000u | ((uint32_t)bus << 16) |
                              ((uint32_t)dev << 11) |
                              ((uint32_t)func << 8) | (reg & 0xFC));
@@ -192,13 +191,7 @@ void init_pci(void) {
                 uint32_t id = read_pci(bus, dev, func, 0);
                 uint32_t cc = read_pci(bus, dev, func, 8);
                 pci_devices[pci_device_count++] = (pci_device_t){
-                    .bus = bus, .dev = dev, .func = func,
-                    .vendor = vendor,
-                    .device = (uint16_t)(id >> 16),
-                    .class = (uint8_t)(cc >> 24),
-                    .subclass = (uint8_t)(cc >> 16),
-                    .progif = (uint8_t)(cc >> 8),
-                };
+                    .bus = bus, .dev = dev, .func = func, .vendor = vendor, .device = (uint16_t)(id >> 16), .class = (uint8_t)(cc >> 24), .subclass = (uint8_t)(cc >> 16), .progif = (uint8_t)(cc >> 8), };
                 if (pci_device_count >= MAX_PCI_DEVICES) return;
             }
         }
@@ -213,14 +206,7 @@ void init_pci_drivers(void) {
         uint16_t device;
         void (*init)(pci_device_t*);
     } known_pci_drivers[] = {
-        {"ac97",    AC97_VENDOR,    AC97_DEVICE,    init_ac97},
-        {"bga",     BGA_VENDOR,     BGA_DEVICE,     init_bga},
-        {"e1000",   E1000_VENDOR,   E1000_DEVICE,   init_e1000},
-        {"svga ii", SVGA_II_VENDOR, SVGA_II_DEVICE, init_svga_ii},
-        {"rtl8139", RTL8139_VENDOR, RTL8139_DEVICE, init_rtl8139},
-        {"virtio-gpu", VIRTIO_GPU_VENDOR, VIRTIO_GPU_DEVICE_MODERN, init_virtio_gpu},
-        {"virtio-gpu", VIRTIO_GPU_VENDOR, VIRTIO_GPU_DEVICE_TRANSITIONAL, init_virtio_gpu},
-    };
+        {"ac97",    AC97_VENDOR,    AC97_DEVICE,    init_ac97}, {"bga",     BGA_VENDOR,     BGA_DEVICE,     init_bga}, {"e1000",   E1000_VENDOR,   E1000_DEVICE,   init_e1000}, {"svga ii", SVGA_II_VENDOR, SVGA_II_DEVICE, init_svga_ii}, {"rtl8139", RTL8139_VENDOR, RTL8139_DEVICE, init_rtl8139}, {"virtio-gpu", VIRTIO_GPU_VENDOR, VIRTIO_GPU_DEVICE_MODERN, init_virtio_gpu}, {"virtio-gpu", VIRTIO_GPU_VENDOR, VIRTIO_GPU_DEVICE_TRANSITIONAL, init_virtio_gpu}, };
 
     const struct {
         const char *name;
@@ -230,18 +216,14 @@ void init_pci_drivers(void) {
         uint8_t progif_value;
         bool (*init)(pci_device_t*);
     } known_storage_controllers[] = {
-        {"ide", IDE_CLASS, IDE_SUBCLASS, IDE_PROGIF_MASK, IDE_PROGIF_VALUE, init_ide},
-        {"ahci", AHCI_CLASS, AHCI_SUBCLASS, 0xFF, AHCI_PROGIF, init_ahci},
-    };
+        {"ide", IDE_CLASS, IDE_SUBCLASS, IDE_PROGIF_MASK, IDE_PROGIF_VALUE, init_ide}, {"ahci", AHCI_CLASS, AHCI_SUBCLASS, 0xFF, AHCI_PROGIF, init_ahci}, };
 
     const struct {
         const char *name;
         uint8_t progif;
         void (*init)(pci_device_t*);
     } known_usb_drivers[] = {
-        {"uhci", USB_PROGIF_UHCI, init_uhci},
-        {"ohci", USB_PROGIF_OHCI, init_ohci},
-    };
+        {"uhci", USB_PROGIF_UHCI, init_uhci}, {"ohci", USB_PROGIF_OHCI, init_ohci}, };
 
     for (int i = 0; i < (int)(sizeof(known_pci_drivers) / sizeof(known_pci_drivers[0])); i++) {
         pci_device_t *dev = find_pci(known_pci_drivers[i].vendor, known_pci_drivers[i].device);

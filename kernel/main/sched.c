@@ -42,10 +42,7 @@ spinlock_t sched_lock = SPINLOCK_INIT; // Let's keep this public since other fun
 task_t *tasks[MAX_TASKS];
 
 static const uint32_t nice_weights[40] = {
-    88761, 71755, 56483, 46273, 36291, 29154, 23254, 18705, 14949, 11916,
-    9548, 7620, 6100, 4904, 3906, 3121, 2501, 1991, 1586, 1277,
-    1024, 820, 655, 526, 423, 335, 272, 215, 172, 137,
-    110, 87, 70, 56, 45, 36, 29, 23, 18, 15
+    88761, 71755, 56483, 46273, 36291, 29154, 23254, 18705, 14949, 11916, 9548, 7620, 6100, 4904, 3906, 3121, 2501, 1991, 1586, 1277, 1024, 820, 655, 526, 423, 335, 272, 215, 172, 137, 110, 87, 70, 56, 45, 36, 29, 23, 18, 15
 };
 
 static void idle_task(void) { idle(); }
@@ -633,8 +630,7 @@ void update_interval_timers(void) {
 
     for (int i = 0; i < MAX_TASKS; i++) {
         task_t *task = tasks[i];
-        if (task->state == TASK_DEAD || task->state == TASK_ZOMBIE ||
-            task->real_timer_deadline_us == 0 || now < task->real_timer_deadline_us) {
+        if (task->state == TASK_DEAD || task->state == TASK_ZOMBIE || task->real_timer_deadline_us == 0 || now < task->real_timer_deadline_us) {
             continue;
         }
 

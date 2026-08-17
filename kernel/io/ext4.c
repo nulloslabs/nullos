@@ -192,8 +192,7 @@ static int read_ext4_indirect_ptr(const ext4_mount_t *mnt, uint64_t block, uint3
     }
     if (block >= mnt->blocks_count || index >= mnt->block_size / 4U) return -EIO;
     uint8_t raw[4];
-    int status = read_checked_device(mnt, raw, sizeof(raw),
-                                     block * (uint64_t)mnt->block_size + (uint64_t)index * 4U);
+    int status = read_checked_device(mnt, raw, sizeof(raw), block * (uint64_t)mnt->block_size + (uint64_t)index * 4U);
     if (status < 0) return status;
     *value = read_le32(raw);
     if (*value >= mnt->blocks_count) return -EIO;
@@ -216,16 +215,14 @@ static int map_ext4_legacy_block(const ext4_mount_t *mnt, const ext4_inode_t *in
         uint64_t square = (uint64_t)ptrs * ptrs;
         if ((uint64_t)logical < square) {
             uint32_t first;
-            status = read_ext4_indirect_ptr(mnt, read_le32(inode->block + 52),
-                                            logical / ptrs, &first);
+            status = read_ext4_indirect_ptr(mnt, read_le32(inode->block + 52), logical / ptrs, &first);
             if (status == 0) status = read_ext4_indirect_ptr(mnt, first, logical % ptrs, &block);
         } else {
             uint64_t remain = (uint64_t)logical - square;
             uint64_t cube = square * ptrs;
             if (remain >= cube) return -EFBIG;
             uint32_t first, second;
-            status = read_ext4_indirect_ptr(mnt, read_le32(inode->block + 56),
-                                            (uint32_t)(remain / square), &first);
+            status = read_ext4_indirect_ptr(mnt, read_le32(inode->block + 56), (uint32_t)(remain / square), &first);
             remain %= square;
             if (status == 0) status = read_ext4_indirect_ptr(mnt, first, (uint32_t)(remain / ptrs), &second);
             if (status == 0) status = read_ext4_indirect_ptr(mnt, second, (uint32_t)(remain % ptrs), &block);
@@ -306,8 +303,7 @@ static int walk_ext4_directory(const ext4_mount_t *mnt, const ext4_inode_t *dir,
                 goto out;
             }
             if (ino && name_len) {
-                result = callback(ino, type, (char *)block + pos + 8,
-                                  name_len, context);
+                result = callback(ino, type, (char *)block + pos + 8, name_len, context);
                 if (result != 0) goto out;
             }
             pos += rec_len;
@@ -366,8 +362,7 @@ static int splice_ext4_symlink(char work[EXT4_MAX_PATH], size_t component_start,
     if (prefix_len + target_len + suffix_len + 1 > sizeof(next)) return -ENAMETOOLONG;
     if (prefix_len) memcpy(next, work, prefix_len);
     memcpy(next + prefix_len, target, target_len);
-    memcpy(next + prefix_len + target_len, work + component_end,
-           suffix_len + 1);
+    memcpy(next + prefix_len + target_len, work + component_end, suffix_len + 1);
     strlcpy(work, next, EXT4_MAX_PATH);
     return 0;
 }

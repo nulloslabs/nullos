@@ -53,15 +53,13 @@ static int uhci_check_td(uhci_td_t *td) {
 }
 
 static int uhci_control_transfer(usb_hcd_t *hcd, usb_device_t *dev, usb_setup_packet_t *setup, void *data, uint16_t length) {
-    if (!hcd || !dev || !setup || length > UHCI_MAX_CONTROL_DATA ||
-        (length && !data)) return -1;
+    if (!hcd || !dev || !setup || length > UHCI_MAX_CONTROL_DATA || (length && !data)) return -1;
 
     uhci_controller_t *ctrl = (uhci_controller_t *)hcd->hcd_data;
     uint8_t addr = dev->address;
     int low_speed = (dev->speed == USB_SPEED_LOW);
     uint16_t max_packet = dev->max_packet_size;
-    if (max_packet != 8 && max_packet != 16 &&
-        max_packet != 32 && max_packet != 64) return -1;
+    if (max_packet != 8 && max_packet != 16 && max_packet != 32 && max_packet != 64) return -1;
 
     void *dma_page_raw = pmalloc_dma32();
     if (!dma_page_raw) return -1;
@@ -216,14 +214,12 @@ static int uhci_interrupt_transfer(usb_hcd_t *hcd, usb_device_t *dev, uint8_t en
     return 0; // submitted
 }
 
-static int uhci_bulk_transfer(usb_hcd_t *hcd, usb_device_t *dev,
-                               uint8_t endpoint, void *data, uint16_t length) {
+static int uhci_bulk_transfer(usb_hcd_t *hcd, usb_device_t *dev, uint8_t endpoint, void *data, uint16_t length) {
     (void)hcd; (void)dev; (void)endpoint; (void)data; (void)length;
     return -1;
 }
 
-static void update_uhci_port(uhci_controller_t *ctrl, int port,
-                             uint16_t set, uint16_t clear) {
+static void update_uhci_port(uhci_controller_t *ctrl, int port, uint16_t set, uint16_t clear) {
     uint16_t reg = UHCI_PORTSC1 + (uint16_t)port * 2;
     uint16_t status = inw(ctrl->io_base + reg);
     uint16_t value = status & UHCI_PORT_RW;
@@ -235,8 +231,7 @@ static void update_uhci_port(uhci_controller_t *ctrl, int port,
 static void clear_uhci_port_changes(uhci_controller_t *ctrl, int port) {
     uint16_t reg = UHCI_PORTSC1 + (uint16_t)port * 2;
     uint16_t status = inw(ctrl->io_base + reg);
-    outw(ctrl->io_base + reg,
-         (status & UHCI_PORT_RW) | (status & UHCI_PORT_RWC));
+    outw(ctrl->io_base + reg, (status & UHCI_PORT_RW) | (status & UHCI_PORT_RWC));
 }
 
 static bool reset_uhci_port(uhci_controller_t *ctrl, int port) {
@@ -530,8 +525,7 @@ void init_uhci(pci_device_t *dev) {
         ctrl->pending_dma_buf = (uint8_t *)phys_to_virt(ctrl->pending_dma_phys);
     }
 
-    if (!ctrl->qh || !ctrl->intr_qh || !ctrl->term_td ||
-        !ctrl->pending_td || !ctrl->pending_dma_buf) {
+    if (!ctrl->qh || !ctrl->intr_qh || !ctrl->term_td || !ctrl->pending_td || !ctrl->pending_dma_buf) {
         log("uhci: failed to allocate DMA32 schedule memory\n");
         if (ctrl->pending_dma_buf) pfree((void *)ctrl->pending_dma_phys);
         if (ctrl->pending_td) pfree((void *)virt_to_phys(ctrl->pending_td));

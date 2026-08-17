@@ -552,21 +552,7 @@ static bool unix_op_is_readable(socket_t *sock) {
 }
 
 static const socket_ops_t unix_socket_ops = {
-    .bind        = unix_op_bind,
-    .connect     = unix_op_connect,
-    .listen      = unix_op_listen,
-    .accept      = unix_op_accept,
-    .sendto      = unix_op_sendto,
-    .recvfrom    = unix_op_recvfrom,
-    .getsockname = unix_op_getsockname,
-    .getpeername = unix_op_getpeername,
-    .getsockopt  = unix_op_getsockopt,
-    .setsockopt  = unix_op_setsockopt,
-    .shutdown    = unix_op_shutdown,
-    .close       = unix_op_close,
-    .read        = unix_op_read,
-    .write       = unix_op_write,
-    .is_readable = unix_op_is_readable,
+    .bind        = unix_op_bind, .connect     = unix_op_connect, .listen      = unix_op_listen, .accept      = unix_op_accept, .sendto      = unix_op_sendto, .recvfrom    = unix_op_recvfrom, .getsockname = unix_op_getsockname, .getpeername = unix_op_getpeername, .getsockopt  = unix_op_getsockopt, .setsockopt  = unix_op_setsockopt, .shutdown    = unix_op_shutdown, .close       = unix_op_close, .read        = unix_op_read, .write       = unix_op_write, .is_readable = unix_op_is_readable,
 };
 
 socket_t *create_unix_socket_obj(unix_handle_t *h) {

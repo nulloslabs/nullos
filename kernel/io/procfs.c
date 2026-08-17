@@ -16,49 +16,15 @@
 #include <mm/vma.h>
 
 const proc_static_node_t proc_nodes[] = {
-    { "",              PROC_NODE_DIR,     PROC_DIR_ROOT         },
-    { "/self",         PROC_NODE_SYMLINK, PROC_LINK_SELF        },
-    { "/mounts",       PROC_NODE_SYMLINK, PROC_LINK_ROOT_MOUNTS },
-    { "/cpuinfo",      PROC_NODE_FILE,    PROC_FILE_CPUINFO     },
-    { "/meminfo",      PROC_NODE_FILE,    PROC_FILE_MEMINFO     },
-    { "/uptime",       PROC_NODE_FILE,    PROC_FILE_UPTIME      },
-    { "/stat",         PROC_NODE_FILE,    PROC_FILE_ROOT_STAT   },
-    { "/loadavg",      PROC_NODE_FILE,    PROC_FILE_LOADAVG     },
-    { "/<pid>",        PROC_NODE_DIR,     PROC_DIR_PID          },
-    { "/<pid>/fd",     PROC_NODE_DIR,     PROC_DIR_FD           },
-    { "/<pid>/maps",   PROC_NODE_FILE,    PROC_FILE_MAPS        },
-    { "/<pid>/mounts", PROC_NODE_FILE,    PROC_FILE_MOUNTS      },
-    { "/<pid>/auxv",   PROC_NODE_FILE,    PROC_FILE_AUXV        },
-    { "/<pid>/stat",   PROC_NODE_FILE,    PROC_FILE_STAT        },
-    { "/<pid>/status", PROC_NODE_FILE,    PROC_FILE_STATUS      },
-    { "/<pid>/cmdline",PROC_NODE_FILE,    PROC_FILE_CMDLINE     },
-    { "/<pid>/comm",   PROC_NODE_FILE,    PROC_FILE_COMM        },
-    { "/<pid>/exe",    PROC_NODE_SYMLINK, PROC_LINK_EXE         },
-    { "/<pid>/cwd",    PROC_NODE_SYMLINK, PROC_LINK_CWD         },
-    { "/<pid>/fd/<n>", PROC_NODE_SYMLINK, PROC_LINK_FD          },
+    { "",              PROC_NODE_DIR,     PROC_DIR_ROOT         }, { "/self",         PROC_NODE_SYMLINK, PROC_LINK_SELF        }, { "/mounts",       PROC_NODE_SYMLINK, PROC_LINK_ROOT_MOUNTS }, { "/cpuinfo",      PROC_NODE_FILE,    PROC_FILE_CPUINFO     }, { "/meminfo",      PROC_NODE_FILE,    PROC_FILE_MEMINFO     }, { "/uptime",       PROC_NODE_FILE,    PROC_FILE_UPTIME      }, { "/stat",         PROC_NODE_FILE,    PROC_FILE_ROOT_STAT   }, { "/loadavg",      PROC_NODE_FILE,    PROC_FILE_LOADAVG     }, { "/<pid>",        PROC_NODE_DIR,     PROC_DIR_PID          }, { "/<pid>/fd",     PROC_NODE_DIR,     PROC_DIR_FD           }, { "/<pid>/maps",   PROC_NODE_FILE,    PROC_FILE_MAPS        }, { "/<pid>/mounts", PROC_NODE_FILE,    PROC_FILE_MOUNTS      }, { "/<pid>/auxv",   PROC_NODE_FILE,    PROC_FILE_AUXV        }, { "/<pid>/stat",   PROC_NODE_FILE,    PROC_FILE_STAT        }, { "/<pid>/status", PROC_NODE_FILE,    PROC_FILE_STATUS      }, { "/<pid>/cmdline",PROC_NODE_FILE,    PROC_FILE_CMDLINE     }, { "/<pid>/comm",   PROC_NODE_FILE,    PROC_FILE_COMM        }, { "/<pid>/exe",    PROC_NODE_SYMLINK, PROC_LINK_EXE         }, { "/<pid>/cwd",    PROC_NODE_SYMLINK, PROC_LINK_CWD         }, { "/<pid>/fd/<n>", PROC_NODE_SYMLINK, PROC_LINK_FD          },
 };
 
 const dirent_static_t root_children[] = {
-    { "self",    DT_LNK },
-    { "mounts",  DT_LNK },
-    { "cpuinfo", DT_REG },
-    { "meminfo", DT_REG },
-    { "uptime",  DT_REG },
-    { "stat",    DT_REG },
-    { "loadavg", DT_REG },
+    { "self",    DT_LNK }, { "mounts",  DT_LNK }, { "cpuinfo", DT_REG }, { "meminfo", DT_REG }, { "uptime",  DT_REG }, { "stat",    DT_REG }, { "loadavg", DT_REG },
 };
 
 const dirent_static_t pid_children[] = {
-    { "fd",     DT_DIR },
-    { "maps",   DT_REG },
-    { "mounts", DT_REG },
-    { "auxv",   DT_REG },
-    { "stat",   DT_REG },
-    { "status", DT_REG },
-    { "cmdline",DT_REG },
-    { "comm",   DT_REG },
-    { "exe",    DT_LNK },
-    { "cwd",    DT_LNK },
+    { "fd",     DT_DIR }, { "maps",   DT_REG }, { "mounts", DT_REG }, { "auxv",   DT_REG }, { "stat",   DT_REG }, { "status", DT_REG }, { "cmdline",DT_REG }, { "comm",   DT_REG }, { "exe",    DT_LNK }, { "cwd",    DT_LNK },
 };
 
 static int fmt_int(int v, char *out, size_t out_size) {
@@ -443,20 +409,7 @@ static size_t build_cpuinfo(char *out) {
 
     // Build the flags string from real CPUID data
     static const struct { cpu_feature_t feat; const char *name; } flag_map[] = {
-        { CPU_FEATURE_FPU,    "fpu"    },
-        { CPU_FEATURE_SSE,    "sse"    },
-        { CPU_FEATURE_SSE2,   "sse2"   },
-        { CPU_FEATURE_SSE3,   "pni"    },
-        { CPU_FEATURE_SSSE3,  "ssse3"  },
-        { CPU_FEATURE_SSE41,  "sse4_1" },
-        { CPU_FEATURE_SSE42,  "sse4_2" },
-        { CPU_FEATURE_AVX,    "avx"    },
-        { CPU_FEATURE_AVX2,   "avx2"   },
-        { CPU_FEATURE_POPCNT, "popcnt" },
-        { CPU_FEATURE_AES,    "aes"    },
-        { CPU_FEATURE_NX,     "nx"     },
-        { CPU_FEATURE_XSAVE,  "xsave"  },
-    };
+        { CPU_FEATURE_FPU,    "fpu"    }, { CPU_FEATURE_SSE,    "sse"    }, { CPU_FEATURE_SSE2,   "sse2"   }, { CPU_FEATURE_SSE3,   "pni"    }, { CPU_FEATURE_SSSE3,  "ssse3"  }, { CPU_FEATURE_SSE41,  "sse4_1" }, { CPU_FEATURE_SSE42,  "sse4_2" }, { CPU_FEATURE_AVX,    "avx"    }, { CPU_FEATURE_AVX2,   "avx2"   }, { CPU_FEATURE_POPCNT, "popcnt" }, { CPU_FEATURE_AES,    "aes"    }, { CPU_FEATURE_NX,     "nx"     }, { CPU_FEATURE_XSAVE,  "xsave"  }, };
     int flag_count = (int)(sizeof(flag_map) / sizeof(flag_map[0]));
 
     char freq_str[32];
@@ -602,8 +555,7 @@ static bool procfs_resolve_impl(const char *abs_path, const char *orig_path, int
     // user path as a hint that /proc/self/ must follow the link even for lstat().
     const char *orig_rel = (orig_path && starts_with(orig_path, "/proc")) ? orig_path + 5 : rel;
     char resolved[256];
-    if (starts_with(orig_rel, "/self/") || starts_with(rel, "/self/") ||
-        (follow_self && strcmp(rel, "/self") == 0)) {
+    if (starts_with(orig_rel, "/self/") || starts_with(rel, "/self/") || (follow_self && strcmp(rel, "/self") == 0)) {
         char pidbuf[16];
         fmt_int(tasks[self]->pid, pidbuf, sizeof(pidbuf));
         const char *rest = rel + 5;  // skip "/self"

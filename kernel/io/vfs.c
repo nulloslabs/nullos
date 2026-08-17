@@ -47,13 +47,7 @@ static int unmount_ext(const char *path) {
 }
 
 static const vfs_backend_t backends[] = {
-    { "tmpfs",    mount_tmpfs, unmount_tmpfs },
-    { "ext2",     mount_ext,   unmount_ext   },
-    { "ext3",     mount_ext,   unmount_ext   },
-    { "ext4",     mount_ext,   unmount_ext   },
-    { "proc",     NULL,        NULL          },
-    { "devtmpfs", NULL,        NULL          },
-    { "devpts",   NULL,        NULL          },
+    { "tmpfs",    mount_tmpfs, unmount_tmpfs }, { "ext2",     mount_ext,   unmount_ext   }, { "ext3",     mount_ext,   unmount_ext   }, { "ext4",     mount_ext,   unmount_ext   }, { "proc",     NULL,        NULL          }, { "devtmpfs", NULL,        NULL          }, { "devpts",   NULL,        NULL          },
 };
 
 static const vfs_backend_t *find_backend(const char *fs_type) {
@@ -103,11 +97,9 @@ int register_vfs_mount(const char *source, const char *path, const char *fs_type
 
     vfs_mount_t *mount = &mounts[free_slot];
     memset(mount, 0, sizeof(*mount));
-    strncpy(mount->source, source && source[0] ? source : "none",
-            sizeof(mount->source) - 1);
+    strncpy(mount->source, source && source[0] ? source : "none", sizeof(mount->source) - 1);
     strncpy(mount->path, path, sizeof(mount->path) - 1);
-    strncpy(mount->fs_type, fs_type,
-            sizeof(mount->fs_type) - 1);
+    strncpy(mount->fs_type, fs_type, sizeof(mount->fs_type) - 1);
     mount->flags = flags;
     mount->id = next_mount_id++;
     mount->active = true;
@@ -381,9 +373,7 @@ int list_vfs_mount(int index, char *out_line, size_t line_size) {
         if (!mounts[i].active) continue;
         if (count++ != index) continue;
         const char *parts[] = {
-            mounts[i].source[0] ? mounts[i].source : "none", " ",
-            mounts[i].path, " ", mounts[i].fs_type, " ",
-            (mounts[i].flags & MS_RDONLY) ? "ro" : "rw", " 0 0"
+            mounts[i].source[0] ? mounts[i].source : "none", " ", mounts[i].path, " ", mounts[i].fs_type, " ", (mounts[i].flags & MS_RDONLY) ? "ro" : "rw", " 0 0"
         };
         size_t written = 0;
         for (size_t part = 0; part < sizeof(parts) / sizeof(parts[0]); part++) {

@@ -76,14 +76,7 @@ static bool find_virtio_capabilities(pci_device_t *dev) {
         uint8_t type = first >> 24;
         if ((first & 0xFF) == VIRTIO_PCI_CAP_ID && length >= sizeof(virtio_pci_cap_t)) {
             virtio_pci_cap_t cap = {
-                .cap_vndr = first & 0xFF,
-                .cap_next = next,
-                .cap_len = length,
-                .cfg_type = type,
-                .bar = read_pci(dev->bus, dev->dev, dev->func, pointer + 4) & 0xFF,
-                .offset = read_pci(dev->bus, dev->dev, dev->func, pointer + 8),
-                .length = read_pci(dev->bus, dev->dev, dev->func, pointer + 12),
-            };
+                .cap_vndr = first & 0xFF, .cap_next = next, .cap_len = length, .cfg_type = type, .bar = read_pci(dev->bus, dev->dev, dev->func, pointer + 4) & 0xFF, .offset = read_pci(dev->bus, dev->dev, dev->func, pointer + 8), .length = read_pci(dev->bus, dev->dev, dev->func, pointer + 12), };
             if (type == VIRTIO_PCI_CAP_COMMON_CFG && cap.length >= sizeof(virtio_pci_common_cfg_t)) {
                 virtio_gpu_common = map_virtio_capability(dev, &cap);
             } else if (type == VIRTIO_PCI_CAP_NOTIFY_CFG && length >= sizeof(virtio_pci_notify_cap_t)) {
@@ -196,17 +189,9 @@ static int submit_virtio_gpu_command(const void *request, uint32_t request_size,
     memcpy(virtio_gpu_command, request, request_size);
     memset(virtio_gpu_response, 0, PAGE_SIZE);
     virtio_gpu_control_queue.desc[0] = (virtq_desc_t){
-        .addr = virtio_gpu_command_phys,
-        .len = request_size,
-        .flags = VIRTQ_DESC_F_NEXT,
-        .next = 1,
-    };
+        .addr = virtio_gpu_command_phys, .len = request_size, .flags = VIRTQ_DESC_F_NEXT, .next = 1, };
     virtio_gpu_control_queue.desc[1] = (virtq_desc_t){
-        .addr = virtio_gpu_response_phys,
-        .len = PAGE_SIZE,
-        .flags = VIRTQ_DESC_F_WRITE,
-        .next = 0,
-    };
+        .addr = virtio_gpu_response_phys, .len = PAGE_SIZE, .flags = VIRTQ_DESC_F_WRITE, .next = 0, };
     uint16_t avail_idx = virtio_gpu_control_queue.avail->idx;
     virtio_gpu_control_queue.avail->ring[avail_idx % virtio_gpu_control_queue.size] = 0;
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
@@ -236,39 +221,23 @@ static int submit_virtio_gpu_command(const void *request, uint32_t request_size,
 static int unref_virtio_gpu_resource(uint32_t resource_id) {
     if (!resource_id) return 0;
     virtio_gpu_resource_unref_t unref = {
-        .hdr.type = VIRTIO_GPU_CMD_RESOURCE_UNREF,
-        .resource_id = resource_id,
-    };
+        .hdr.type = VIRTIO_GPU_CMD_RESOURCE_UNREF, .resource_id = resource_id, };
     return submit_virtio_gpu_command(&unref, sizeof(unref), VIRTIO_GPU_RESP_OK_NODATA);
 }
 
 static int create_virtio_gpu_resource(uint32_t resource_id, uint64_t framebuffer_phys, uint32_t framebuffer_size, uint32_t width, uint32_t height) {
     virtio_gpu_resource_create_2d_t create = {
-        .hdr.type = VIRTIO_GPU_CMD_RESOURCE_CREATE_2D,
-        .resource_id = resource_id,
-        .format = VIRTIO_GPU_FRAMEBUFFER_FORMAT,
-        .width = width,
-        .height = height,
-    };
+        .hdr.type = VIRTIO_GPU_CMD_RESOURCE_CREATE_2D, .resource_id = resource_id, .format = VIRTIO_GPU_FRAMEBUFFER_FORMAT, .width = width, .height = height, };
     int result = submit_virtio_gpu_command(&create, sizeof(create), VIRTIO_GPU_RESP_OK_NODATA);
     if (result < 0) return result;
 
     virtio_gpu_resource_attach_backing_command_t attach = {
-        .request.hdr.type = VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
-        .request.resource_id = resource_id,
-        .request.nr_entries = 1,
-        .entry.addr = framebuffer_phys,
-        .entry.length = framebuffer_size,
-    };
+        .request.hdr.type = VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING, .request.resource_id = resource_id, .request.nr_entries = 1, .entry.addr = framebuffer_phys, .entry.length = framebuffer_size, };
     result = submit_virtio_gpu_command(&attach, sizeof(attach), VIRTIO_GPU_RESP_OK_NODATA);
     if (result < 0) return result;
 
     virtio_gpu_set_scanout_t scanout = {
-        .hdr.type = VIRTIO_GPU_CMD_SET_SCANOUT,
-        .rect = {.width = width, .height = height},
-        .scanout_id = virtio_gpu_scanout,
-        .resource_id = resource_id,
-    };
+        .hdr.type = VIRTIO_GPU_CMD_SET_SCANOUT, .rect = {.width = width, .height = height}, .scanout_id = virtio_gpu_scanout, .resource_id = resource_id, };
     return submit_virtio_gpu_command(&scanout, sizeof(scanout), VIRTIO_GPU_RESP_OK_NODATA);
 }
 
@@ -301,41 +270,20 @@ int update_virtio_gpu(uint64_t x, uint64_t y, uint64_t width, uint64_t height) {
     memset(transfer, 0, VIRTIO_GPU_UPDATE_REQUEST_STRIDE);
     memset(flush, 0, VIRTIO_GPU_UPDATE_REQUEST_STRIDE);
     *transfer = (virtio_gpu_transfer_to_host_2d_t){
-        .hdr.type = VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D,
-        .rect = {.x = x, .y = y, .width = width, .height = height},
-        .offset = (y * virtio_gpu_width + x) * sizeof(uint32_t),
-        .resource_id = virtio_gpu_resource_id,
-    };
+        .hdr.type = VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D, .rect = {.x = x, .y = y, .width = width, .height = height}, .offset = (y * virtio_gpu_width + x) * sizeof(uint32_t), .resource_id = virtio_gpu_resource_id, };
     *flush = (virtio_gpu_resource_flush_t){
-        .hdr.type = VIRTIO_GPU_CMD_RESOURCE_FLUSH,
-        .rect = {.x = x, .y = y, .width = width, .height = height},
-        .resource_id = virtio_gpu_resource_id,
-    };
+        .hdr.type = VIRTIO_GPU_CMD_RESOURCE_FLUSH, .rect = {.x = x, .y = y, .width = width, .height = height}, .resource_id = virtio_gpu_resource_id, };
     memset((uint8_t *)virtio_gpu_update_responses + response_offset, 0, 2 * VIRTIO_GPU_UPDATE_RESPONSE_STRIDE);
 
     uint16_t descriptor = VIRTIO_GPU_SYNC_DESC_COUNT + slot * VIRTIO_GPU_UPDATE_DESC_COUNT;
     virtio_gpu_control_queue.desc[descriptor] = (virtq_desc_t){
-        .addr = virtio_gpu_update_commands_phys + request_offset,
-        .len = sizeof(*transfer),
-        .flags = VIRTQ_DESC_F_NEXT,
-        .next = descriptor + 1,
-    };
+        .addr = virtio_gpu_update_commands_phys + request_offset, .len = sizeof(*transfer), .flags = VIRTQ_DESC_F_NEXT, .next = descriptor + 1, };
     virtio_gpu_control_queue.desc[descriptor + 1] = (virtq_desc_t){
-        .addr = virtio_gpu_update_responses_phys + response_offset,
-        .len = VIRTIO_GPU_UPDATE_RESPONSE_STRIDE,
-        .flags = VIRTQ_DESC_F_WRITE,
-    };
+        .addr = virtio_gpu_update_responses_phys + response_offset, .len = VIRTIO_GPU_UPDATE_RESPONSE_STRIDE, .flags = VIRTQ_DESC_F_WRITE, };
     virtio_gpu_control_queue.desc[descriptor + 2] = (virtq_desc_t){
-        .addr = virtio_gpu_update_commands_phys + request_offset + VIRTIO_GPU_UPDATE_REQUEST_STRIDE,
-        .len = sizeof(*flush),
-        .flags = VIRTQ_DESC_F_NEXT,
-        .next = descriptor + 3,
-    };
+        .addr = virtio_gpu_update_commands_phys + request_offset + VIRTIO_GPU_UPDATE_REQUEST_STRIDE, .len = sizeof(*flush), .flags = VIRTQ_DESC_F_NEXT, .next = descriptor + 3, };
     virtio_gpu_control_queue.desc[descriptor + 3] = (virtq_desc_t){
-        .addr = virtio_gpu_update_responses_phys + response_offset + VIRTIO_GPU_UPDATE_RESPONSE_STRIDE,
-        .len = VIRTIO_GPU_UPDATE_RESPONSE_STRIDE,
-        .flags = VIRTQ_DESC_F_WRITE,
-    };
+        .addr = virtio_gpu_update_responses_phys + response_offset + VIRTIO_GPU_UPDATE_RESPONSE_STRIDE, .len = VIRTIO_GPU_UPDATE_RESPONSE_STRIDE, .flags = VIRTQ_DESC_F_WRITE, };
     virtio_gpu_update_slots[slot].completions = 0;
     virtio_gpu_update_slots[slot].active = true;
     uint16_t avail_idx = virtio_gpu_control_queue.avail->idx;

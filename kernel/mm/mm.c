@@ -47,8 +47,7 @@ static void coalesce_free_list_locked(void) {
     struct memory_header *block = free_list_start;
     while (block && block->next) {
         uint8_t *end = (uint8_t *)(block + 1) + block->size;
-        if (block->is_free && block->next->is_free &&
-            end == (uint8_t *)block->next) {
+        if (block->is_free && block->next->is_free && end == (uint8_t *)block->next) {
             block->size += sizeof(struct memory_header) + block->next->size;
             block->next = block->next->next;
             continue;
@@ -113,8 +112,7 @@ static bool grow_kernel_heap(size_t wanted) {
     while (mapped < grow_size) {
         void *phys = pmalloc();
         if (!phys) break;
-        if (!map_vmm(&kernel_context, start + mapped, (uint64_t)phys,
-                     VMM_WRITABLE | VMM_NX)) {
+        if (!map_vmm(&kernel_context, start + mapped, (uint64_t)phys, VMM_WRITABLE | VMM_NX)) {
             pfree(phys);
             break;
         }
@@ -214,9 +212,7 @@ void *realloc(void *ptr, size_t size) {
 
     // Grow in place when the immediately following block is free.
     struct memory_header *next = block->next;
-    if (next && next->is_free &&
-        (uint8_t *)(block + 1) + block->size == (uint8_t *)next &&
-        block->size + sizeof(*next) + next->size >= size) {
+    if (next && next->is_free && (uint8_t *)(block + 1) + block->size == (uint8_t *)next && block->size + sizeof(*next) + next->size >= size) {
         block->size += sizeof(*next) + next->size;
         block->next = next->next;
         split_block_locked(block, size);

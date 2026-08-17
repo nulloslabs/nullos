@@ -51,8 +51,7 @@ void init_gdt_for_cpu(int cpu_index) {
     write_tss(g);                                     // 0x28: TSS (slots 5+6)
 
     struct gdt_ptr ptr = {
-        .limit = sizeof(g->entries) - 1,
-        .base  = (uint64_t)g->entries
+        .limit = sizeof(g->entries) - 1, .base  = (uint64_t)g->entries
     };
 
     flush_gdt((uint64_t)&ptr);

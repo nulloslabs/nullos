@@ -55,9 +55,7 @@ static int find_mount_for(const char *abs_path, const char **rel_out) {
     for (int i = 0; i < TMPFS_MAX_MOUNTS; i++) {
         if (!tmpfs_mounts[i].active) continue;
         size_t plen = strlen(tmpfs_mounts[i].path);
-        if (plen > best_len &&
-            strncmp(abs_path, tmpfs_mounts[i].path, plen) == 0 &&
-            (abs_path[plen] == '/' || abs_path[plen] == '\0')) {
+        if (plen > best_len && strncmp(abs_path, tmpfs_mounts[i].path, plen) == 0 && (abs_path[plen] == '/' || abs_path[plen] == '\0')) {
             best     = i;
             best_len = plen;
         }
@@ -88,8 +86,7 @@ int create_tmpfs_root(const char *mount_path) {
 
     // Dedup: same path already mounted -> success.
     for (int i = 0; i < TMPFS_MAX_MOUNTS; i++) {
-        if (tmpfs_mounts[i].active &&
-            strcmp(tmpfs_mounts[i].path, mount_path) == 0) {
+        if (tmpfs_mounts[i].active && strcmp(tmpfs_mounts[i].path, mount_path) == 0) {
             spin_unlock_irqrestore(&tmpfs_lock, irq);
             return 0;
         }
@@ -139,8 +136,7 @@ int destroy_tmpfs_root(const char *mount_path) {
 
     int slot = -1;
     for (int i = 0; i < TMPFS_MAX_MOUNTS; i++) {
-        if (tmpfs_mounts[i].active &&
-            strcmp(tmpfs_mounts[i].path, mount_path) == 0) {
+        if (tmpfs_mounts[i].active && strcmp(tmpfs_mounts[i].path, mount_path) == 0) {
             slot = i; break;
         }
     }
@@ -212,8 +208,7 @@ static int walk_rel(int start_dir, const char *rel, bool follow_final) {
         for (int i = 0; i < tmpfs_inodes[cur]->child_count; i++) {
             int ci = tmpfs_inodes[cur]->children[i].inode;
             if (ci < 0) continue;
-            if (tmpfs_inodes[ci] && tmpfs_inodes[ci]->active &&
-                strncmp(tmpfs_inodes[cur]->children[i].name, comp, TMPFS_MAX_NAME) == 0) {
+            if (tmpfs_inodes[ci] && tmpfs_inodes[ci]->active && strncmp(tmpfs_inodes[cur]->children[i].name, comp, TMPFS_MAX_NAME) == 0) {
                 child = ci; break;
             }
         }
@@ -290,8 +285,7 @@ int resolve_tmpfs_parent(const char *abs_path, const char **last_out) {
     return p;
 }
 
-static int read_tmpfs_dirent(int dir_inode, int index, char *name, size_t name_size,
-                      uint8_t *type_out, uint64_t *ino_out) {
+static int read_tmpfs_dirent(int dir_inode, int index, char *name, size_t name_size, uint8_t *type_out, uint64_t *ino_out) {
     if (dir_inode < 0 || dir_inode >= TMPFS_MAX_INODES) return -EBADF;
     uint64_t irq;
     spin_lock_irqsave(&tmpfs_lock, &irq);
@@ -392,9 +386,7 @@ static int find_in_dir(int dir, const char *name) {
 
 // Create a leaf entry (dir/file/symlink) named `last` under its parent dir.
 // Internal entry creator. The caller must hold tmpfs_lock.
-static int create_entry_locked(const char *abs_path, tmpfs_type_t type,
-                               mode_t mode, uid_t uid, gid_t gid,
-                               const char *symlink_target) {
+static int create_entry_locked(const char *abs_path, tmpfs_type_t type, mode_t mode, uid_t uid, gid_t gid, const char *symlink_target) {
     char last[TMPFS_MAX_NAME];
     int parent = resolve_parent_locked(abs_path, last, sizeof(last));
     if (parent < 0) return parent;
@@ -438,9 +430,7 @@ static int create_entry_locked(const char *abs_path, tmpfs_type_t type,
     return inode;
 }
 
-static int create_entry(const char *abs_path, tmpfs_type_t type,
-                        mode_t mode, uid_t uid, gid_t gid,
-                        const char *symlink_target) {
+static int create_entry(const char *abs_path, tmpfs_type_t type, mode_t mode, uid_t uid, gid_t gid, const char *symlink_target) {
     uint64_t irq;
     spin_lock_irqsave(&tmpfs_lock, &irq);
     int inode = create_entry_locked(abs_path, type, mode, uid, gid, symlink_target);
@@ -796,8 +786,7 @@ int delete_tmpfs(const char *path) {
     return remove_tmpfs(path);
 }
 
-int next_tmpfs_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size,
-                     uint8_t *child_type, ino_t *child_ino) {
+int next_tmpfs_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size, uint8_t *child_type, ino_t *child_ino) {
     uint64_t irq;
     spin_lock_irqsave(&tmpfs_lock, &irq);
     int dir_inode = resolve_locked(dir_norm, true);

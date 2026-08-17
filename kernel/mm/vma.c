@@ -9,8 +9,7 @@ static void set_name(char *dst, const char *src) {
     dst[VMA_NAME_MAX - 1] = '\0';
 }
 
-static bool same_attrs(const vma_t *a, int prot, int flags, uint64_t offset,
-                       const char *name) {
+static bool same_attrs(const vma_t *a, int prot, int flags, uint64_t offset, const char *name) {
     if (a->prot != prot) return false;
     if (a->flags != flags) return false;
     // Two regions may only merge into one if the file offset continues
@@ -29,8 +28,7 @@ static bool same_attrs(const vma_t *a, int prot, int flags, uint64_t offset,
     return true;
 }
 
-bool add_vma(vma_table_t *tbl, uint64_t start, uint64_t end, int prot,
-             int flags, uint64_t offset, const char *name) {
+bool add_vma(vma_table_t *tbl, uint64_t start, uint64_t end, int prot, int flags, uint64_t offset, const char *name) {
     if (!tbl || start >= end) return false;
 
     // First, drop anything inside [start,end) so we never record overlapping
@@ -65,10 +63,7 @@ bool add_vma(vma_table_t *tbl, uint64_t start, uint64_t end, int prot,
                 if (j == i) continue;
                 vma_t *q = &tbl->entries[j];
                 if (!q->used) continue;
-                if (q->start == end && q->prot == prot && q->flags == flags &&
-                    same_attrs(q, prot, flags, q->offset, q->name) &&
-                    (!(flags & VMA_FLAG_ANON) ||
-                     strncmp(q->name, p->name, VMA_NAME_MAX) == 0)) {
+                if (q->start == end && q->prot == prot && q->flags == flags && same_attrs(q, prot, flags, q->offset, q->name) && (!(flags & VMA_FLAG_ANON) || strncmp(q->name, p->name, VMA_NAME_MAX) == 0)) {
                     p->end = q->end;
                     q->used = false;
                 }
@@ -157,9 +152,7 @@ void protect_vma(vma_table_t *tbl, uint64_t start, uint64_t end, int prot) {
         uint64_t off = v->offset;
         if (!(v->flags & VMA_FLAG_ANON)) off += (a - v->start);
 
-        add_vma(tbl, a & ~(uint64_t)(PAGE_SIZE - 1),
-                (b + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1),
-                prot, v->flags, off, v->name);
+        add_vma(tbl, a & ~(uint64_t)(PAGE_SIZE - 1), (b + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1), prot, v->flags, off, v->name);
     }
 }
 
@@ -172,9 +165,7 @@ void set_vma_heap(vma_table_t *tbl, uint64_t brk_start, uint64_t brk) {
         if (v->flags & VMA_FLAG_HEAP) { v->used = false; }
     }
     if (brk > brk_start) {
-        add_vma(tbl, brk_start, brk,
-                VMA_PROT_READ | VMA_PROT_WRITE, VMA_FLAG_ANON | VMA_FLAG_HEAP,
-                0, "[heap]");
+        add_vma(tbl, brk_start, brk, VMA_PROT_READ | VMA_PROT_WRITE, VMA_FLAG_ANON | VMA_FLAG_HEAP, 0, "[heap]");
     }
 }
 

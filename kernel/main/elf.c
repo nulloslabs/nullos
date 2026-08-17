@@ -237,8 +237,7 @@ static int load_elf_segments(vmm_context_t *ctx, const uint8_t *data, const elf6
 
             // 3) Zero the BSS region in page-sized chunks. The individual
             //    data pages were already zeroed by pmalloc(); only the tail
-            //    of a partially-written page needs re-zeroing here. Still,
-            //    a page-at-a-time memset is O(thousands) faster than the old
+            //    of a partially-written page needs re-zeroing here. Still, //    a page-at-a-time memset is O(thousands) faster than the old
             //    byte-at-a-time write_vmm ZSS loop.
             if (ph->memsz > ph->filesz) {
                 uint64_t bss_start = seg_start + ph->filesz;
@@ -352,8 +351,7 @@ int execute_elf(const char *path, char **argv, char **envp) {
     uint64_t stack_vaddr = USER_STACK_BASE - USER_STACK_SIZE;
     void *stack = vmap_user_at(ctx, stack_vaddr, USER_STACK_SIZE, VMM_USER | VMM_WRITABLE | VMM_NX);
     if (!stack) { destroy_vmm_context(ctx); return -ENOMEM; }
-    add_vma(&local_vmas, stack_vaddr, stack_vaddr + USER_STACK_SIZE,
-            VMA_PROT_READ | VMA_PROT_WRITE, VMA_FLAG_ANON | VMA_FLAG_STACK, 0, "[stack]");
+    add_vma(&local_vmas, stack_vaddr, stack_vaddr + USER_STACK_SIZE, VMA_PROT_READ | VMA_PROT_WRITE, VMA_FLAG_ANON | VMA_FLAG_STACK, 0, "[stack]");
 
     char *empty_envp[] = { NULL };
     char **actual_envp = envp ? envp : empty_envp;

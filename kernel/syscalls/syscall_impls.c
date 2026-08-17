@@ -293,10 +293,7 @@ static void resolve_path_symlinks_ex(const char *path, char *out, size_t out_siz
         } else if (is_procfs_path(prefix)) {
             int self = proc_self_idx();
             proc_node_t pn;
-            if (resolve_procfs_nofollow(prefix, self, &pn) &&
-                pn.type == PROC_NODE_SYMLINK &&
-                pn.entry != PROC_LINK_FD &&
-                pn.entry != PROC_LINK_SELF) {
+            if (resolve_procfs_nofollow(prefix, self, &pn) && pn.type == PROC_NODE_SYMLINK && pn.entry != PROC_LINK_FD && pn.entry != PROC_LINK_SELF) {
                 char target[256];
                 int tlen = read_procfs_link(&pn, self, target, sizeof(target));
                 if (tlen >= 0) {
@@ -454,8 +451,7 @@ static bool stat_virtual_device(const char *abs_path, struct stat *kst) {
     resolve_path_symlinks(abs_path, resolved, sizeof(resolved));
 
     char rel_path[256];
-    // Check devpts BEFORE devtmpfs: /dev/pts is a sub-path of /dev (devtmpfs),
-    // so devtmpfs would incorrectly match /dev/pts paths with rel="pts".
+    // Check devpts BEFORE devtmpfs: /dev/pts is a sub-path of /dev (devtmpfs), // so devtmpfs would incorrectly match /dev/pts paths with rel="pts".
     if (match_vfs_path(resolved, "devpts", rel_path)) {
         if (rel_path[0] == '\0') {
             kst->st_mode = S_IFDIR | 0755;
@@ -688,9 +684,7 @@ static int open_tmpfs_common(const char *abs_path, uint32_t flags, mode_t mode) 
         if (!(flags & O_CREAT)) return -ENOENT;
         int access = check_parent_access(abs_path, true);
         if (access < 0) return access;
-        int r = write_tmpfs(abs_path, NULL, 0,
-                            apply_current_umask(mode ? mode : 0644) | S_IFREG,
-                            current_task_ptr->fsuid, current_task_ptr->fsgid);
+        int r = write_tmpfs(abs_path, NULL, 0, apply_current_umask(mode ? mode : 0644) | S_IFREG, current_task_ptr->fsuid, current_task_ptr->fsgid);
         if (r < 0) return r;
     } else {
         // O_EXCL: fail if exists
@@ -776,8 +770,7 @@ static void wait_futex(syscall_frame_t *frame, uint64_t phys, uint32_t val, stru
     spin_lock_irqsave(&futex_lock, &irq_flags);
 
     uint32_t cur_val = 0;
-    read_vmm(current_task_ptr->ctx, &cur_val,
-             (uint64_t)(frame->rdi) , sizeof(uint32_t));
+    read_vmm(current_task_ptr->ctx, &cur_val, (uint64_t)(frame->rdi) , sizeof(uint32_t));
     if (cur_val != val) {
         spin_unlock_irqrestore(&futex_lock, irq_flags);
         frame->rax = (uint64_t)-EAGAIN;
@@ -1853,14 +1846,7 @@ void check_signals_from_interrupt(interrupt_frame_t *irq) {
     if (!irq || (irq->cs & 3) != 3) return;
 
     syscall_frame_t frame = {
-        .rax = irq->rax, .rbx = irq->rbx, .rcx = irq->rcx,
-        .rdx = irq->rdx, .rsi = irq->rsi, .rdi = irq->rdi,
-        .rsp = irq->rsp, .rbp = irq->rbp,
-        .r8 = irq->r8, .r9 = irq->r9, .r10 = irq->r10,
-        .r11 = irq->r11, .r12 = irq->r12, .r13 = irq->r13,
-        .r14 = irq->r14, .r15 = irq->r15,
-        .rip = irq->rip, .rflags = irq->rflags,
-    };
+        .rax = irq->rax, .rbx = irq->rbx, .rcx = irq->rcx, .rdx = irq->rdx, .rsi = irq->rsi, .rdi = irq->rdi, .rsp = irq->rsp, .rbp = irq->rbp, .r8 = irq->r8, .r9 = irq->r9, .r10 = irq->r10, .r11 = irq->r11, .r12 = irq->r12, .r13 = irq->r13, .r14 = irq->r14, .r15 = irq->r15, .rip = irq->rip, .rflags = irq->rflags, };
 
     check_signals_context(&frame, false, false);
 
@@ -1882,8 +1868,7 @@ void check_futex_timeouts(void) {
         int idx = futex_waiters[i].task_idx;
         if (idx < 0 || idx >= MAX_TASKS) continue;
 
-        if (futex_waiters[i].deadline_us != 0 &&
-            now >= futex_waiters[i].deadline_us) {
+        if (futex_waiters[i].deadline_us != 0 && now >= futex_waiters[i].deadline_us) {
             futex_waiters[i].state = FW_TIMED_OUT;
             if (tasks[idx]->state == TASK_STOPPED)
                 tasks[idx]->state = TASK_READY;
@@ -1918,8 +1903,7 @@ static void handle_futex_death(task_t *task, uint64_t uaddr, pid_t tid, bool pen
     read_vmm(task->ctx, &uval, uaddr, sizeof(uint32_t));
 
     // Pending-op unlock race: holder already cleared the TID field in
-    // userspace but died before issuing FUTEX_WAKE.  Value is consistent,
-    // just wake any waiter without touching it.
+    // userspace but died before issuing FUTEX_WAKE.  Value is consistent, // just wake any waiter without touching it.
     if (pending_op && (uval & FUTEX_TID_MASK) == 0) {
         uint64_t phys = get_vmm_phys(task->ctx, uaddr);
         if (phys) wake_futex(phys, 1, FUTEX_BITSET_MATCH_ANY);
@@ -2036,8 +2020,7 @@ void cleanup_futex_task(int task_idx) {
     uint64_t irq;
     spin_lock_irqsave(&futex_lock, &irq);
     for (int i = 0; i < MAX_FUTEX_WAITERS; i++) {
-        if (futex_waiters[i].state == FW_WAITING &&
-            futex_waiters[i].task_idx == task_idx) {
+        if (futex_waiters[i].state == FW_WAITING && futex_waiters[i].task_idx == task_idx) {
             futex_waiters[i].state = FW_FREE;
         }
     }
@@ -2334,10 +2317,7 @@ void sys_write(syscall_frame_t *frame) {
         if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
         read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count);
 
-        int res = write_tmpfs_partial(entry->path, kbuf, entry->offset, count,
-                                       tf.mode ? tf.mode : 0644,
-                                       tf.mode ? tf.uid : current_task_ptr->euid,
-                                       tf.mode ? tf.gid : current_task_ptr->egid);
+        int res = write_tmpfs_partial(entry->path, kbuf, entry->offset, count, tf.mode ? tf.mode : 0644, tf.mode ? tf.uid : current_task_ptr->euid, tf.mode ? tf.gid : current_task_ptr->egid);
         if (kbuf != local_buf) free(kbuf);
         if (res < 0) { frame->rax = (uint64_t)res; return; }
         entry->offset += count;
@@ -2390,8 +2370,7 @@ void sys_open(syscall_frame_t *frame) {
     abs_path[sizeof(abs_path) - 1] = '\0';
 
     char rel_path[256];
-    // Check devpts BEFORE devtmpfs: /dev/pts is a sub-path of /dev (devtmpfs),
-    // so devtmpfs would incorrectly match /dev/pts paths with rel="pts/...".
+    // Check devpts BEFORE devtmpfs: /dev/pts is a sub-path of /dev (devtmpfs), // so devtmpfs would incorrectly match /dev/pts paths with rel="pts/...".
     if (match_vfs_path(abs_path, "devpts", rel_path)) {
         if (strcmp(rel_path, "ptmx") == 0) {
             int idx = alloc_pty();
@@ -2827,8 +2806,7 @@ void sys_lseek(syscall_frame_t *frame) {
     } else if (entry->type == FD_PROC) {
         int self = proc_self_idx();
         proc_node_t n;
-        if (resolve_procfs(entry->path, self, &n) && !is_procfs_dir(&n) &&
-            n.type != PROC_NODE_SYMLINK) {
+        if (resolve_procfs(entry->path, self, &n) && !is_procfs_dir(&n) && n.type != PROC_NODE_SYMLINK) {
             char tmp[PROCFS_MAX_CONTENT];
             file_size = (int64_t)get_procfs_content(&n, tmp);
         } else {
@@ -3018,8 +2996,7 @@ void sys_mmap(syscall_frame_t *frame) {
     bool fb_mapped = false;
     if (requested_fb && mapped_fb) {
         uint64_t phys_base = virt_to_phys((void *)mapped_fb->address);
-        if ((phys_base & (PAGE_SIZE - 1)) || phys_base > UINT64_MAX - offset ||
-            phys_base + offset > UINT64_MAX - map_size) {
+        if ((phys_base & (PAGE_SIZE - 1)) || phys_base > UINT64_MAX - offset || phys_base + offset > UINT64_MAX - map_size) {
             rollback_mmap(ptr, num_pages, retained_pages);
             frame->rax = (uint64_t)-EINVAL;
             return;
@@ -3078,8 +3055,7 @@ void sys_mmap(syscall_frame_t *frame) {
                 int64_t got = read_ext4(entry->path, chunk, amount, offset + copied);
                 if (got < 0) { free(chunk); rollback_mmap(ptr, num_pages, retained_pages); frame->rax = (uint64_t)got; return; }
                 if (got == 0) break;
-                write_vmm(current_task_ptr->ctx, (uint64_t)ptr + copied,
-                          chunk, (uint64_t)got);
+                write_vmm(current_task_ptr->ctx, (uint64_t)ptr + copied, chunk, (uint64_t)got);
                 copied += (uint64_t)got;
                 if ((uint64_t)got < amount) break;
             }
@@ -3327,10 +3303,7 @@ void sys_ioctl(syscall_frame_t *frame) {
         static int interface_mtu = 1500;
         static int interface_tx_queue_length = 1000;
 
-        bool network_admin_request = req == SIOCADDRT || req == SIOCDELRT ||
-            req == SIOCSIFFLAGS || req == SIOCSIFADDR ||
-            req == SIOCSIFNETMASK || req == SIOCSIFBRDADDR || req == SIOCSIFMTU ||
-            req == SIOCSIFTXQLEN;
+        bool network_admin_request = req == SIOCADDRT || req == SIOCDELRT || req == SIOCSIFFLAGS || req == SIOCSIFADDR || req == SIOCSIFNETMASK || req == SIOCSIFBRDADDR || req == SIOCSIFMTU || req == SIOCSIFTXQLEN;
         if (network_admin_request && (!current_task_ptr || current_task_ptr->euid != 0)) {
             frame->rax = (uint64_t)-EPERM;
             return;
@@ -3345,11 +3318,7 @@ void sys_ioctl(syscall_frame_t *frame) {
             return;
         }
 
-        bool interface_query = req == SIOCGIFNAME || req == SIOCGIFINDEX ||
-            req == SIOCGIFHWADDR || req == SIOCGIFFLAGS || req == SIOCSIFFLAGS ||
-            req == SIOCGIFADDR || req == SIOCSIFADDR || req == SIOCGIFNETMASK ||
-            req == SIOCSIFNETMASK || req == SIOCGIFBRDADDR || req == SIOCSIFBRDADDR ||
-            req == SIOCGIFMTU || req == SIOCSIFMTU || req == SIOCGIFTXQLEN || req == SIOCSIFTXQLEN;
+        bool interface_query = req == SIOCGIFNAME || req == SIOCGIFINDEX || req == SIOCGIFHWADDR || req == SIOCGIFFLAGS || req == SIOCSIFFLAGS || req == SIOCGIFADDR || req == SIOCSIFADDR || req == SIOCGIFNETMASK || req == SIOCSIFNETMASK || req == SIOCGIFBRDADDR || req == SIOCSIFBRDADDR || req == SIOCGIFMTU || req == SIOCSIFMTU || req == SIOCGIFTXQLEN || req == SIOCSIFTXQLEN;
         if (interface_query) {
             struct ifreq ifr;
             if (copy_from_user(&ifr, (const void *)argp, sizeof(ifr)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
@@ -4003,14 +3972,12 @@ static int check_path_access(const char *path, const char *abs_path, int mode, b
     struct stat kst = {0};
     if (stat_virtual_device(abs_path, &kst) || stat_tmpfs_to_kst(abs_path, &kst, follow) || stat_ext4_to_kst(abs_path, &kst, follow) || stat_proc(abs_path, path, &kst, follow)) {
         if (want_write && check_ext4_path(abs_path)) return -EROFS;
-        return mode == F_OK || can_access_stat_mode(&kst, want_read, want_write,
-                                                    want_exec) ? 0 : -EACCES;
+        return mode == F_OK || can_access_stat_mode(&kst, want_read, want_write, want_exec) ? 0 : -EACCES;
     }
 
     initrd_file_t file = follow ? stat_initrd(abs_path) : stat_initrd_nofollow(abs_path);
     if (!file.mode) return -ENOENT;
-    return mode == F_OK || can_access_initrd(&file, want_read, want_write,
-                                             want_exec) ? 0 : -EACCES;
+    return mode == F_OK || can_access_initrd(&file, want_read, want_write, want_exec) ? 0 : -EACCES;
 }
 
 static int check_access_at(int dirfd, const char *user_path, int mode, int flags) {
@@ -4026,23 +3993,19 @@ static int check_access_at(int dirfd, const char *user_path, int mode, int flags
     char abs_path[256];
     status = build_abs_path_at(dirfd, path, abs_path, sizeof(abs_path));
     if (status < 0) return status;
-    return check_path_access(path, abs_path, mode,
-                             !(flags & AT_SYMLINK_NOFOLLOW));
+    return check_path_access(path, abs_path, mode, !(flags & AT_SYMLINK_NOFOLLOW));
 }
 
 void sys_access(syscall_frame_t *frame) {
-    frame->rax = (uint64_t)check_access_at(AT_FDCWD,
-        (const char *)frame->rdi, (int)frame->rsi, AT_EACCESS);
+    frame->rax = (uint64_t)check_access_at(AT_FDCWD, (const char *)frame->rdi, (int)frame->rsi, AT_EACCESS);
 }
 
 void sys_faccessat(syscall_frame_t *frame) {
-    frame->rax = (uint64_t)check_access_at((int)frame->rdi,
-        (const char *)frame->rsi, (int)frame->rdx, AT_EACCESS);
+    frame->rax = (uint64_t)check_access_at((int)frame->rdi, (const char *)frame->rsi, (int)frame->rdx, AT_EACCESS);
 }
 
 void sys_faccessat2(syscall_frame_t *frame) {
-    frame->rax = (uint64_t)check_access_at((int)frame->rdi,
-        (const char *)frame->rsi, (int)frame->rdx, (int)frame->r10);
+    frame->rax = (uint64_t)check_access_at((int)frame->rdi, (const char *)frame->rsi, (int)frame->rdx, (int)frame->r10);
 }
 
 void sys_pipe(syscall_frame_t *frame) {
@@ -4242,8 +4205,7 @@ void sys_setitimer(syscall_frame_t *frame) {
         frame->rax = (uint64_t)-EFAULT;
         return;
     }
-    if (timeval_to_us(&new_value.it_value, &value_us) < 0 ||
-        timeval_to_us(&new_value.it_interval, &interval_us) < 0) {
+    if (timeval_to_us(&new_value.it_value, &value_us) < 0 || timeval_to_us(&new_value.it_interval, &interval_us) < 0) {
         frame->rax = (uint64_t)-EINVAL;
         return;
     }
@@ -4347,10 +4309,7 @@ void sys_sendfile(syscall_frame_t *frame) {
         memcpy(new_data, out_file.data, out_file.size);
     memcpy((uint8_t *)new_data + out_entry->offset, (uint8_t *)in_file.data + (uint64_t)offset, to_copy);
 
-    int res = write_initrd(out_entry->path, new_data, new_size,
-                           out_file.mode ? out_file.mode : 0644,
-                           out_file.mode ? out_file.uid : current_task_ptr->euid,
-                           out_file.mode ? out_file.gid : current_task_ptr->egid);
+    int res = write_initrd(out_entry->path, new_data, new_size, out_file.mode ? out_file.mode : 0644, out_file.mode ? out_file.uid : current_task_ptr->euid, out_file.mode ? out_file.gid : current_task_ptr->egid);
     free(new_data);
 
     if (res < 0) { frame->rax = (uint64_t)res; return; }
@@ -4388,8 +4347,7 @@ void sys_socket(syscall_frame_t *frame) {
     if (r < 0) { frame->rax = (uint64_t)r; return; }
     sock->flags = socket_flags & SOCK_NONBLOCK;
 
-    int fd = alloc_fd_handle(&current_task_ptr->fd_table, "socket", FD_SOCKET,
-                             O_RDWR | (socket_flags & SOCK_NONBLOCK), sock);
+    int fd = alloc_fd_handle(&current_task_ptr->fd_table, "socket", FD_SOCKET, O_RDWR | (socket_flags & SOCK_NONBLOCK), sock);
     if (fd < 0) {
         release_socket(sock);
         frame->rax = (uint64_t)fd;
@@ -4492,14 +4450,12 @@ void sys_recvfrom(syscall_frame_t *frame) {
     socklen_t user_addrlen = 0;
     socklen_t kaddrlen = 0;
     if (src_addr || addrlen_ptr) {
-        if (!src_addr || !addrlen_ptr ||
-            copy_from_user(&user_addrlen, addrlen_ptr, sizeof(user_addrlen)) < 0) {
+        if (!src_addr || !addrlen_ptr || copy_from_user(&user_addrlen, addrlen_ptr, sizeof(user_addrlen)) < 0) {
             frame->rax = (uint64_t)-EFAULT;
             return;
         }
         kaddrlen = user_addrlen < sizeof(kaddr) ? user_addrlen : sizeof(kaddr);
-        if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)src_addr, kaddrlen) ||
-            !user_write_range_ok(current_task_ptr->ctx, (uint64_t)addrlen_ptr, sizeof(user_addrlen))) {
+        if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)src_addr, kaddrlen) || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)addrlen_ptr, sizeof(user_addrlen))) {
             frame->rax = (uint64_t)-EFAULT;
             return;
         }
@@ -4550,8 +4506,7 @@ void sys_sendmsg(syscall_frame_t *frame) {
         if (!iov) { frame->rax = (uint64_t)-ENOMEM; return; }
         if (copy_from_user(iov, msg.msg_iov, iov_size) < 0) { result = -EFAULT; goto out; }
         for (size_t i = 0; i < msg.msg_iovlen; i++) {
-            if (iov[i].iov_len > MAX_IO_COUNT - total ||
-                (iov[i].iov_len && !user_range_ok(current_task_ptr->ctx, (uint64_t)iov[i].iov_base, iov[i].iov_len))) {
+            if (iov[i].iov_len > MAX_IO_COUNT - total || (iov[i].iov_len && !user_range_ok(current_task_ptr->ctx, (uint64_t)iov[i].iov_base, iov[i].iov_len))) {
                 result = -EFAULT;
                 goto out;
             }
@@ -4576,8 +4531,7 @@ void sys_sendmsg(syscall_frame_t *frame) {
 
     socket_t *sock = (socket_t *)entry->handle;
     if (sock && sock->ops && sock->ops->sendto) {
-        result = sock->ops->sendto(sock, buf, total, flags,
-                                   msg.msg_name ? name : NULL, msg.msg_namelen);
+        result = sock->ops->sendto(sock, buf, total, flags, msg.msg_name ? name : NULL, msg.msg_namelen);
     }
 
 out:
@@ -4603,8 +4557,7 @@ void sys_recvmsg(syscall_frame_t *frame) {
     if (entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTSOCK; return; }
     if (copy_from_user(&msg, user_msg, sizeof(msg)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
     if (msg.msg_iovlen > MAX_IOV || msg.msg_namelen > sizeof(name)) { frame->rax = (uint64_t)-EINVAL; return; }
-    if (msg.msg_name && msg.msg_namelen &&
-        !user_write_range_ok(current_task_ptr->ctx, (uint64_t)msg.msg_name, msg.msg_namelen)) {
+    if (msg.msg_name && msg.msg_namelen && !user_write_range_ok(current_task_ptr->ctx, (uint64_t)msg.msg_name, msg.msg_namelen)) {
         frame->rax = (uint64_t)-EFAULT;
         return;
     }
@@ -4615,8 +4568,7 @@ void sys_recvmsg(syscall_frame_t *frame) {
         if (!iov) { frame->rax = (uint64_t)-ENOMEM; return; }
         if (copy_from_user(iov, msg.msg_iov, iov_size) < 0) { result = -EFAULT; goto out; }
         for (size_t i = 0; i < msg.msg_iovlen; i++) {
-            if (iov[i].iov_len > MAX_IO_COUNT - total ||
-                (iov[i].iov_len && !user_write_range_ok(current_task_ptr->ctx, (uint64_t)iov[i].iov_base, iov[i].iov_len))) {
+            if (iov[i].iov_len > MAX_IO_COUNT - total || (iov[i].iov_len && !user_write_range_ok(current_task_ptr->ctx, (uint64_t)iov[i].iov_base, iov[i].iov_len))) {
                 result = -EFAULT;
                 goto out;
             }
@@ -4629,9 +4581,7 @@ void sys_recvmsg(syscall_frame_t *frame) {
     name_len = msg.msg_name ? msg.msg_namelen : 0;
     socket_t *sock = (socket_t *)entry->handle;
     if (sock && sock->ops && sock->ops->recvfrom) {
-        result = sock->ops->recvfrom(sock, buf, total, flags,
-                                     msg.msg_name ? name : NULL,
-                                     msg.msg_name ? &name_len : NULL);
+        result = sock->ops->recvfrom(sock, buf, total, flags, msg.msg_name ? name : NULL, msg.msg_name ? &name_len : NULL);
     }
     if (result < 0) goto out;
     if ((uint64_t)result > total) { result = -EIO; goto out; }
@@ -4717,8 +4667,7 @@ void sys_getsockname(syscall_frame_t *frame) {
         return;
     }
     if (addrlen > sizeof(addr)) addrlen = sizeof(addr);
-    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_addr, addrlen) ||
-        !user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_addrlen, sizeof(addrlen))) {
+    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_addr, addrlen) || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_addrlen, sizeof(addrlen))) {
         frame->rax = (uint64_t)-EFAULT;
         return;
     }
@@ -4748,8 +4697,7 @@ void sys_getpeername(syscall_frame_t *frame) {
         return;
     }
     if (addrlen > sizeof(addr)) addrlen = sizeof(addr);
-    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_addr, addrlen) ||
-        !user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_addrlen, sizeof(addrlen))) {
+    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_addr, addrlen) || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)user_addrlen, sizeof(addrlen))) {
         frame->rax = (uint64_t)-EFAULT;
         return;
     }
@@ -4888,8 +4836,7 @@ void sys_clone(syscall_frame_t *frame) {
         if (!child_ctx) { frame->rax = (uint64_t)-ENOMEM; return; }
     }
 
-    pid_t child_pid = clone_task_flags(frame, child_ctx, clone_flags, new_stack,
-                                       parent_tidptr, child_tidptr, tls);
+    pid_t child_pid = clone_task_flags(frame, child_ctx, clone_flags, new_stack, parent_tidptr, child_tidptr, tls);
     if (child_pid < 0) {
         destroy_vmm_context(child_ctx);
         frame->rax = (uint64_t)-EAGAIN;
@@ -4955,8 +4902,7 @@ void sys_execve(syscall_frame_t *frame) {
 
     // Check for shebang
     initrd_file_t probe = read_initrd(path_buf);
-    if (probe.data && probe.size >= 2 &&
-        ((char *)probe.data)[0] == '#' && ((char *)probe.data)[1] == '!') {
+    if (probe.data && probe.size >= 2 && ((char *)probe.data)[0] == '#' && ((char *)probe.data)[1] == '!') {
         // Parse interpreter from shebang line
         char *p = (char *)probe.data + 2;
         while (*p == ' ' || *p == '\t') p++;
@@ -5450,9 +5396,7 @@ static int do_truncate_path(const char *abs_path, uint64_t length) {
 
     if (length < f.size) {
         // Shrink: write only the first 'length' bytes back.
-        return write_initrd(abs_path, f.data, length,
-                            f.mode ? f.mode : 0644,
-                            f.uid, f.gid);
+        return write_initrd(abs_path, f.data, length, f.mode ? f.mode : 0644, f.uid, f.gid);
     } else {
         // Extend: write existing data + zero-pad to 'length'.
         uint64_t extra = length - f.size;
@@ -5460,9 +5404,7 @@ static int do_truncate_path(const char *abs_path, uint64_t length) {
         if (!newbuf) return -ENOMEM;
         if (f.size) memcpy(newbuf, f.data, f.size);
         memset((char *)newbuf + f.size, 0, extra);
-        int r = write_initrd(abs_path, newbuf, length,
-                             f.mode ? f.mode : 0644,
-                             f.uid, f.gid);
+        int r = write_initrd(abs_path, newbuf, length, f.mode ? f.mode : 0644, f.uid, f.gid);
         free(newbuf);
         return r;
     }
@@ -5555,8 +5497,7 @@ void sys_getdents(syscall_frame_t *frame) {
             char child[256];
             uint8_t child_type;
             ino_t child_ino;
-            status = get_next_ext4_child(&child_index, resolved_path, child,
-                                         sizeof(child), &child_type, &child_ino);
+            status = get_next_ext4_child(&child_index, resolved_path, child, sizeof(child), &child_type, &child_ino);
             if (status != 0) break;
             if (!emit_dirent(bufp, &written, buflen, child_ino, (uint64_t)(child_index + 2), child_type, child)) break;
             index = child_index + 2;
@@ -5983,8 +5924,7 @@ void sys_unlink(syscall_frame_t *frame) {
         return;
     }
 
-    // Don't follow the final component: unlink must remove the link itself,
-    // not its target.
+    // Don't follow the final component: unlink must remove the link itself, // not its target.
     initrd_file_t file = stat_initrd_nofollow(abs_path);
     if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
 
@@ -6448,8 +6388,7 @@ void sys_setpgid(syscall_frame_t *frame) {
     if (!target) { frame->rax = (uint64_t)-ESRCH; return; }
 
     // Target must be the caller or a child of the caller
-    if (target->pid != current_task_ptr->pid &&
-        target->ppid != current_task_ptr->pid) {
+    if (target->pid != current_task_ptr->pid && target->ppid != current_task_ptr->pid) {
         frame->rax = (uint64_t)-ESRCH; return;
     }
 
@@ -6561,8 +6500,7 @@ void sys_getresuid(syscall_frame_t *frame) {
     uid_t *suid = (uid_t *)frame->rdx;
 
     if (!ruid || !euid || !suid) { frame->rax = (uint64_t)-EFAULT; return; }
-    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)ruid, sizeof(uid_t)) || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)euid, sizeof(uid_t)) ||
-        !user_write_range_ok(current_task_ptr->ctx, (uint64_t)suid, sizeof(uid_t))) {
+    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)ruid, sizeof(uid_t)) || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)euid, sizeof(uid_t)) || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)suid, sizeof(uid_t))) {
         frame->rax = (uint64_t)-EFAULT; return;
     }
 
@@ -6608,8 +6546,7 @@ void sys_getresgid(syscall_frame_t *frame) {
     gid_t *sgid = (gid_t *)frame->rdx;
 
     if (!rgid || !egid || !sgid) { frame->rax = (uint64_t)-EFAULT; return; }
-    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)rgid, sizeof(gid_t)) || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)egid, sizeof(gid_t)) ||
-        !user_write_range_ok(current_task_ptr->ctx, (uint64_t)sgid, sizeof(gid_t))) {
+    if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)rgid, sizeof(gid_t)) || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)egid, sizeof(gid_t)) || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)sgid, sizeof(gid_t))) {
         frame->rax = (uint64_t)-EFAULT; return;
     }
 
@@ -6947,8 +6884,7 @@ void sys_settimeofday(syscall_frame_t *frame) {
     struct timeval ktv;
     if (copy_from_user(&ktv, tv, sizeof(ktv)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
 
-    if (ktv.tv_sec < 0 || ktv.tv_usec < 0 || ktv.tv_usec >= 1000000 ||
-        ktv.tv_sec > (TIME_T_MAX / 1000000)) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (ktv.tv_sec < 0 || ktv.tv_usec < 0 || ktv.tv_usec >= 1000000 || ktv.tv_sec > (TIME_T_MAX / 1000000)) { frame->rax = (uint64_t)-EINVAL; return; }
 
     uint64_t desired_us = ((uint64_t)ktv.tv_sec * 1000000ULL) + (uint64_t)ktv.tv_usec;
     time_set_realtime_us(desired_us);
@@ -6993,9 +6929,7 @@ void sys_mount(syscall_frame_t *frame) {
         frame->rax = (uint64_t)-ENOENT; return;
     }
 
-    frame->rax = (uint64_t)mount_vfs(source_buf, target_buf,
-                                                fs_type_buf, mountflags,
-                                                data_buf);
+    frame->rax = (uint64_t)mount_vfs(source_buf, target_buf, fs_type_buf, mountflags, data_buf);
 }
 
 void sys_umount2(syscall_frame_t *frame) {
@@ -7111,19 +7045,13 @@ void sys_readahead(syscall_frame_t *frame) {
     }
 
     // POSIX says ESPIPE, but Linux readahead() returns EINVAL for non-regular files
-    if (entry->type == FD_PIPE   ||
-        entry->type == FD_SOCKET ||
-        entry->type == FD_STREAM ||
-        entry->type == FD_PTY_MASTER) {
+    if (entry->type == FD_PIPE   || entry->type == FD_SOCKET || entry->type == FD_STREAM || entry->type == FD_PTY_MASTER) {
         frame->rax = (uint64_t)-EINVAL;
         return;
     }
 
     // Device, procfs, and epoll fds don't support readahead (also EINVAL)
-    if (entry->type == FD_DEV   ||
-        entry->type == FD_PROC  ||
-        entry->type == FD_EPOLL ||
-        entry->type == FD_EPOLL_H) {
+    if (entry->type == FD_DEV   || entry->type == FD_PROC  || entry->type == FD_EPOLL || entry->type == FD_EPOLL_H) {
         frame->rax = (uint64_t)-EINVAL;
         return;
     }
@@ -7504,8 +7432,7 @@ void sys_getdents64(syscall_frame_t *frame) {
             char child[256];
             uint8_t child_type;
             ino_t child_ino;
-            status = get_next_ext4_child(&child_index, resolved_path, child,
-                                         sizeof(child), &child_type, &child_ino);
+            status = get_next_ext4_child(&child_index, resolved_path, child, sizeof(child), &child_type, &child_ino);
             if (status != 0) break;
             if (!emit_dirent64(bufp, &written, buflen, child_ino, (uint64_t)(child_index + 2), child_type, child)) break;
             index = child_index + 2;
@@ -7707,9 +7634,7 @@ void sys_clock_gettime(syscall_frame_t *frame) {
     }
 
     struct timespec ts = {
-        .tv_sec  = (time_t)(us / 1000000ULL),
-        .tv_nsec = (long)(us % 1000000ULL) * 1000L,
-    };
+        .tv_sec  = (time_t)(us / 1000000ULL), .tv_nsec = (long)(us % 1000000ULL) * 1000L, };
     write_vmm(current_task_ptr->ctx, (uint64_t)tp, &ts, sizeof(ts));
     frame->rax = 0;
 }
@@ -7740,8 +7665,7 @@ void sys_clock_getres(syscall_frame_t *frame) {
     }
 
     struct timespec result = { .tv_sec = 0, .tv_nsec = 1000 };
-    write_vmm(current_task_ptr->ctx, (uint64_t)resolution, &result,
-              sizeof(result));
+    write_vmm(current_task_ptr->ctx, (uint64_t)resolution, &result, sizeof(result));
     frame->rax = 0;
 }
 
@@ -8375,8 +8299,7 @@ void sys_pselect6(syscall_frame_t *frame) {
         if (exceptfds) copy_from_user(k_except, exceptfds, set_bytes);
     }
 
-    int64_t ret = do_select(nfds, k_read, k_write, k_except,
-                            o_read, o_write, o_except, qword_bytes, timeout_us);
+    int64_t ret = do_select(nfds, k_read, k_write, k_except, o_read, o_write, o_except, qword_bytes, timeout_us);
 
     // Restore signal mask BEFORE check_signals sees any delivered signal
     current_task_ptr->blocked_signals = old_blocked;
@@ -8412,9 +8335,7 @@ void sys_get_robust_list(syscall_frame_t *frame) {
     size_t *len_ptr = (size_t *)frame->r10;
 
     if (pid != 0 && current_task_ptr && pid != current_task_ptr->pid) { frame->rax = (uint64_t)-ESRCH; return; }
-    if (!head_ptr || !len_ptr ||
-        !user_write_range_ok(current_task_ptr->ctx, (uint64_t)head_ptr, sizeof(void *)) ||
-        !user_write_range_ok(current_task_ptr->ctx, (uint64_t)len_ptr, sizeof(size_t))) {
+    if (!head_ptr || !len_ptr || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)head_ptr, sizeof(void *)) || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)len_ptr, sizeof(size_t))) {
         frame->rax = (uint64_t)-EFAULT; return;
     }
 
@@ -8573,8 +8494,7 @@ void sys_pipe2(syscall_frame_t *frame) {
     if (r < 0) { frame->rax = (uint64_t)r; return; }
 
     fd_flags = flags & O_NONBLOCK;
-    fds[0] = alloc_fd_handle(&current_task_ptr->fd_table, "pipe:r", FD_PIPE,
-                             O_RDONLY | fd_flags, read_end);
+    fds[0] = alloc_fd_handle(&current_task_ptr->fd_table, "pipe:r", FD_PIPE, O_RDONLY | fd_flags, read_end);
     if (fds[0] < 0) {
         release_unix_handle(read_end);
         release_unix_handle(write_end);
@@ -8582,8 +8502,7 @@ void sys_pipe2(syscall_frame_t *frame) {
         return;
     }
 
-    fds[1] = alloc_fd_handle(&current_task_ptr->fd_table, "pipe:w", FD_PIPE,
-                             O_WRONLY | fd_flags, write_end);
+    fds[1] = alloc_fd_handle(&current_task_ptr->fd_table, "pipe:w", FD_PIPE, O_WRONLY | fd_flags, write_end);
     if (fds[1] < 0) {
         free_fd(&current_task_ptr->fd_table, fds[0]);
         release_unix_handle(write_end);
@@ -8625,8 +8544,7 @@ void sys_prlimit64(syscall_frame_t *frame) {
         if (copy_from_user(&requested, new_rlim, sizeof(requested)) < 0) {
             frame->rax = (uint64_t)-EFAULT; return;
         }
-        if (requested.rlim_cur != current.rlim_cur ||
-            requested.rlim_max != current.rlim_max) {
+        if (requested.rlim_cur != current.rlim_cur || requested.rlim_max != current.rlim_max) {
             frame->rax = (uint64_t)-EPERM;
             return;
         }
@@ -8735,10 +8653,7 @@ void sys_statx(syscall_frame_t *frame) {
         abs_path[sizeof(abs_path) - 1] = '\0';
     }
 
-    if (!((stat_virtual_device(abs_path, &kst)) ||
-          (follow_final ? stat_tmpfs_to_kst(abs_path, &kst, true) : stat_tmpfs_to_kst(abs_path, &kst, false)) ||
-          (stat_ext4_to_kst(abs_path, &kst, follow_final)) ||
-          (stat_proc(abs_path, path, &kst, follow_final)))) {
+    if (!((stat_virtual_device(abs_path, &kst)) || (follow_final ? stat_tmpfs_to_kst(abs_path, &kst, true) : stat_tmpfs_to_kst(abs_path, &kst, false)) || (stat_ext4_to_kst(abs_path, &kst, follow_final)) || (stat_proc(abs_path, path, &kst, follow_final)))) {
         if (!stat_initrd_to_kst(abs_path, &kst, follow_final)) { frame->rax = (uint64_t)-ENOENT; return; }
     }
 

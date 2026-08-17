@@ -95,10 +95,7 @@ uint32_t default_color = 0x00AAAAAA;
 uint64_t line_start_y = 0; // Track where current input line started
 
 static const unsigned char acs_table[] = {
-    0x20, 0x04, 0xB1, 0x20, 0x0C, 0x0D, 0x0A, 0xF8,
-    0xF1, 0x20, 0x20, 0xD9, 0xBF, 0xDA, 0xC0, 0xC5,
-    0xC4, 0xC4, 0xC4, 0xC4, 0xC4, 0xC3, 0xB4, 0xC1,
-    0xC2, 0xB3, 0xF3, 0xF2, 0xE3, 0xF7, 0x9C, 0xFA,
+    0x20, 0x04, 0xB1, 0x20, 0x0C, 0x0D, 0x0A, 0xF8, 0xF1, 0x20, 0x20, 0xD9, 0xBF, 0xDA, 0xC0, 0xC5, 0xC4, 0xC4, 0xC4, 0xC4, 0xC4, 0xC3, 0xB4, 0xC1, 0xC2, 0xB3, 0xF3, 0xF2, 0xE3, 0xF7, 0x9C, 0xFA,
 };
 
 static inline unsigned char acs_translate(unsigned char c) {
@@ -241,10 +238,7 @@ static void backbuffer_reload_from_fb(struct limine_framebuffer *fb) {
 }
 
 static inline bool fb_format_matches_backbuffer(struct limine_framebuffer *fb) {
-    return fb->bpp == 32 &&
-           fb->red_mask_size   == 8 && fb->red_mask_shift   == 16 &&
-           fb->green_mask_size == 8 && fb->green_mask_shift == 8  &&
-           fb->blue_mask_size  == 8 && fb->blue_mask_shift  == 0;
+    return fb->bpp == 32 && fb->red_mask_size   == 8 && fb->red_mask_shift   == 16 && fb->green_mask_size == 8 && fb->green_mask_shift == 8  && fb->blue_mask_size  == 8 && fb->blue_mask_shift  == 0;
 }
 
 static void flush_backbuffer(struct limine_framebuffer *fb) {
@@ -273,9 +267,7 @@ static void flush_backbuffer(struct limine_framebuffer *fb) {
             memcpy(fb_addr, back_buffer, back_buffer_pitch * back_buffer_height);
         } else {
             for (uint64_t y = 0; y < back_buffer_height; y++) {
-                memcpy(fb_addr + y * fb->pitch,
-                       back_buffer + y * back_buffer_width,
-                       back_buffer_pitch);
+                memcpy(fb_addr + y * fb->pitch, back_buffer + y * back_buffer_width, back_buffer_pitch);
             }
         }
         update_terminal_fb(0, 0, back_buffer_width, back_buffer_height);
@@ -344,9 +336,7 @@ static void flush_region_backbuffer(struct limine_framebuffer *fb, uint64_t x, u
     // Fast path: 32bpp XRGB — memcpy each row slice directly.
     if (fb_format_matches_backbuffer(fb)) {
         for (uint64_t row = 0; row < h; row++) {
-            memcpy(fb_addr + (y + row) * fb->pitch + x * sizeof(uint32_t),
-                   back_buffer + (y + row) * back_buffer_width + x,
-                   w * sizeof(uint32_t));
+            memcpy(fb_addr + (y + row) * fb->pitch + x * sizeof(uint32_t), back_buffer + (y + row) * back_buffer_width + x, w * sizeof(uint32_t));
         }
         update_terminal_fb(x, y, w, h);
         return;
@@ -422,14 +412,11 @@ static void blank_cells(terminal_cell_t *cells, uint64_t count, uint32_t backgro
 }
 
 static bool init_terminal_vt(terminal_vt_t *vt) {
-    if (!vt || !back_buffer_width || !back_buffer_height ||
-        back_buffer_width > 8192 || back_buffer_height > 8192 ||
-        back_buffer_width > UINT64_MAX / back_buffer_height) return false;
+    if (!vt || !back_buffer_width || !back_buffer_height || back_buffer_width > 8192 || back_buffer_height > 8192 || back_buffer_width > UINT64_MAX / back_buffer_height) return false;
     uint64_t pixel_count = back_buffer_width * back_buffer_height;
     if (cell_columns && cell_rows > UINT64_MAX / cell_columns) return false;
     uint64_t cell_count = cell_columns * cell_rows;
-    if (!pixel_count || pixel_count > UINT64_MAX / sizeof(uint32_t) ||
-        (cell_count && cell_count > UINT64_MAX / sizeof(terminal_cell_t))) return false;
+    if (!pixel_count || pixel_count > UINT64_MAX / sizeof(uint32_t) || (cell_count && cell_count > UINT64_MAX / sizeof(terminal_cell_t))) return false;
     memset(vt, 0, sizeof(*vt));
     vt->back_buffer = (uint32_t *)malloc(pixel_count * sizeof(uint32_t));
     vt->alt_back_buffer = (uint32_t *)malloc(pixel_count * sizeof(uint32_t));
@@ -648,14 +635,10 @@ static void scroll_region_both(int n_lines, uint32_t bg) {
         // This avoids the catastrophic VRAM memmove that was here before.
         uint64_t reg_bytes = back_buffer_pitch;
         if (n_lines > 0) {
-            memmove(back_buffer + top * back_buffer_width,
-                    back_buffer + (top + lh) * back_buffer_width,
-                    (reg_height - lh) * reg_bytes);
+            memmove(back_buffer + top * back_buffer_width, back_buffer + (top + lh) * back_buffer_width, (reg_height - lh) * reg_bytes);
             fill_rect_backbuffer(0, bot - lh, back_buffer_width, lh, bg);
         } else {
-            memmove(back_buffer + (top + lh) * back_buffer_width,
-                    back_buffer + top * back_buffer_width,
-                    (reg_height - lh) * reg_bytes);
+            memmove(back_buffer + (top + lh) * back_buffer_width, back_buffer + top * back_buffer_width, (reg_height - lh) * reg_bytes);
             fill_rect_backbuffer(0, top, back_buffer_width, lh, bg);
         }
         flush_backbuffer(fb);
@@ -664,13 +647,9 @@ static void scroll_region_both(int n_lines, uint32_t bg) {
         uint8_t *fb_addr = (uint8_t *)fb->address;
         uint64_t pitch = fb->pitch;
         if (n_lines > 0) {
-            memmove(fb_addr + top * pitch,
-                    fb_addr + (top + lh) * pitch,
-                    (reg_height - lh) * pitch);
+            memmove(fb_addr + top * pitch, fb_addr + (top + lh) * pitch, (reg_height - lh) * pitch);
         } else {
-            memmove(fb_addr + (top + lh) * pitch,
-                    fb_addr + top * pitch,
-                    (reg_height - lh) * pitch);
+            memmove(fb_addr + (top + lh) * pitch, fb_addr + top * pitch, (reg_height - lh) * pitch);
         }
         for (uint64_t y = (n_lines > 0) ? (bot - lh) : top;
              y < ((n_lines > 0) ? bot : (top + lh)); y++)
@@ -744,10 +723,7 @@ static inline uint32_t rgb_to_hex(uint8_t r, uint8_t g, uint8_t b) {
 
 static uint32_t ansi_to_hex(int code, bool bold) {
     static const uint32_t vga_colors[] = {
-        0x000000, 0xAA0000, 0x00AA00, 0xAA5500,
-        0x0000AA, 0xAA00AA, 0x00AAAA, 0xAAAAAA,
-        0x555555, 0xFF5555, 0x55FF55, 0xFFFF55,
-        0x5555FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF
+        0x000000, 0xAA0000, 0x00AA00, 0xAA5500, 0x0000AA, 0xAA00AA, 0x00AAAA, 0xAAAAAA, 0x555555, 0xFF5555, 0x55FF55, 0xFFFF55, 0x5555FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF
     };
 
     if ((code >= 30 && code <= 37) || (code >= 40 && code <= 47)) {
@@ -1219,9 +1195,7 @@ static int putchar_unlocked(int c) {
                         // Shift lines down from cursor_y to bottom
                         uint64_t move_sz = bot - cursor_y - lh;
                         if (move_sz > 0) {
-                            memmove(back_buffer + (cursor_y + lh) * back_buffer_width,
-                                    back_buffer + cursor_y * back_buffer_width,
-                                    move_sz * back_buffer_pitch);
+                            memmove(back_buffer + (cursor_y + lh) * back_buffer_width, back_buffer + cursor_y * back_buffer_width, move_sz * back_buffer_pitch);
                         }
                         fill_rect_backbuffer(0, cursor_y, back_buffer_width, lh, bg_color);
                         flush_backbuffer(fb);
@@ -1233,9 +1207,7 @@ static int putchar_unlocked(int c) {
                     if (lh < bot - top && cursor_y >= top && cursor_y < bot) {
                         uint64_t move_bytes = (bot - cursor_y - lh) * fb->pitch;
                         if (move_bytes > 0) {
-                            memmove((uint8_t *)fb->address + (cursor_y + lh) * fb->pitch,
-                                    (uint8_t *)fb->address + cursor_y * fb->pitch,
-                                    move_bytes);
+                            memmove((uint8_t *)fb->address + (cursor_y + lh) * fb->pitch, (uint8_t *)fb->address + cursor_y * fb->pitch, move_bytes);
                         }
                         for (uint64_t y = cursor_y; y < cursor_y + lh && y < fb->height; y++)
                             for (uint64_t x = 0; x < fb->width; x++) put_pixel_fb(x, y, bg_color);
@@ -1255,9 +1227,7 @@ static int putchar_unlocked(int c) {
                     if (lh < bot - top && cursor_y >= top && cursor_y < bot) {
                         uint64_t move_sz = bot - cursor_y - lh;
                         if (move_sz > 0) {
-                            memmove(back_buffer + cursor_y * back_buffer_width,
-                                    back_buffer + (cursor_y + lh) * back_buffer_width,
-                                    move_sz * back_buffer_pitch);
+                            memmove(back_buffer + cursor_y * back_buffer_width, back_buffer + (cursor_y + lh) * back_buffer_width, move_sz * back_buffer_pitch);
                         }
                         fill_rect_backbuffer(0, bot - lh, back_buffer_width, lh, bg_color);
                         flush_backbuffer(fb);
@@ -1269,9 +1239,7 @@ static int putchar_unlocked(int c) {
                     if (lh < bot - top && cursor_y >= top && cursor_y < bot) {
                         uint64_t move_bytes = (bot - cursor_y - lh) * fb->pitch;
                         if (move_bytes > 0) {
-                            memmove((uint8_t *)fb->address + cursor_y * fb->pitch,
-                                    (uint8_t *)fb->address + (cursor_y + lh) * fb->pitch,
-                                    move_bytes);
+                            memmove((uint8_t *)fb->address + cursor_y * fb->pitch, (uint8_t *)fb->address + (cursor_y + lh) * fb->pitch, move_bytes);
                         }
                         for (uint64_t y = bot - lh; y < bot && y < fb->height; y++)
                             for (uint64_t x = 0; x < fb->width; x++) put_pixel_fb(x, y, bg_color);
@@ -1287,9 +1255,7 @@ static int putchar_unlocked(int c) {
                     if (cursor_x + ins < eol) {
                         uint64_t move_sz = eol - cursor_x - ins;
                         for (uint64_t y = cursor_y; y < cursor_y + current_font_h && y < fb->height; y++) {
-                            memmove(back_buffer + y * back_buffer_width + cursor_x + ins,
-                                    back_buffer + y * back_buffer_width + cursor_x,
-                                    move_sz * sizeof(uint32_t));
+                            memmove(back_buffer + y * back_buffer_width + cursor_x + ins, back_buffer + y * back_buffer_width + cursor_x, move_sz * sizeof(uint32_t));
                         }
                     }
                     fill_rect_backbuffer(cursor_x, cursor_y, ins, current_font_h, bg_color);
@@ -1301,9 +1267,7 @@ static int putchar_unlocked(int c) {
                         uint64_t move_pixels = eol - cursor_x - ins;
                         uint64_t bpp_bytes = (fb->bpp + 7) / 8;
                         for (uint64_t y = cursor_y; y < cursor_y + current_font_h && y < fb->height; y++) {
-                            memmove((uint8_t *)fb->address + y * fb->pitch + (cursor_x + ins) * bpp_bytes,
-                                    (uint8_t *)fb->address + y * fb->pitch + cursor_x * bpp_bytes,
-                                    move_pixels * bpp_bytes);
+                            memmove((uint8_t *)fb->address + y * fb->pitch + (cursor_x + ins) * bpp_bytes, (uint8_t *)fb->address + y * fb->pitch + cursor_x * bpp_bytes, move_pixels * bpp_bytes);
                         }
                     }
                     for (uint64_t y = cursor_y; y < cursor_y + current_font_h && y < fb->height; y++)
@@ -1319,9 +1283,7 @@ static int putchar_unlocked(int c) {
                     if (cursor_x + del < eol) {
                         uint64_t move_sz = eol - cursor_x - del;
                         for (uint64_t y = cursor_y; y < cursor_y + current_font_h && y < fb->height; y++) {
-                            memmove(back_buffer + y * back_buffer_width + cursor_x,
-                                    back_buffer + y * back_buffer_width + cursor_x + del,
-                                    move_sz * sizeof(uint32_t));
+                            memmove(back_buffer + y * back_buffer_width + cursor_x, back_buffer + y * back_buffer_width + cursor_x + del, move_sz * sizeof(uint32_t));
                         }
                     }
                     fill_rect_backbuffer(eol - del, cursor_y, del, current_font_h, bg_color);
@@ -1333,9 +1295,7 @@ static int putchar_unlocked(int c) {
                         uint64_t move_pixels = eol - cursor_x - del;
                         uint64_t bpp_bytes = (fb->bpp + 7) / 8;
                         for (uint64_t y = cursor_y; y < cursor_y + current_font_h && y < fb->height; y++) {
-                            memmove((uint8_t *)fb->address + y * fb->pitch + cursor_x * bpp_bytes,
-                                    (uint8_t *)fb->address + y * fb->pitch + (cursor_x + del) * bpp_bytes,
-                                    move_pixels * bpp_bytes);
+                            memmove((uint8_t *)fb->address + y * fb->pitch + cursor_x * bpp_bytes, (uint8_t *)fb->address + y * fb->pitch + (cursor_x + del) * bpp_bytes, move_pixels * bpp_bytes);
                         }
                     }
                     for (uint64_t y = cursor_y; y < cursor_y + current_font_h && y < fb->height; y++)
@@ -2010,9 +1970,7 @@ void init_terminal_backbuffer(void) {
     if (hhdm_offset == 0) return;
     if (!fb_req.response || fb_req.response->framebuffer_count < 1) return;
     struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
-    if (!fb || !fb->address || !fb->width || !fb->height || fb->width > 8192 || fb->height > 8192 ||
-        fb->width > UINT64_MAX / sizeof(uint32_t) || fb->pitch < fb->width * sizeof(uint32_t) ||
-        fb->pitch > UINT64_MAX / fb->height) return;
+    if (!fb || !fb->address || !fb->width || !fb->height || fb->width > 8192 || fb->height > 8192 || fb->width > UINT64_MAX / sizeof(uint32_t) || fb->pitch < fb->width * sizeof(uint32_t) || fb->pitch > UINT64_MAX / fb->height) return;
 
     uint64_t prepared_columns = current_font_w ? fb->width / current_font_w : 0;
     uint64_t prepared_rows = current_font_h ? fb->height / current_font_h : 0;
