@@ -48,7 +48,7 @@ static void process_kernel_workqueue(void) {
 }
 
 void start_kernel_workqueue(void) {
-    pid_t pid = create_task(process_kernel_workqueue, 0, &kernel_context, 0);
+    pid_t pid = create_task(process_kernel_workqueue, TASK_RING_0, &kernel_context, 0);
     if (pid < 0) panic("unable to create kernel worker (pid %d)", pid);
     task_t *worker = task_by_pid(pid);
     if (worker) strlcpy(worker->name, "kworker", sizeof(worker->name));

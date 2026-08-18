@@ -206,7 +206,7 @@ const vma_table_t *task_vma_table(int pid_idx) {
 }
 
 pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_t initial_rsp) {
-    assert(ring == 0 || ring == 3);
+    assert(ring == TASK_RING_0 || ring == TASK_RING_3);
     uint64_t flags;
     spin_lock_irqsave(&task_lock, &flags);
 

@@ -35,6 +35,9 @@
 #define TASK_REAPED 5
 #define TASK_SLEEPING 6
 
+#define TASK_RING_0 0
+#define TASK_RING_3 3
+
 #define TASK_KSTACK_OFFSET 48
 #define TASK_SYSCALL_USER_RSP_OFFSET 56
 

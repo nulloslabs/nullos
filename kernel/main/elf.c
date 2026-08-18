@@ -368,7 +368,7 @@ int execute_elf(const char *path, char **argv, char **envp) {
     }
     heap_start = (heap_start + 0xFFF) & ~0xFFFULL; // page align
 
-    pid_t pid = create_task((void(*)(void))entry, 3, ctx, v_rsp);
+    pid_t pid = create_task((void(*)(void))entry, TASK_RING_3, ctx, v_rsp);
     if (pid < 0) {
         destroy_vmm_context(ctx);
         return pid;
