@@ -13,12 +13,12 @@ extern void flush_tss(void);
 
 static void set_gdt_entry(uint64_t *gdt, int num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran) {
     gdt[num] = (limit & 0xFFFF)
-             | ((base  & 0xFFFFULL)   << 16)
-             | ((base >> 16 & 0xFFULL) << 32)
-             | ((uint64_t)access       << 40)
-             | ((limit >> 16 & 0x0FULL)<< 48)
-             | ((uint64_t)(gran & 0xF0)<< 48)
-             | ((base >> 24 & 0xFFULL) << 56);
+             | ((base  & 0xFFFFULL)     << 16)
+             | ((base >> 16 & 0xFFULL)  << 32)
+             | ((uint64_t)access        << 40)
+             | ((limit >> 16 & 0x0FULL) << 48)
+             | ((uint64_t)(gran & 0xF0) << 48)
+             | ((base >> 24 & 0xFFULL)  << 56);
 }
 
 static void write_tss(cpu_gdt_t *g) {
