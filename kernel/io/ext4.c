@@ -1,9 +1,9 @@
 #include <stdbool.h>
 #include <errno.h>
+#include <sys/statx.h>
 #include <main/string.h>
 #include <io/devices.h>
 #include <io/ext4.h>
-#include <sys/statx.h>
 #include <mm/mm.h>
 
 // WARNING:

@@ -8,6 +8,7 @@
 #include <io/devtmpfs.h>
 #include <io/ext4.h>
 #include <io/initrd.h>
+#include <io/iso9660.h>
 #include <io/procfs.h>
 #include <io/tmpfs.h>
 #include <io/vfs.h>
@@ -36,7 +37,6 @@ static int unmount_tmpfs(const char *path) {
 
 static int mount_ext(const char *source, const char *path, unsigned long flags, const char *data) {
     if (!source || !source[0]) return -EINVAL;
-    if (!(flags & MS_RDONLY)) return -EROFS;
     if (flags & ~(MS_RDONLY | MS_SILENT)) return -EOPNOTSUPP;
     if (data && data[0] && strcmp(data, "ro") != 0) return -EOPNOTSUPP;
     return mount_ext4(source, path);
@@ -47,7 +47,7 @@ static int unmount_ext(const char *path) {
 }
 
 static const vfs_backend_t backends[] = {
-    { "tmpfs",    mount_tmpfs, unmount_tmpfs }, { "ext2",     mount_ext,   unmount_ext   }, { "ext3",     mount_ext,   unmount_ext   }, { "ext4",     mount_ext,   unmount_ext   }, { "proc",     NULL,        NULL          }, { "devtmpfs", NULL,        NULL          }, { "devpts",   NULL,        NULL          },
+    { "tmpfs",    mount_tmpfs, unmount_tmpfs }, { "ext2",     mount_ext,   unmount_ext   }, { "ext3",     mount_ext,   unmount_ext   }, { "ext4",     mount_ext,   unmount_ext   }, { "iso9660",  mount_iso9660, unmount_iso9660 }, { "proc",     NULL,        NULL          }, { "devtmpfs", NULL,        NULL          }, { "devpts",   NULL,        NULL          },
 };
 
 static const vfs_backend_t *find_backend(const char *fs_type) {
@@ -184,6 +184,8 @@ int64_t read_vfs(const char *path, void *buf, uint64_t count, uint64_t offset) {
 
     if (check_ext4_path(path)) return read_ext4(path, buf, count, offset);
 
+    if (check_iso9660_path(path)) return read_iso9660(path, buf, count, offset);
+
     initrd_file_t file = read_initrd(path);
     if (!file.mode) return -ENOENT;
     if (S_ISDIR(file.mode)) return -EISDIR;
@@ -232,6 +234,13 @@ static int load_internal(const char *path, void **data, uint64_t *size, uint64_t
     } else if (check_ext4_path(path)) {
         struct stat st;
         int status = stat_ext4(path, &st, true);
+        if (status < 0) return status;
+        if (S_ISDIR(st.st_mode)) return -EISDIR;
+        if (st.st_size < 0) return -EIO;
+        file_size = (uint64_t)st.st_size;
+    } else if (check_iso9660_path(path)) {
+        struct stat st;
+        int status = stat_iso9660(path, &st, true);
         if (status < 0) return status;
         if (S_ISDIR(st.st_mode)) return -EISDIR;
         if (st.st_size < 0) return -EIO;

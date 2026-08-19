@@ -14,7 +14,7 @@ A secure, fast and privacy-focused hobby OS.
 | Done | Framebuffer, BGA, SVGA II, virtio-gpu support |
 | Done | IDE and AHCI support |
 | Done | PATA, ATAPI and SATA support |
-| Done | ext2, ext3 and ext4 support |
+| Done | ext2, ext3, ext4 and ISO9660 support |
 | Done | AC'97 support |
 | Done | Initrd support |
 | Done | Gzip decompression support |
