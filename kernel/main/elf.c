@@ -107,7 +107,7 @@ static uint64_t setup_stack(vmm_context_t *ctx, uint64_t v_rsp, char **argv, cha
 
     get_random_bytes(rand_bytes, sizeof(rand_bytes));
     v_rsp -= sizeof(rand_bytes);
-    write_vmm(ctx, v_rsp, rand_bytes, sizeof(rand_bytes));
+    (void)write_vmm(ctx, v_rsp, rand_bytes, sizeof(rand_bytes)); // pages freshly mapped, cannot fail
     if (auxv) {
         for (int i = 0; auxv[i].type != AT_NULL; i++) {
             if (auxv[i].type == AT_RANDOM) {
@@ -121,7 +121,7 @@ static uint64_t setup_stack(vmm_context_t *ctx, uint64_t v_rsp, char **argv, cha
     for (int i = envc - 1; i >= 0; i--) {
         size_t len = strlen(envp[i]) + 1;
         v_rsp -= len;
-        write_vmm(ctx, v_rsp, envp[i], len);
+        (void)write_vmm(ctx, v_rsp, envp[i], len);
         env_ptrs[i] = v_rsp;
     }
 
@@ -129,7 +129,7 @@ static uint64_t setup_stack(vmm_context_t *ctx, uint64_t v_rsp, char **argv, cha
     for (int i = argc - 1; i >= 0; i--) {
         size_t len = strlen(argv[i]) + 1;
         v_rsp -= len;
-        write_vmm(ctx, v_rsp, argv[i], len);
+        (void)write_vmm(ctx, v_rsp, argv[i], len);
         arg_ptrs[i] = v_rsp;
     }
 
@@ -155,29 +155,29 @@ static uint64_t setup_stack(vmm_context_t *ctx, uint64_t v_rsp, char **argv, cha
         while (auxv[auxc].type != AT_NULL) auxc++;
         auxc++; // include AT_NULL
         v_rsp -= aux_size;
-        write_vmm(ctx, v_rsp, auxv, aux_size);
+        (void)write_vmm(ctx, v_rsp, auxv, aux_size);
     }
 
     uint64_t zero = 0;
 
     // Push envp array (NULL terminated)
-    v_rsp -= 8; write_vmm(ctx, v_rsp, &zero, 8);
+    v_rsp -= 8; (void)write_vmm(ctx, v_rsp, &zero, 8);
     for (int i = envc - 1; i >= 0; i--) {
         v_rsp -= 8;
-        write_vmm(ctx, v_rsp, &env_ptrs[i], 8);
+        (void)write_vmm(ctx, v_rsp, &env_ptrs[i], 8);
     }
 
     // Push argv array (NULL terminated)
-    v_rsp -= 8; write_vmm(ctx, v_rsp, &zero, 8);
+    v_rsp -= 8; (void)write_vmm(ctx, v_rsp, &zero, 8);
     for (int i = argc - 1; i >= 0; i--) {
         v_rsp -= 8;
-        write_vmm(ctx, v_rsp, &arg_ptrs[i], 8);
+        (void)write_vmm(ctx, v_rsp, &arg_ptrs[i], 8);
     }
 
     // Push argc
     uint64_t argc_u64 = argc;
     v_rsp -= 8;
-    write_vmm(ctx, v_rsp, &argc_u64, 8);
+    (void)write_vmm(ctx, v_rsp, &argc_u64, 8);
     return v_rsp;
 }
 

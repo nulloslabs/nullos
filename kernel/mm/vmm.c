@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <errno.h>
 #include <main/log.h>
 #include <main/string.h>
 #include <main/limine_req.h>
@@ -280,14 +281,14 @@ bool vmm_user_range_valid(vmm_context_t *ctx, uint64_t addr, size_t size, bool w
 
 
 
-void read_vmm(vmm_context_t* ctx, void* dest, uint64_t virt_src, size_t size) {
+int read_vmm(vmm_context_t* ctx, void* dest, uint64_t virt_src, size_t size) {
     uint8_t* d = (uint8_t*)dest;
     size_t remaining = size;
     uint64_t curr_src = virt_src;
 
     while (remaining > 0) {
         uint64_t phys = get_or_fault_vmm_phys(ctx, curr_src);
-        if (!phys) return;
+        if (!phys) return -EFAULT;
 
         uint64_t offset = curr_src & 0xFFF;
         size_t to_copy = 4096 - offset;
@@ -299,16 +300,17 @@ void read_vmm(vmm_context_t* ctx, void* dest, uint64_t virt_src, size_t size) {
         curr_src += to_copy;
         remaining -= to_copy;
     }
+    return 0;
 }
 
-void write_vmm(vmm_context_t* ctx, uint64_t virt_dest, const void* src, size_t size) {
+int write_vmm(vmm_context_t* ctx, uint64_t virt_dest, const void* src, size_t size) {
     const uint8_t* s = (const uint8_t*)src;
     size_t remaining = size;
     uint64_t curr_dest = virt_dest;
 
     while (remaining > 0) {
         uint64_t phys = get_or_fault_vmm_phys(ctx, curr_dest);
-        if (!phys) return;
+        if (!phys) return -EFAULT;
 
         uint64_t offset = curr_dest & 0xFFF;
         size_t to_copy = 4096 - offset;
@@ -320,15 +322,16 @@ void write_vmm(vmm_context_t* ctx, uint64_t virt_dest, const void* src, size_t s
         curr_dest += to_copy;
         remaining -= to_copy;
     }
+    return 0;
 }
 
-void memset_vmm(vmm_context_t* ctx, uint64_t virt_dest, int val, size_t size) {
+int memset_vmm(vmm_context_t* ctx, uint64_t virt_dest, int val, size_t size) {
     size_t remaining = size;
     uint64_t curr_dest = virt_dest;
 
     while (remaining > 0) {
         uint64_t phys = get_or_fault_vmm_phys(ctx, curr_dest);
-        if (!phys) return;
+        if (!phys) return -EFAULT;
 
         uint64_t offset = curr_dest & 0xFFF;
         size_t to_copy = 4096 - offset;
@@ -339,6 +342,7 @@ void memset_vmm(vmm_context_t* ctx, uint64_t virt_dest, int val, size_t size) {
         curr_dest += to_copy;
         remaining -= to_copy;
     }
+    return 0;
 }
 
 void switch_vmm_context(vmm_context_t* ctx) {

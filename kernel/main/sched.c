@@ -563,7 +563,11 @@ pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *ctx, uint64_t flag
         // it as soon as clone returns).
         if ((flags & CLONE_PARENT_SETTID) && parent_tidptr) {
             int pid = 0; // assigned below; rewrite once known
-            write_vmm(current_task_ptr->ctx, (uint64_t)parent_tidptr, &pid, sizeof(int));
+            if (write_vmm(current_task_ptr->ctx, (uint64_t)parent_tidptr, &pid, sizeof(int)) < 0) {
+                release_task_slot(i);
+                spin_unlock_irqrestore(&task_lock, iflags);
+                return -EFAULT;
+            }
         }
 
         uint64_t v_rsp = (uint64_t)kstack_top(kstack);
@@ -612,12 +616,12 @@ pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *ctx, uint64_t flag
         // Stamp the real pid into parent_tidptr now that it is known.
         if ((flags & CLONE_PARENT_SETTID) && parent_tidptr) {
             int pid = tasks[i]->pid;
-            write_vmm(current_task_ptr->ctx, (uint64_t)parent_tidptr, &pid, sizeof(int));
+            (void)write_vmm(current_task_ptr->ctx, (uint64_t)parent_tidptr, &pid, sizeof(int));
         }
         // CLONE_CHILD_SETTID: child itself observes its pid at child_tidptr.
         if ((flags & CLONE_CHILD_SETTID) && child_tidptr) {
             int pid = tasks[i]->pid;
-            write_vmm(ctx, (uint64_t)child_tidptr, &pid, sizeof(int));
+            (void)write_vmm(ctx, (uint64_t)child_tidptr, &pid, sizeof(int));
         }
 
         processes_created++;

@@ -60,10 +60,10 @@ __attribute__((noreturn)) void kmain(void) {
     init_pmm();
     init_vmm();
     init_mm();
+    init_terminal_backbuffer();
     init_gdt();
     init_idt();
     remap_pic();
-    init_terminal_backbuffer();
     init_initrd();
     init_tmpfs();
     init_tty();

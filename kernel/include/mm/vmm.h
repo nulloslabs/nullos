@@ -48,9 +48,9 @@ uint64_t get_vmm_phys(vmm_context_t* ctx, uint64_t virt);
 bool vmm_user_range_valid(vmm_context_t *ctx, uint64_t addr, size_t size, bool write);
 
 // Context-aware memory access
-void read_vmm(vmm_context_t* ctx, void* dest, uint64_t virt_src, size_t size);
-void write_vmm(vmm_context_t* ctx, uint64_t virt_dest, const void* src, size_t size);
-void memset_vmm(vmm_context_t* ctx, uint64_t virt_dest, int val, size_t size);
+int read_vmm(vmm_context_t* ctx, void* dest, uint64_t virt_src, size_t size);
+int write_vmm(vmm_context_t* ctx, uint64_t virt_dest, const void* src, size_t size);
+int memset_vmm(vmm_context_t* ctx, uint64_t virt_dest, int val, size_t size);
 
 void switch_vmm_context(vmm_context_t* ctx);
 vmm_context_t* create_vmm_context(void);
