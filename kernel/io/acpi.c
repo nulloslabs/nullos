@@ -330,7 +330,7 @@ uacpi_status uacpi_kernel_install_interrupt_handler(uacpi_u32 irq, uacpi_interru
     record->handler = handler;
     record->context = ctx;
     acpi_irq = record;
-    idt_set_descriptor((uint8_t)(32 + irq), isr_acpi, 0x8E);
+    idt_set_descriptor((uint8_t)(32 + irq), acpi_isr, 0x8E);
     if (current_apic_mode == APIC_NONE) unmask_pic_irq((uint8_t)irq);
     else if (ioapic_base) ioapic_route_irq((uint8_t)irq, (uint8_t)(32 + irq), 0, IOAPIC_ACTIVE_LOW | IOAPIC_TRIGGER_LEVEL);
     *out_irq_handle = record;

@@ -1,14 +1,14 @@
 .intel_syntax noprefix
-.global isrspr
+.global spurious_isr
 .extern current_apic_mode
 .extern lapic_base
 .extern eoi_pic
 
-#include <main/smap.h>
+#include <mm/smap.h>
 
 // Catch-all ISR for unhandled interrupt vectors.
 // Just sends EOI and returns — prevents #GP from missing IDT entries.
-isrspr:
+spurious_isr:
     SANITIZE_KERNEL_FLAGS
     push rax
     push rbx

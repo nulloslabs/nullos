@@ -3,7 +3,7 @@
 .extern sched_lock
 .extern dispatch_syscall
 
-#include <main/smap.h>
+#include <mm/smap.h>
 #include <main/sched.h>
 
 syscall_entry:

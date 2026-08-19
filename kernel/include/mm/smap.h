@@ -1,5 +1,7 @@
 #pragma once
 
+#define CR4_SMAP (1ULL << 21)
+
 #ifdef __ASSEMBLY__
 .extern smap_enabled
 
@@ -15,5 +17,8 @@
 
 extern bool smap_enabled;
 
+void stac(void);
+void clac(void);
+void enable_smap_for_cpu(void);
 void enable_smap(void);
 #endif

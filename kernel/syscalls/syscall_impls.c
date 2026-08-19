@@ -7275,7 +7275,7 @@ void sys_futex(syscall_frame_t *frame) {
     case FUTEX_WAKE_OP: {
         uint32_t val2 = (uint32_t)(uintptr_t)timeout_ptr;
 
-        if (!uaddr2 || !user_range_ok(current_task_ptr->ctx, (uint64_t)uaddr2, sizeof(uint32_t))) {
+        if (!uaddr2 || !user_write_range_ok(current_task_ptr->ctx, (uint64_t)uaddr2, sizeof(uint32_t))) {
             frame->rax = (uint64_t)-EFAULT; return;
         }
         uint64_t phys2 = get_vmm_phys(current_task_ptr->ctx, (uint64_t)uaddr2);

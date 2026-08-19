@@ -58,11 +58,11 @@ __attribute__((noreturn)) void kmain(void) {
     if (!LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision)) panic("base revision not supported");
     init_sse();
     init_pmm();
+    init_vmm();
+    init_mm();
     init_gdt();
     init_idt();
     remap_pic();
-    init_vmm();
-    init_mm();
     init_terminal_backbuffer();
     init_initrd();
     init_tmpfs();
@@ -96,7 +96,7 @@ __attribute__((noreturn)) void kmain(void) {
         init_mp();
     }
 
-    sti(); // t
+    sti();
 
     // Execute init process
     const char *init_path = "/init";

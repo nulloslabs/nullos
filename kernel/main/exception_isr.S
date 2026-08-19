@@ -1,10 +1,10 @@
 .intel_syntax noprefix
 // We dont put our ISRS here, our macros already handle that
-.global isrrsv
+.global reserved_isr
 .global isrhdr
 .extern exception_panic
 
-#include <main/smap.h>
+#include <mm/smap.h>
 
 /*
 Table of all CPU faults:
@@ -63,7 +63,7 @@ ISR_ERR   14
 ISR_ERR   30
 
 // Reserved ISRs (22-27, 31): dummy error code + sentinel vector 512
-isrrsv:
+reserved_isr:
     push 0      // dummy error code
     push 512    // sentinel: reserved exception
     jmp isrhdr

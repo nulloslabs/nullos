@@ -6,8 +6,8 @@
 #include <main/machine_info.h>
 #include <main/msr.h>
 #include <main/panic.h>
-#include <main/smap.h>
-#include <main/smep.h>
+#include <mm/smap.h>
+#include <mm/smep.h>
 #include <mm/vmm.h>
 #include <mm/pmm.h>
 #include <mm/mm.h>
@@ -277,6 +277,8 @@ bool vmm_user_range_valid(vmm_context_t *ctx, uint64_t addr, size_t size, bool w
     }
     return true;
 }
+
+
 
 void read_vmm(vmm_context_t* ctx, void* dest, uint64_t virt_src, size_t size) {
     uint8_t* d = (uint8_t*)dest;
@@ -705,11 +707,6 @@ void vfree(void* ptr) {
     for (uint64_t i = 0; i < count; i++) { unmap_vmm(&kernel_context, virt + (i * PAGE_SIZE)); }
 }
 
-void enable_cpu_memory_protection(void) {
-    enable_smep();
-    enable_smap();
-}
-
 void init_vmm(void) {
     // Check if we have the NX bit (mandatory for our OS)
     // NOTE: It is called XD on Intel CPUs but because AMD invented it first, lets stay loyal to AMD.
@@ -724,7 +721,8 @@ void init_vmm(void) {
     __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
     cr0 |= 1ULL << 16;
     __asm__ volatile("mov %0, %%cr0" : : "r"(cr0) : "memory");
-    enable_cpu_memory_protection();
+    enable_smap();
+    enable_smep();
 
     uint64_t current_cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(current_cr3));

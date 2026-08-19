@@ -11,7 +11,7 @@
 // The spinlock for the scheduler is just a uint32_t
 .extern sched_lock
 
-#include <main/smap.h>
+#include <mm/smap.h>
 
 isr32:
     SANITIZE_KERNEL_FLAGS

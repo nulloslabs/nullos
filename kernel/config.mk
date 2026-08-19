@@ -49,7 +49,15 @@ ifneq ($(CHECK_OBJ),)
 	endif
 endif
 
+UACPI_CHECK_OBJ := $(firstword $(wildcard $(UACPI_BUILD)/*.o))
+ifneq ($(UACPI_CHECK_OBJ),)
+	ifneq ($(DEBUG),$(shell $(OBJDUMP) $(OBJDUMP_FLAGS) -h $(UACPI_CHECK_OBJ) 2>/dev/null | grep -q '\.debug' && printf 1 || printf 0))
+		UACPI_FORCE_REBUILD := FORCE
+	endif
+endif
+
 undefine CHECK_OBJ
+undefine UACPI_CHECK_OBJ
 undefine KERNEL_RELEASE
 undefine ARCH
 undefine KERNEL

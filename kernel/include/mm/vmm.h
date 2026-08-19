@@ -53,7 +53,6 @@ void write_vmm(vmm_context_t* ctx, uint64_t virt_dest, const void* src, size_t s
 void memset_vmm(vmm_context_t* ctx, uint64_t virt_dest, int val, size_t size);
 
 void switch_vmm_context(vmm_context_t* ctx);
-void enable_cpu_memory_protection(void);
 vmm_context_t* create_vmm_context(void);
 bool retain_vmm_context(vmm_context_t* ctx);
 void destroy_vmm_context(vmm_context_t* ctx);

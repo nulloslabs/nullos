@@ -21,5 +21,5 @@ struct idt_ptr {
 
 void load_idt_for_cpu(void);
 void idt_set_descriptor(uint8_t vector, void *isr, uint8_t flags);
-extern void isr_acpi(void);
+extern void acpi_isr(void);
 void init_idt(void);

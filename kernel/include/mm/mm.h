@@ -1,7 +1,7 @@
 #pragma once
 
-#include <stddef.h>
 #include <stdint.h>
+#include <stddef.h>
 
 struct memory_header {
     size_t size;

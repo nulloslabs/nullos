@@ -16,7 +16,7 @@ extern void isr14(void);
 extern void isr30(void);
 
 // Reserved exceptions (22-27, 31)
-extern void isrrsv(void);
+extern void reserved_isr(void);
 
 // Timer, keyboard.
 extern void isr32(void);
@@ -38,7 +38,7 @@ DECL_MSI(90) DECL_MSI(91) DECL_MSI(92) DECL_MSI(93) DECL_MSI(94) DECL_MSI(95)
 #undef DECL_MSI
 
 // Catch-all for unhandled hardware interrupts
-extern void isrspr(void);
+extern void spurious_isr(void);
 
 void idt_set_descriptor(uint8_t vector, void* isr, uint8_t flags) {
     struct idt_entry* descriptor = &idt[vector];
@@ -60,7 +60,7 @@ void init_idt(void) {
     // Fill ALL vectors with the spurious handler first so no IDT entry
     // is ever "not present" — prevents #GP on unexpected hardware IRQs.
     // 0x8E = Present (0x80) | DPL 0 (0x00) | Interrupt Gate (0x0E)
-    for (int i = 0; i < 256; i++) { idt_set_descriptor(i, isrspr, 0x8E); }
+    for (int i = 0; i < 256; i++) { idt_set_descriptor(i, spurious_isr, 0x8E); }
 
     // Hardware exceptions and IRQs are kernel-only interrupt gates.
     idt_set_descriptor(0, isr0, 0x8E);
@@ -72,9 +72,9 @@ void init_idt(void) {
     idt[8].ist = 1; // Use IST1 (dedicated double-fault stack)
     idt_set_descriptor(13, isr13, 0x8E);
     idt_set_descriptor(14, isr14, 0x8E);
-    for (int i = 22; i < 27; i++) { idt_set_descriptor(i, isrrsv, 0x8E); }
+    for (int i = 22; i < 27; i++) { idt_set_descriptor(i, reserved_isr, 0x8E); }
     idt_set_descriptor(30, isr30, 0x8E);
-    idt_set_descriptor(31, isrrsv, 0x8E);
+    idt_set_descriptor(31, reserved_isr, 0x8E);
     idt_set_descriptor(32, isr32, 0x8E);
     idt_set_descriptor(33, isr33, 0x8E);
     idt_set_descriptor(43, isr43, 0x8E);

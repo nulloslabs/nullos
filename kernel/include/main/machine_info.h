@@ -30,6 +30,8 @@ typedef enum {
     CPU_FEATURE_NX,
     CPU_FEATURE_XSAVE,
     CPU_FEATURE_OSXSAVE,
+    CPU_FEATURE_SMAP,
+    CPU_FEATURE_SMEP,
 } cpu_feature_t;
 
 const char* get_cpu_name(void);

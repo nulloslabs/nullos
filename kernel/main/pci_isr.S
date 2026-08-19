@@ -4,7 +4,7 @@
 .extern current_apic_mode
 .extern lapic_base
 
-#include <main/smap.h>
+#include <mm/smap.h>
 
 .macro MSI_STUB vec
 .global isr\vec

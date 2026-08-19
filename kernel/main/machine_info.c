@@ -144,9 +144,16 @@ bool cpu_has_feature(cpu_feature_t feature) {
     static uint32_t ecx1 = 0, edx1 = 0, ebx7 = 0, edx_ext1 = 0;
     static bool initialized = false;
     if (!initialized) {
-        uint32_t eax, ebx, ecx, edx;
-        __cpuid(1, eax, ebx, ecx1, edx1);
-        __cpuid(7, eax, ebx7, ecx, edx);
+        uint32_t eax, ebx, ecx, edx, max_standard_leaf;
+        __cpuid(0, max_standard_leaf, ebx, ecx, edx);
+        if (max_standard_leaf >= 1) {
+            __cpuid(1, eax, ebx, ecx1, edx1);
+        }
+        // Leaf 7 uses ECX as a subleaf selector.  __cpuid() leaves that
+        // input unspecified, so explicitly request subleaf 0.
+        if (max_standard_leaf >= 7) {
+            __cpuid_count(7, 0, eax, ebx7, ecx, edx);
+        }
         __cpuid(0x80000000, eax, ebx, ecx, edx);
         if (eax >= 0x80000001) {
             __cpuid(0x80000001, eax, ebx, ecx, edx_ext1);
@@ -170,6 +177,8 @@ bool cpu_has_feature(cpu_feature_t feature) {
         case CPU_FEATURE_NX:     return (edx_ext1 >> 20) & 1;
         case CPU_FEATURE_XSAVE:  return (ecx1 >> 26) & 1;
         case CPU_FEATURE_OSXSAVE: return (ecx1 >> 27) & 1;
+        case CPU_FEATURE_SMEP:    return (ebx7 >> 7) & 1;
+        case CPU_FEATURE_SMAP:    return (ebx7 >> 20) & 1;
         default: return false;
     }
 }

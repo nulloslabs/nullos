@@ -79,7 +79,13 @@ static void insert_region_locked(void *region, size_t region_size) {
 }
 
 static void split_block_locked(struct memory_header *block, size_t wanted) {
-    assert(block != NULL && block->is_free && block->magic == HEAP_BLOCK_MAGIC);
+    assert(block != NULL);
+    assert(block->magic == HEAP_BLOCK_MAGIC);
+    assert(block->size >= wanted);
+
+    // The caller retains ownership state of the first part.  malloc() splits
+    // a free block, while realloc() can split an allocated block; in either
+    // case the newly-created tail is free.
     size_t remainder = block->size - wanted;
     if (remainder < sizeof(struct memory_header) + HEAP_MIN_SPLIT) return;
 

@@ -15,6 +15,8 @@
 #include <mm/mm.h>
 #include <mm/kstack.h>
 #include <mm/vmm.h>
+#include <mm/smap.h>
+#include <mm/smep.h>
 #include <syscalls/syscalls.h>
 
 cpu_t cpus[MAX_CPUS];
@@ -39,7 +41,8 @@ static void ap_entry(struct limine_mp_info *info) {
     set_tss_kstack_for_cpu(idx, kstack_top(cpus[idx].kstack));
 
     init_sse_for_cpu();
-    enable_cpu_memory_protection();
+    enable_smap_for_cpu();
+    enable_smep_for_cpu();
     init_syscalls_for_cpu();
     start_apic_timer_for_cpu();
 

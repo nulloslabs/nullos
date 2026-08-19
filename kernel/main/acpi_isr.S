@@ -1,11 +1,11 @@
 .intel_syntax noprefix
-.global isr_acpi
+.global acpi_isr
 .extern uacpi_irq_dispatch
 .extern eoi_apic
 
-#include <main/smap.h>
+#include <mm/smap.h>
 
-isr_acpi:
+acpi_isr:
     SANITIZE_KERNEL_FLAGS
     push rax
     push rbx

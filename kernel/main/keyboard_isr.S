@@ -5,7 +5,7 @@
 .extern eoi_apic
 .extern handle_ps2_scancode
 
-#include <main/smap.h>
+#include <mm/smap.h>
 
 isr33:
     SANITIZE_KERNEL_FLAGS

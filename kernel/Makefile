@@ -68,7 +68,7 @@ $(UACPI_OUTFILE): $(UACPI_OBJ) FORCE
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/$(UACPI_OUTFILE) is already up to date"; \
 	fi
 
-$(UACPI_BUILD)/%.o: uacpi/source/%.c config.mk Makefile $(FORCE_REBUILD)
+$(UACPI_BUILD)/%.o: uacpi/source/%.c config.mk Makefile $(UACPI_FORCE_REBUILD)
 	@mkdir -p $(UACPI_BUILD)
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/$@"
 	@$(CC) $(UACPI_CFLAGS) -c $< -o $@
