@@ -16,6 +16,8 @@ typedef struct {
     uint64_t minimum_virtual_runtime;
     void *kstack;
     int active;
+    struct task *rq_head;
+    int rq_count;
 } cpu_t;
 
 typedef struct {

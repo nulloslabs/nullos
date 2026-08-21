@@ -29,9 +29,7 @@ static bool find_kernel_symbol_table(kernel_symbol_table_t *table_out) {
     if (!image || file_size < sizeof(elf64_ehdr_t)) return false;
 
     const elf64_ehdr_t *ehdr = (const elf64_ehdr_t *)image;
-    if (ehdr->magic != ELF_MAGIC || ehdr->class != ELF_CLASS64 ||
-        ehdr->shentsize < sizeof(elf64_shdr_t) || ehdr->shnum == 0 ||
-        !is_elf_range_valid(ehdr->shoff, (uint64_t)ehdr->shentsize * ehdr->shnum, file_size)) {
+    if (ehdr->magic != ELF_MAGIC || ehdr->class != ELF_CLASS64 || ehdr->shentsize < sizeof(elf64_shdr_t) || ehdr->shnum == 0 || !is_elf_range_valid(ehdr->shoff, (uint64_t)ehdr->shentsize * ehdr->shnum, file_size)) {
         return false;
     }
 
@@ -41,8 +39,7 @@ static bool find_kernel_symbol_table(kernel_symbol_table_t *table_out) {
         eaddr_req.response) {
         uint64_t linked_base = (uint64_t)-1;
         for (uint16_t i = 0; i < ehdr->phnum; i++) {
-            const elf64_phdr_t *phdr = (const elf64_phdr_t *)(image + ehdr->phoff +
-                                                              (uint64_t)i * ehdr->phentsize);
+            const elf64_phdr_t *phdr = (const elf64_phdr_t *)(image + ehdr->phoff + (uint64_t)i * ehdr->phentsize);
             if (phdr->type == PT_LOAD && phdr->vaddr < linked_base) linked_base = phdr->vaddr;
         }
         if (linked_base != (uint64_t)-1) load_bias = eaddr_req.response->virtual_base - linked_base;
@@ -51,16 +48,11 @@ static bool find_kernel_symbol_table(kernel_symbol_table_t *table_out) {
     // Prefer the full static symbol table, then fall back to the dynamic one.
     for (uint32_t wanted_type = SHT_SYMTAB; ; wanted_type = SHT_DYNSYM) {
         for (uint16_t section_idx = 0; section_idx < ehdr->shnum; section_idx++) {
-            const elf64_shdr_t *symtab = (const elf64_shdr_t *)(image + ehdr->shoff +
-                                                                (uint64_t)section_idx * ehdr->shentsize);
-            if (symtab->type != wanted_type || symtab->entsize < sizeof(elf64_sym_t) ||
-                symtab->link >= ehdr->shnum || symtab->size < symtab->entsize ||
-                !is_elf_range_valid(symtab->offset, symtab->size, file_size)) continue;
+            const elf64_shdr_t *symtab = (const elf64_shdr_t *)(image + ehdr->shoff + (uint64_t)section_idx * ehdr->shentsize);
+            if (symtab->type != wanted_type || symtab->entsize < sizeof(elf64_sym_t) || symtab->link >= ehdr->shnum || symtab->size < symtab->entsize || !is_elf_range_valid(symtab->offset, symtab->size, file_size)) continue;
 
-            const elf64_shdr_t *strtab = (const elf64_shdr_t *)(image + ehdr->shoff +
-                                                                (uint64_t)symtab->link * ehdr->shentsize);
-            if (strtab->type != SHT_STRTAB ||
-                !is_elf_range_valid(strtab->offset, strtab->size, file_size)) continue;
+            const elf64_shdr_t *strtab = (const elf64_shdr_t *)(image + ehdr->shoff + (uint64_t)symtab->link * ehdr->shentsize);
+            if (strtab->type != SHT_STRTAB || !is_elf_range_valid(strtab->offset, strtab->size, file_size)) continue;
 
             if (table_out) {
                 table_out->image = image;
@@ -91,14 +83,11 @@ static bool kernel_symbol_for_rip(uint64_t rip, const char **name_out, uint64_t 
     uint64_t symbol_count = table.symtab->size / table.symtab->entsize;
 
     for (uint64_t i = 0; i < symbol_count; i++) {
-        const elf64_sym_t *symbol = (const elf64_sym_t *)(table.image + table.symtab->offset +
-                                                          i * table.symtab->entsize);
-        if (ELF64_ST_TYPE(symbol->info) != STT_FUNC || symbol->shndx == SHN_UNDEF ||
-            symbol->name == 0 || symbol->name >= table.strtab->size) continue;
+        const elf64_sym_t *symbol = (const elf64_sym_t *)(table.image + table.symtab->offset + i * table.symtab->entsize);
+        if (ELF64_ST_TYPE(symbol->info) != STT_NOTYPE || ELF64_ST_TYPE(symbol->info) != STT_FUNC || symbol->shndx == SHN_UNDEF || symbol->name == 0 || symbol->name >= table.strtab->size) continue;
 
         uint64_t start = symbol->value + table.load_bias;
-        if (start > rip || (symbol->size != 0 && rip - start >= symbol->size) ||
-            (best_name && start <= best_start)) continue;
+        if (start > rip || (symbol->size != 0 && rip - start >= symbol->size) || (best_name && start <= best_start)) continue;
 
         const char *name = (const char *)(table.image + table.strtab->offset + symbol->name);
         uint64_t remaining = table.strtab->size - symbol->name;

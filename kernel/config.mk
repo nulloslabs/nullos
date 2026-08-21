@@ -42,6 +42,8 @@ UACPI_OUTFILE = uacpi/build/libuacpi.a
 UACPI_BUILD = uacpi/build
 SUBDIR = kernel
 
+# Only top-level kernel invocation checks DEBUG mismatch; subdirs inherit via export
+ifeq ($(notdir $(CURDIR)),kernel)
 CHECK_OBJ := $(firstword $(wildcard main/*.o io/*.o mm/*.o syscalls/*.o))
 ifneq ($(CHECK_OBJ),)
 	ifneq ($(DEBUG),$(shell $(OBJDUMP) $(OBJDUMP_FLAGS) -h $(CHECK_OBJ) 2>/dev/null | grep -q '\.debug' && printf 1 || printf 0))
@@ -55,6 +57,9 @@ ifneq ($(UACPI_CHECK_OBJ),)
 		UACPI_FORCE_REBUILD := FORCE
 	endif
 endif
+endif
+export FORCE_REBUILD
+export UACPI_FORCE_REBUILD
 
 undefine CHECK_OBJ
 undefine UACPI_CHECK_OBJ

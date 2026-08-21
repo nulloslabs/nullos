@@ -87,6 +87,9 @@ typedef struct task {
     uint64_t execution_start_us;
     uint64_t sleep_deadline_us;
     int running_cpu;
+    struct task *rq_next;
+    struct task *rq_prev;
+    bool rq_queued;
     int ctty_idx;
     char stdin_buf[TASK_STDIN_BUF_SIZE];
     int stdin_buf_len;

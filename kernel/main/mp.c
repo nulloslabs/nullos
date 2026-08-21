@@ -112,6 +112,8 @@ void init_mp(void) {
         cpus[0].task = current_task_ptr;
         cpus[0].idle_task = current_task;
         cpus[0].active = 1;
+        cpus[0].rq_head = NULL;
+        cpus[0].rq_count = 0;
         map_cpu_index(0, 0);
         log("mp: no apic, running single cpu\n");
         return;
@@ -124,6 +126,8 @@ void init_mp(void) {
         cpus[0].task = current_task_ptr;
         cpus[0].idle_task = current_task;
         cpus[0].active = 1;
+        cpus[0].rq_head = NULL;
+        cpus[0].rq_count = 0;
         map_cpu_index(cpus[0].lapic_id, 0);
         return;
     }
@@ -143,6 +147,8 @@ void init_mp(void) {
         cpus[i].task = NULL;
         cpus[i].idle_task = -1;
         cpus[i].minimum_virtual_runtime = 0;
+        cpus[i].rq_head = NULL;
+        cpus[i].rq_count = 0;
         cpus[i].active = 0;
         map_cpu_index(cpus[i].lapic_id, i);
     }

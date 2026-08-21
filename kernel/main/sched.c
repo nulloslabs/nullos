@@ -51,6 +51,63 @@ static const uint32_t nice_weights[40] = {
 
 static void idle_task(void) { idle(); }
 
+// --- Per-CPU runqueue helpers (sched_lock must be held) ---
+static void rq_enqueue_locked(task_t *task) {
+    if (!task || task->rq_queued || task->state != TASK_READY) return;
+    // Pick least-loaded CPU for new/waking tasks, or last CPU if known
+    int target = 0;
+    if (task->running_cpu >= 0 && task->running_cpu < MAX_CPUS && cpus[task->running_cpu].active) {
+        target = task->running_cpu;
+    } else {
+        int best = 0;
+        int best_load = cpus[0].rq_count;
+        for (int i = 1; i < cpu_count; i++) {
+            if (!cpus[i].active) continue;
+            if (cpus[i].rq_count < best_load) { best_load = cpus[i].rq_count; best = i; }
+        }
+        target = best;
+    }
+    cpu_t *cpu = &cpus[target];
+    task->rq_next = cpu->rq_head;
+    task->rq_prev = NULL;
+    if (cpu->rq_head) cpu->rq_head->rq_prev = task;
+    cpu->rq_head = task;
+    cpu->rq_count++;
+    task->rq_queued = true;
+}
+
+static void rq_dequeue_locked(task_t *task) {
+    if (!task || !task->rq_queued) return;
+    for (int i = 0; i < MAX_CPUS; i++) {
+        cpu_t *cpu = &cpus[i];
+        // Check if task is in this cpu's list by scanning (rq_count small)
+        for (task_t *cur = cpu->rq_head; cur; cur = cur->rq_next) {
+            if (cur == task) {
+                if (task->rq_prev) task->rq_prev->rq_next = task->rq_next;
+                else cpu->rq_head = task->rq_next;
+                if (task->rq_next) task->rq_next->rq_prev = task->rq_prev;
+                cpu->rq_count--;
+                task->rq_next = task->rq_prev = NULL;
+                task->rq_queued = false;
+                return;
+            }
+        }
+    }
+    // Fallback: just clear flag if not found (out-of-sync)
+    task->rq_queued = false;
+    task->rq_next = task->rq_prev = NULL;
+}
+
+static void rq_remove_from_cpu_locked(cpu_t *cpu, task_t *task) {
+    if (!cpu || !task || !task->rq_queued) return;
+    if (task->rq_prev) task->rq_prev->rq_next = task->rq_next;
+    else cpu->rq_head = task->rq_next;
+    if (task->rq_next) task->rq_next->rq_prev = task->rq_prev;
+    cpu->rq_count--;
+    task->rq_next = task->rq_prev = NULL;
+    task->rq_queued = false;
+}
+
 static uint32_t get_weight_for_nice(int nice) {
     if (nice < NICE_MIN) nice = NICE_MIN;
     if (nice > NICE_MAX) nice = NICE_MAX;
@@ -64,6 +121,9 @@ static void initialize_task_scheduling(task_t *task, task_t *parent) {
     task->execution_start_us = 0;
     task->sleep_deadline_us = 0;
     task->running_cpu = -1;
+    task->rq_next = NULL;
+    task->rq_prev = NULL;
+    task->rq_queued = false;
 }
 
 static void wake_sleeping_tasks(uint64_t now) {
@@ -72,6 +132,7 @@ static void wake_sleeping_tasks(uint64_t now) {
         if (task == dead_task || task->state != TASK_SLEEPING || now < task->sleep_deadline_us) continue;
         task->sleep_deadline_us = 0;
         task->state = TASK_READY;
+        rq_enqueue_locked(task);
     }
 }
 
@@ -107,7 +168,13 @@ static unsigned long calc_load(unsigned long load, unsigned long exp, unsigned l
 
 static unsigned long count_runnable_tasks(void) {
     unsigned long count = 0;
-    for (int i = 1; i < MAX_TASKS; i++) if (tasks[i]->state == TASK_READY || tasks[i]->state == TASK_RUNNING) count++;
+    for (int i = 0; i < MAX_CPUS; i++) if (cpus[i].active || i == 0) count += cpus[i].rq_count;
+    // Add currently running tasks (not in runqueue)
+    for (int i = 0; i < cpu_count; i++) if (cpus[i].task && cpus[i].task->state == TASK_RUNNING) count++;
+    // Fallback: if runqueue not yet populated (early boot), include stale READY
+    if (count == 0) {
+        for (int i = 1; i < MAX_TASKS; i++) if (tasks[i]->state == TASK_READY || tasks[i]->state == TASK_RUNNING) count++;
+    }
     return count;
 }
 
@@ -159,6 +226,7 @@ int task_index_by_pid(pid_t pid) {
 void release_task_slot(int task_idx) {
     if (task_idx < 0 || task_idx >= MAX_TASKS || tasks[task_idx] == dead_task) return;
     assert(tasks[task_idx] != NULL && tasks[task_idx] != dead_task);
+    rq_dequeue_locked(tasks[task_idx]);
     if ((tasks[task_idx]->state == TASK_ZOMBIE || tasks[task_idx]->state == TASK_REAPED) && tasks[task_idx]->running_cpu >= 0) { tasks[task_idx]->state = TASK_REAPED; return; }
     if (tasks[task_idx]->kstack) free_kstack(tasks[task_idx]->kstack);
     if (tasks[task_idx]->fpu_area) vfree(tasks[task_idx]->fpu_area);
@@ -181,7 +249,11 @@ void record_timer_interrupt(void) { __atomic_add_fetch(&timer_interrupt_count, 1
 
 uint32_t get_runnable_task_count(void) {
     uint32_t count = 0;
-    for (int i = 1; i < MAX_TASKS; i++) if (tasks[i]->state == TASK_READY || tasks[i]->state == TASK_RUNNING) count++;
+    for (int i = 0; i < MAX_CPUS; i++) if (cpus[i].active || i == 0) count += cpus[i].rq_count;
+    for (int i = 0; i < cpu_count; i++) if (cpus[i].task && cpus[i].task->state == TASK_RUNNING) count++;
+    if (count == 0) {
+        for (int i = 1; i < MAX_TASKS; i++) if (tasks[i]->state == TASK_READY || tasks[i]->state == TASK_RUNNING) count++;
+    }
     return count;
 }
 
@@ -655,7 +727,7 @@ void update_interval_timers(void) {
             task->real_timer_deadline_us = 0;
         }
 
-        if (task->state == TASK_STOPPED) task->state = TASK_READY;
+        if (task->state == TASK_STOPPED) { task->state = TASK_READY; rq_enqueue_locked(task); }
     }
 }
 
@@ -680,19 +752,54 @@ void schedule(void) {
     if (old && old_task != cpu->idle_task) {
         uint64_t elapsed = now >= old->execution_start_us ? now - old->execution_start_us : 0;
         if (elapsed && old->weight) old->virtual_runtime += elapsed * NICE_0_LOAD / old->weight;
-        if (old->state == TASK_RUNNING) old->state = TASK_READY;
+        if (old->state == TASK_RUNNING) { old->state = TASK_READY; rq_enqueue_locked(old); }
         old->running_cpu = -1;
+        if (old->state == TASK_ZOMBIE || old->state == TASK_REAPED) rq_dequeue_locked(old);
     }
 
     int next = cpu->idle_task;
     uint64_t best_runtime = UINT64_MAX;
-    for (int i = 0; i < MAX_TASKS; i++) {
-        int candidate_index = (old_task + i + 1) % MAX_TASKS;
-        task_t *candidate = tasks[candidate_index];
-        if (candidate == dead_task || candidate->state != TASK_READY || candidate->running_cpu >= 0) continue;
-        uint64_t floor = cpu->minimum_virtual_runtime > SCHED_WAKEUP_GRANULARITY_US ? cpu->minimum_virtual_runtime - SCHED_WAKEUP_GRANULARITY_US : 0;
-        if (candidate->virtual_runtime < floor) candidate->virtual_runtime = floor;
-        if (candidate->virtual_runtime < best_runtime) { best_runtime = candidate->virtual_runtime; next = candidate_index; }
+    task_t *best_task = NULL;
+    // Fast path: scan per-CPU runqueues (O(nr_running)) with stale cleanup
+    for (int c = 0; c < MAX_CPUS; c++) {
+        if (!cpus[c].active && c != 0) continue;
+        for (task_t *cand = cpus[c].rq_head; cand; ) {
+            task_t *next_cand = cand->rq_next;
+            if (cand == dead_task || cand->state != TASK_READY || !cand->kstack || cand->rsp == 0) {
+                rq_remove_from_cpu_locked(&cpus[c], cand);
+            } else {
+                uint64_t floor = cpu->minimum_virtual_runtime > SCHED_WAKEUP_GRANULARITY_US ? cpu->minimum_virtual_runtime - SCHED_WAKEUP_GRANULARITY_US : 0;
+                if (cand->virtual_runtime < floor) cand->virtual_runtime = floor;
+                if (cand->virtual_runtime < best_runtime) { best_runtime = cand->virtual_runtime; best_task = cand; }
+            }
+            cand = next_cand;
+        }
+    }
+    // Fallback: if runqueue empty due to missed enqueue, rebuild from tasks[]
+    if (!best_task) {
+        for (int i = 0; i < MAX_TASKS; i++) {
+            task_t *t = tasks[i];
+            if (t == dead_task || t->state != TASK_READY || t->rq_queued || t->running_cpu >= 0 || !t->kstack || t->rsp == 0) continue;
+            rq_enqueue_locked(t);
+        }
+        for (int c = 0; c < MAX_CPUS; c++) {
+            if (!cpus[c].active && c != 0) continue;
+            for (task_t *cand = cpus[c].rq_head; cand; ) {
+                task_t *next_cand = cand->rq_next;
+                if (cand == dead_task || cand->state != TASK_READY || !cand->kstack || cand->rsp == 0) {
+                    rq_remove_from_cpu_locked(&cpus[c], cand);
+                } else {
+                    uint64_t floor = cpu->minimum_virtual_runtime > SCHED_WAKEUP_GRANULARITY_US ? cpu->minimum_virtual_runtime - SCHED_WAKEUP_GRANULARITY_US : 0;
+                    if (cand->virtual_runtime < floor) cand->virtual_runtime = floor;
+                    if (cand->virtual_runtime < best_runtime) { best_runtime = cand->virtual_runtime; best_task = cand; }
+                }
+                cand = next_cand;
+            }
+        }
+    }
+    if (best_task) {
+        for (int i = 0; i < MAX_TASKS; i++) if (tasks[i] == best_task) { next = i; break; }
+        rq_dequeue_locked(best_task);
     }
 
     bool exiting = old && (old->state == TASK_ZOMBIE || old->state == TASK_REAPED);
@@ -803,8 +910,10 @@ void exit_task(int status) {
             if (tasks[i]->state == TASK_STOPPED && (tasks[i]->waiting_for == -1 || tasks[i]->waiting_for == my_pid)) {
                 tasks[i]->waiting_for = 0;
                 tasks[i]->state = TASK_READY;
+                rq_enqueue_locked(tasks[i]);
             } else if (tasks[i]->state == TASK_STOPPED || tasks[i]->state == TASK_READY) {
                 tasks[i]->state = TASK_READY;
+                rq_enqueue_locked(tasks[i]);
             }
             break;
         }
@@ -814,6 +923,7 @@ void exit_task(int status) {
         if (tasks[i]->waiting_for == my_pid) {
             tasks[i]->waiting_for = 0;
             tasks[i]->state = TASK_READY;
+            rq_enqueue_locked(tasks[i]);
             break;
         }
     }
@@ -853,6 +963,8 @@ void prepare_scheduler_cpu(int cpu_index) {
     cpus[cpu_index].task = task;
     cpus[cpu_index].idle_task = task_index;
     cpus[cpu_index].minimum_virtual_runtime = 0;
+    cpus[cpu_index].rq_head = NULL;
+    cpus[cpu_index].rq_count = 0;
 }
 
 
@@ -868,6 +980,9 @@ void init_sched(void) {
     current_task_ptr = tasks[0];
     cpus[0].idle_task = 0;
     cpus[0].minimum_virtual_runtime = 0;
+    cpus[0].rq_head = NULL;
+    cpus[0].rq_count = 0;
+    for (int i = 1; i < MAX_CPUS; i++) { cpus[i].rq_head = NULL; cpus[i].rq_count = 0; }
     tasks[0]->state = TASK_RUNNING;
     tasks[0]->running_cpu = 0;
     tasks[0]->execution_start_us = get_monotonic_time_us();
