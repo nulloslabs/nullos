@@ -38,15 +38,12 @@ uint64_t fb_write_index(int idx, const void* buf, uint64_t count, uint64_t offse
     if (offset >= size) return (uint64_t)-ENOSPC;
     if (count > size - offset) count = size - offset;
     memcpy((uint8_t*)fb->address + offset, buf, count);
-    if (idx == 0) {
-        back_buffer_dirty = true;
-        if (count) {
-            uint64_t first_y = offset / fb->pitch;
-            uint64_t last_y = (offset + count - 1) / fb->pitch;
-            if (first_y < fb->height) {
-                if (last_y >= fb->height) last_y = fb->height - 1;
-                (void)update_fb(0, first_y, fb->width, last_y - first_y + 1);
-            }
+    if (idx == 0 && count) {
+        uint64_t first_y = offset / fb->pitch;
+        uint64_t last_y = (offset + count - 1) / fb->pitch;
+        if (first_y < fb->height) {
+            if (last_y >= fb->height) last_y = fb->height - 1;
+            (void)update_fb(0, first_y, fb->width, last_y - first_y + 1);
         }
     }
     return count;

@@ -29,3 +29,4 @@ extern spinlock_t devtmpfs_lock;
 
 bool device_exists_on_devtmpfs(const char* name);
 const char *get_devtmpfs_device_name(int index);
+bool is_devtmpfs_path(const char *path, char *rel_out);

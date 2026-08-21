@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <main/string.h>
 #include <io/devtmpfs.h>
+#include <io/vfs.h>
 
 bool device_exists_on_devtmpfs(const char* name) {
     while (*name == '/') name++;
@@ -18,6 +19,10 @@ bool device_exists_on_devtmpfs(const char* name) {
 
     spin_unlock_irqrestore(&devtmpfs_lock, irq);
     return false;
+}
+
+bool is_devtmpfs_path(const char *path, char *rel_out) {
+    return match_vfs_path(path, "devtmpfs", rel_out);
 }
 
 const char *get_devtmpfs_device_name(int index) {

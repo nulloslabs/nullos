@@ -1679,7 +1679,7 @@ void show_cursor(bool visible) {
             for (uint64_t row = 0; row < ch; row++) {
                 uint64_t off = (cursor_y + row) * back_buffer_width + cursor_x;
                 for (uint64_t col = 0; col < cw; col++)
-                    back_buffer[off + col] ^= 0x00AAAAAAu;
+                    back_buffer[off + col] = 0x00AAAAAAu;
             }
             // Flush just the cursor cell to the live FB
             flush_region_backbuffer(fb, cursor_x, cursor_y, cw, ch);
@@ -1698,27 +1698,31 @@ void show_cursor(bool visible) {
         uint8_t *fb_addr = (uint8_t *)fb->address;
         uint8_t bpp = fb->bpp;
         uint8_t bpp_bytes = (bpp + 7) / 8;
-        uint32_t cursor_color = 0x00AAAAAAu; // same XOR mask as backbuffer path
+        uint32_t cursor_color = 0x00AAAAAAu; // solid gray
+
+        // Precompute cursor pixel in native fb format
+        uint32_t cursor_pixel = 0;
+        if (fb->bpp != 8) {
+            uint8_t r = (cursor_color >> 16) & 0xFF;
+            uint8_t g = (cursor_color >> 8) & 0xFF;
+            uint8_t b = cursor_color & 0xFF;
+            cursor_pixel |= (uint32_t)((r * ((1 << fb->red_mask_size) - 1)) / 255) << fb->red_mask_shift;
+            cursor_pixel |= (uint32_t)((g * ((1 << fb->green_mask_size) - 1)) / 255) << fb->green_mask_shift;
+            cursor_pixel |= (uint32_t)((b * ((1 << fb->blue_mask_size) - 1)) / 255) << fb->blue_mask_shift;
+        } else {
+            cursor_pixel = bga_palette_index(cursor_color);
+        }
 
         for (uint64_t row = 0; row < current_font_h; row++) {
             uint64_t fb_row = (cursor_y + row) * fb->pitch + cursor_x * bpp_bytes;
             for (uint64_t col = 0; col < current_font_w; col++) {
                 uint64_t off = fb_row + col * bpp_bytes;
-                // Read current pixel from VRAM
-                uint32_t raw = 0;
-                switch (bpp) {
-                    case 8: raw = fb_addr[off]; break;
-                    case 15: case 16: raw = *(uint16_t *)(fb_addr + off); break;
-                    case 24: raw = fb_addr[off] | (fb_addr[off+1]<<8) | (fb_addr[off+2]<<16); break;
-                    case 32: raw = *(uint32_t *)(fb_addr + off); break;
-                }
-                // XOR with cursor color
-                raw ^= bpp == 8 ? bga_palette_index(cursor_color) : cursor_color;
-                // Write back
+                uint32_t raw = cursor_pixel;
+                // Write solid cursor color
                 switch (bpp) {
                     case 8: fb_addr[off] = (uint8_t)raw; break;
                     case 15: case 16: *(uint16_t *)(fb_addr + off) = (uint16_t)raw; break;
-                    case 24: fb_addr[off] = raw; fb_addr[off+1] = raw>>8; fb_addr[off+2] = raw>>16; break;
+                    case 24: fb_addr[off] = raw; fb_addr[off + 1] = raw >> 8; fb_addr[off + 2] = raw >> 16; break;
                     case 32: *(uint32_t *)(fb_addr + off) = raw; break;
                 }
             }

@@ -330,9 +330,11 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
             tasks[i]->ctx = ctx ? ctx : &kernel_context;
             tasks[i]->uid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->uid;
             tasks[i]->euid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->euid;
+            tasks[i]->suid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->suid;
             tasks[i]->fsuid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->fsuid;
             tasks[i]->gid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->gid;
             tasks[i]->egid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->egid;
+            tasks[i]->sgid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->sgid;
             tasks[i]->fsgid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->fsgid;
             tasks[i]->umask = current_task_ptr ? current_task_ptr->umask : 0022;
             tasks[i]->fs_base = 0;
@@ -571,9 +573,11 @@ pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *ctx, uint64_t flag
         tasks[i]->pgid     = current_task_ptr->pgid;
         tasks[i]->uid      = current_task_ptr->uid;
         tasks[i]->euid     = current_task_ptr->euid;
+        tasks[i]->suid     = current_task_ptr->suid;
         tasks[i]->fsuid    = current_task_ptr->fsuid;
         tasks[i]->gid      = current_task_ptr->gid;
         tasks[i]->egid     = current_task_ptr->egid;
+        tasks[i]->sgid     = current_task_ptr->sgid;
         tasks[i]->fsgid    = current_task_ptr->fsgid;
         tasks[i]->umask    = current_task_ptr->umask;
         tasks[i]->ctty_idx = current_task_ptr->ctty_idx;

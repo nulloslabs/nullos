@@ -11,6 +11,7 @@
 #include <io/terminal.h>
 #include <io/devices.h>
 #include <io/devtmpfs.h>
+#include <io/vfs.h>
 #include <io/tty.h>
 #include <io/pty.h>
 #include <io/keyboard.h>
@@ -62,120 +63,6 @@ static int register_device_info(const char *name, uint64_t (*read_fn)(void *, ui
 
     spin_unlock_irqrestore(&devtmpfs_lock, irq);
     return -ENOMEM;
-}
-
-int register_device(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int)) {
-    return register_device_info(name, read_fn, write_fn, 0, false, 0, DEV_BUS_NONE);
-}
-
-int register_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index) {
-    return register_device_info(name, read_fn, write_fn, index, false, 0, DEV_BUS_NONE);
-}
-
-int register_block_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index, uint64_t size) {
-    return register_device_info(name, read_fn, write_fn, index, true, size, DEV_BUS_NONE);
-}
-
-int register_disk_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index, uint64_t size, device_bus_t bus) {
-    return register_device_info(name, read_fn, write_fn, index, true, size, bus);
-}
-
-int get_block_device_size(const char *name, uint64_t *size) {
-    if (!name || !size) return -EINVAL;
-    const char *dev_name = name;
-    while (*dev_name == '.' || *dev_name == '/') dev_name++;
-    if (strncmp(dev_name, "dev/", 4) == 0) dev_name += 4;
-
-    uint64_t irq;
-    spin_lock_irqsave(&devtmpfs_lock, &irq);
-    for (int i = 0; i < MAX_DEVTMPFS_DEVICES; i++) {
-        if (!devtmpfs_devices[i].active || strcmp(devtmpfs_devices[i].name, dev_name) != 0) continue;
-        if (!devtmpfs_devices[i].block) {
-            spin_unlock_irqrestore(&devtmpfs_lock, irq);
-            return -ESPIPE;
-        }
-        *size = devtmpfs_devices[i].size;
-        spin_unlock_irqrestore(&devtmpfs_lock, irq);
-        return 0;
-    }
-    spin_unlock_irqrestore(&devtmpfs_lock, irq);
-    return -ENOENT;
-}
-
-int get_block_device_bus(const char *name, device_bus_t *bus, int *disk_index) {
-    if (!name || !bus || !disk_index) return -EINVAL;
-    const char *dev_name = name;
-    while (*dev_name == '.' || *dev_name == '/') dev_name++;
-    if (strncmp(dev_name, "dev/", 4) == 0) dev_name += 4;
-
-    uint64_t irq;
-    spin_lock_irqsave(&devtmpfs_lock, &irq);
-    for (int i = 0; i < MAX_DEVTMPFS_DEVICES; i++) {
-        if (!devtmpfs_devices[i].active || strcmp(devtmpfs_devices[i].name, dev_name) != 0) continue;
-        if (!devtmpfs_devices[i].block) {
-            spin_unlock_irqrestore(&devtmpfs_lock, irq);
-            return -ESPIPE;
-        }
-        *bus = devtmpfs_devices[i].bus;
-        *disk_index = devtmpfs_devices[i].index;
-        spin_unlock_irqrestore(&devtmpfs_lock, irq);
-        return 0;
-    }
-    spin_unlock_irqrestore(&devtmpfs_lock, irq);
-    return -ENOENT;
-}
-
-int get_device_mode(const char *name, mode_t *mode) {
-    if (!name || !mode) return -EINVAL;
-    const char *dev_name = name;
-    while (*dev_name == '.' || *dev_name == '/') dev_name++;
-    if (strncmp(dev_name, "dev/", 4) == 0) dev_name += 4;
-
-    uint64_t irq;
-    spin_lock_irqsave(&devtmpfs_lock, &irq);
-    for (int i = 0; i < MAX_DEVTMPFS_DEVICES; i++) {
-        if (!devtmpfs_devices[i].active || strcmp(devtmpfs_devices[i].name, dev_name) != 0) continue;
-        if (devtmpfs_devices[i].block) {
-            *mode = S_IFBLK | 0600;
-        } else if (strncmp(dev_name, "fb", 2) == 0 || strcmp(dev_name, "console") == 0 || (strncmp(dev_name, "tty", 3) == 0 && dev_name[3] >= '0' && dev_name[3] <= '9' && dev_name[4] == '\0')) {
-            *mode = S_IFCHR | 0600;
-        } else {
-            *mode = S_IFCHR | 0666;
-        }
-        spin_unlock_irqrestore(&devtmpfs_lock, irq);
-        return 0;
-    }
-    spin_unlock_irqrestore(&devtmpfs_lock, irq);
-    return -ENOENT;
-}
-
-int unregister_device(const char* name) {
-    if (!name || name[0] == '\0') {
-        return -EINVAL;
-    }
-
-    const char *dev_name = name;
-    while (*dev_name == '.' || *dev_name == '/') dev_name++;
-    if (strncmp(dev_name, "dev/", 4) == 0) dev_name += 4;
-
-    uint64_t irq;
-    spin_lock_irqsave(&devtmpfs_lock, &irq);
-
-    for (int i = 0; i < MAX_DEVTMPFS_DEVICES; i++) {
-        if (devtmpfs_devices[i].active && strcmp(devtmpfs_devices[i].name, dev_name) == 0) {
-            devtmpfs_devices[i].active = false;
-            devtmpfs_devices[i].name[0] = '\0';
-            devtmpfs_devices[i].read = NULL;
-            devtmpfs_devices[i].write = NULL;
-            devtmpfs_devices[i].block = false;
-            devtmpfs_devices[i].size = 0;
-            spin_unlock_irqrestore(&devtmpfs_lock, irq);
-            return 0;
-        }
-    }
-
-    spin_unlock_irqrestore(&devtmpfs_lock, irq);
-    return -ENOENT;
 }
 
 static uint64_t null_read(void* buf, uint64_t count, uint64_t offset, int dev_idx) {
@@ -258,7 +145,7 @@ static uint64_t write_tty(const void* buf, uint64_t count, uint64_t offset, int 
     return write_terminal_tty(dev_idx, buf, count, do_onlcr);
 }
 
-static uint64_t read_urandom(void* buf, uint64_t count, uint64_t offset, int dev_idx) {
+static uint64_t read_random(void* buf, uint64_t count, uint64_t offset, int dev_idx) {
     (void)offset; (void)dev_idx;
 
     if (count == 0 || buf == NULL) return 0;
@@ -278,11 +165,157 @@ static uint64_t read_urandom(void* buf, uint64_t count, uint64_t offset, int dev
 
     return bytes_read;
 }
-static uint64_t write_urandom(const void* buf, uint64_t count, uint64_t offset, int dev_idx) {
+
+static uint64_t write_random(const void* buf, uint64_t count, uint64_t offset, int dev_idx) {
     (void)offset; (void)dev_idx;
     if (count == 0 || buf == NULL) return 0;
     add_entropy_bytes(buf, count);
     return count;
+}
+
+static uint64_t read_urandom(void* buf, uint64_t count, uint64_t offset, int dev_idx) {
+    return read_random(buf, count, offset, dev_idx);
+}
+
+static uint64_t write_urandom(const void* buf, uint64_t count, uint64_t offset, int dev_idx) {
+    return write_random(buf, count, offset, dev_idx);
+}
+
+int register_device(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int)) {
+    return register_device_info(name, read_fn, write_fn, 0, false, 0, DEV_BUS_NONE);
+}
+
+int register_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index) {
+    return register_device_info(name, read_fn, write_fn, index, false, 0, DEV_BUS_NONE);
+}
+
+int register_block_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index, uint64_t size) {
+    return register_device_info(name, read_fn, write_fn, index, true, size, DEV_BUS_NONE);
+}
+
+int register_disk_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index, uint64_t size, device_bus_t bus) {
+    return register_device_info(name, read_fn, write_fn, index, true, size, bus);
+}
+
+static const char *normalize_dev_name(const char *name, char *rel_buf) {
+    // Use VFS mount to resolve /dev wherever devtmpfs is mounted,
+    // instead of hardcoding "dev/" prefix.
+    if (is_devtmpfs_path(name, rel_buf)) {
+        return rel_buf;
+    }
+    const char *dev_name = name;
+    while (*dev_name == '.' || *dev_name == '/') dev_name++;
+    if (strncmp(dev_name, "dev/", 4) == 0) dev_name += 4;
+    return dev_name;
+}
+
+int get_block_device_size(const char *name, uint64_t *size) {
+    if (!name || !size) return -EINVAL;
+    char rel[VFS_PATH_MAX];
+    const char *dev_name = normalize_dev_name(name, rel);
+
+    uint64_t irq;
+    spin_lock_irqsave(&devtmpfs_lock, &irq);
+    for (int i = 0; i < MAX_DEVTMPFS_DEVICES; i++) {
+        if (!devtmpfs_devices[i].active || strcmp(devtmpfs_devices[i].name, dev_name) != 0) continue;
+        if (!devtmpfs_devices[i].block) {
+            spin_unlock_irqrestore(&devtmpfs_lock, irq);
+            return -ESPIPE;
+        }
+        *size = devtmpfs_devices[i].size;
+        spin_unlock_irqrestore(&devtmpfs_lock, irq);
+        return 0;
+    }
+    spin_unlock_irqrestore(&devtmpfs_lock, irq);
+    return -ENOENT;
+}
+
+int get_block_device_bus(const char *name, device_bus_t *bus, int *disk_index) {
+    if (!name || !bus || !disk_index) return -EINVAL;
+    char rel[VFS_PATH_MAX];
+    const char *dev_name = normalize_dev_name(name, rel);
+
+    uint64_t irq;
+    spin_lock_irqsave(&devtmpfs_lock, &irq);
+    for (int i = 0; i < MAX_DEVTMPFS_DEVICES; i++) {
+        if (!devtmpfs_devices[i].active || strcmp(devtmpfs_devices[i].name, dev_name) != 0) continue;
+        if (!devtmpfs_devices[i].block) {
+            spin_unlock_irqrestore(&devtmpfs_lock, irq);
+            return -ESPIPE;
+        }
+        *bus = devtmpfs_devices[i].bus;
+        *disk_index = devtmpfs_devices[i].index;
+        spin_unlock_irqrestore(&devtmpfs_lock, irq);
+        return 0;
+    }
+    spin_unlock_irqrestore(&devtmpfs_lock, irq);
+    return -ENOENT;
+}
+
+int get_device_mode(const char *name, mode_t *mode) {
+    if (!name || !mode) return -EINVAL;
+    char rel[VFS_PATH_MAX];
+    const char *dev_name = normalize_dev_name(name, rel);
+
+    uint64_t irq;
+    spin_lock_irqsave(&devtmpfs_lock, &irq);
+    for (int i = 0; i < MAX_DEVTMPFS_DEVICES; i++) {
+        if (!devtmpfs_devices[i].active || strcmp(devtmpfs_devices[i].name, dev_name) != 0) continue;
+        if (devtmpfs_devices[i].block) {
+            *mode = S_IFBLK | 0600;
+        } else if (strncmp(dev_name, "fb", 2) == 0 || strcmp(dev_name, "console") == 0 || (strncmp(dev_name, "tty", 3) == 0 && dev_name[3] >= '0' && dev_name[3] <= '9' && dev_name[4] == '\0')) {
+            *mode = S_IFCHR | 0600;
+        } else {
+            *mode = S_IFCHR | 0666;
+        }
+        spin_unlock_irqrestore(&devtmpfs_lock, irq);
+        return 0;
+    }
+    spin_unlock_irqrestore(&devtmpfs_lock, irq);
+    return -ENOENT;
+}
+
+bool is_device_path(const char *path, char *rel_out, const char **fs_type_out) {
+    vfs_mount_t mount;
+    char rel[VFS_PATH_MAX];
+    if (!resolve_vfs_path(path, &mount, rel, sizeof(rel))) return false;
+    if (strcmp(mount.fs_type, "devtmpfs") == 0 || strcmp(mount.fs_type, "devpts") == 0) {
+        if (rel_out) {
+            strncpy(rel_out, rel, VFS_PATH_MAX - 1);
+            rel_out[VFS_PATH_MAX - 1] = '\0';
+        }
+        if (fs_type_out) *fs_type_out = (strcmp(mount.fs_type, "devtmpfs") == 0) ? "devtmpfs" : "devpts";
+        return true;
+    }
+    return false;
+}
+
+int unregister_device(const char* name) {
+    if (!name || name[0] == '\0') {
+        return -EINVAL;
+    }
+
+    char rel_buf[VFS_PATH_MAX];
+    const char *dev_name = normalize_dev_name(name, rel_buf);
+
+    uint64_t irq;
+    spin_lock_irqsave(&devtmpfs_lock, &irq);
+
+    for (int i = 0; i < MAX_DEVTMPFS_DEVICES; i++) {
+        if (devtmpfs_devices[i].active && strcmp(devtmpfs_devices[i].name, dev_name) == 0) {
+            devtmpfs_devices[i].active = false;
+            devtmpfs_devices[i].name[0] = '\0';
+            devtmpfs_devices[i].read = NULL;
+            devtmpfs_devices[i].write = NULL;
+            devtmpfs_devices[i].block = false;
+            devtmpfs_devices[i].size = 0;
+            spin_unlock_irqrestore(&devtmpfs_lock, irq);
+            return 0;
+        }
+    }
+
+    spin_unlock_irqrestore(&devtmpfs_lock, irq);
+    return -ENOENT;
 }
 
 uint64_t read_device(const char *name, void *buf, uint64_t count, uint64_t offset) {
@@ -372,6 +405,7 @@ void init_devices(void) {
 
     register_device("ptmx", read_ptmx, write_ptmx);
 
+    register_device("random", read_random, write_random);
     register_device("urandom", read_urandom, write_urandom);
 
     {
@@ -383,7 +417,7 @@ void init_devices(void) {
                 if (!pata_device_size(i, &size)) continue;
                 if (!make_ide_disk_name(name, sizeof(name), "hd", i)) continue;
                 if (register_disk_device_idx(name, read_pata_device, write_pata_device, i, size, DEV_BUS_PATA) < 0) {
-                    log("devices: unable to register %s\n", name);
+                    log("devices: unable to register '%s'\n", name);
                     continue;
                 }
                 // Probe for GPT/MBR partitions on PATA disks
@@ -396,7 +430,7 @@ void init_devices(void) {
                 if (!atapi_device_size(i, &size)) continue;
                 if (!make_ide_numbered_name(name, sizeof(name), "sr", i)) continue;
                 if (register_block_device_idx(name, read_atapi_device, write_atapi_device, i, size) < 0) {
-                    log("devices: unable to register %s\n", name);
+                    log("devices: unable to register '%s'\n", name);
                 }
             }
         }
@@ -406,7 +440,7 @@ void init_devices(void) {
                 if (!sata_device_size(i, &size)) continue;
                 if (!make_sata_disk_name(name, sizeof(name), i)) continue;
                 if (register_disk_device_idx(name, read_sata_device, write_sata_device, i, size, DEV_BUS_SATA) < 0) {
-                    log("devices: unable to register %s\n", name);
+                    log("devices: unable to register '%s'\n", name);
                     continue;
                 }
                 if (!probe_gpt_for_sata_disk(i, name, size)) probe_mbr_for_sata_disk(i, name, size);

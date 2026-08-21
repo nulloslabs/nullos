@@ -66,9 +66,11 @@ typedef struct task {
     uint64_t brk;
     uid_t uid;
     uid_t euid;
+    uid_t suid;
     uid_t fsuid;
     gid_t gid;
     gid_t egid;
+    gid_t sgid;
     gid_t fsgid;
     mode_t umask;
     fd_table_t fd_table;

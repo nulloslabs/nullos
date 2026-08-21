@@ -441,7 +441,7 @@ static int copy_from_user_strarray(char ***out_karray, const char **user_arr, si
 }
 
 static int ptm_path_idx(const char *path) {
-    if (path[0]!='p'||path[1]!='t'||path[2]!='m'||path[3]!=':') return -1;
+    if (path[0] != 'p' || path[1] != 't' || path[2] != 'm' || path[3] != ':') return -1;
     const char *n = path + 4;
     int idx = 0;
     while (*n >= '0' && *n <= '9') idx = idx * 10 + (*n++ - '0');
@@ -477,7 +477,7 @@ static bool stat_virtual_device(const char *abs_path, struct stat *kst) {
 
     char rel_path[256];
     // Check devpts BEFORE devtmpfs: /dev/pts is a sub-path of /dev (devtmpfs), // so devtmpfs would incorrectly match /dev/pts paths with rel="pts".
-    if (match_vfs_path(resolved, "devpts", rel_path)) {
+    if (is_devpts_path(resolved, rel_path)) {
         if (rel_path[0] == '\0') {
             kst->st_mode = S_IFDIR | 0755;
             kst->st_nlink = 2;
@@ -492,7 +492,7 @@ static bool stat_virtual_device(const char *abs_path, struct stat *kst) {
         stat_set_synthetic_times(kst);
         return true;
     }
-    if (match_vfs_path(resolved, "devtmpfs", rel_path)) {
+    if (is_devtmpfs_path(resolved, rel_path)) {
         if (rel_path[0] == '\0') {
             // The /dev directory itself
             kst->st_mode = S_IFDIR | 0755;
@@ -1057,14 +1057,14 @@ static int ioctl_tty_idx(fd_entry_t *entry) {
         if (entry->type == FD_STREAM) {
             return 0;
         }
-        if (match_vfs_path(entry->path, "devtmpfs", rel)) {
+        if (is_devtmpfs_path(entry->path, rel)) {
             int idx = tty_rel_to_idx(rel);
             if (idx >= 0) return idx;
             if (strncmp(rel, "pts/", 4) == 0) {
                 idx = pty_rel_to_idx(rel + 4);
                 if (idx >= 0) return 100 + idx;
             }
-        } else if (match_vfs_path(entry->path, "devpts", rel)) {
+        } else if (is_devpts_path(entry->path, rel)) {
             int idx = pty_rel_to_idx(rel);
             if (idx >= 0) return 100 + idx;
         }
@@ -1230,9 +1230,9 @@ static int select_check_fd(int fd) {
     } else if (entry->type == FD_DEV) {
         char rel[256];
         int tty_idx = -1;
-        if (match_vfs_path(entry->path, "devtmpfs", rel)) {
+        if (is_devtmpfs_path(entry->path, rel)) {
             tty_idx = tty_rel_to_idx(rel);
-        } else if (match_vfs_path(entry->path, "devpts", rel)) {
+        } else if (is_devpts_path(entry->path, rel)) {
             tty_idx = current_task_ptr->ctty_idx;
         }
         if (tty_idx >= 0) {
@@ -1356,7 +1356,7 @@ static int reject_procfs_mutation(const char *path) {
 static int reject_virtual_removal(const char *path) {
     int status = reject_procfs_mutation(path);
     if (status < 0) return status;
-    if (match_vfs_path(path, "devtmpfs", NULL) || match_vfs_path(path, "devpts", NULL)) return -EPERM;
+    if (is_devtmpfs_path(path, NULL) || is_devpts_path(path, NULL)) return -EPERM;
     return 0;
 }
 
@@ -1364,7 +1364,7 @@ static int change_path_ownership(const char *path, uid_t uid, gid_t gid, bool fo
     if (current_task_ptr->euid != 0) return -EPERM;
     if (check_ext4_path(path)) return -EROFS;
     if (check_iso9660_path(path)) return -EROFS;
-    if (match_vfs_path(path, "devtmpfs", NULL) || match_vfs_path(path, "devpts", NULL) || is_procfs_path(path)) return -EPERM;
+    if (is_devtmpfs_path(path, NULL) || is_devpts_path(path, NULL) || is_procfs_path(path)) return -EPERM;
     if (is_tmpfs_dir(path)) return chown_tmpfs(path, uid, gid, follow);
     return chown_initrd(path, uid, gid, follow);
 }
@@ -1422,9 +1422,9 @@ static int epoll_check_ready(int watched_fd, uint32_t req_events) {
         } else if (entry->type == FD_DEV) {
             char rel[256];
             int tty_idx = -1;
-            if (match_vfs_path(entry->path, "devtmpfs", rel)) {
+            if (is_devtmpfs_path(entry->path, rel)) {
                 tty_idx = tty_rel_to_idx(rel);
-            } else if (match_vfs_path(entry->path, "devpts", rel)) {
+            } else if (is_devpts_path(entry->path, rel)) {
                 tty_idx = current_task_ptr->ctty_idx;
             }
             if (tty_idx >= 0) {
@@ -1632,7 +1632,7 @@ static uint64_t do_read(int fd, void *buf, size_t count) {
     if (entry->type == FD_DEV) {
         char rel[256];
         uint64_t res;
-        if (match_vfs_path(entry->path, "devtmpfs", rel)) {
+        if (is_devtmpfs_path(entry->path, rel)) {
             if (count == 0 || count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
 
             int tty_idx = tty_rel_to_idx(rel);
@@ -1652,7 +1652,7 @@ static uint64_t do_read(int fd, void *buf, size_t count) {
             res = read_device(rel, kbuf, count, entry->offset);
             if ((int64_t)res >= 0 && write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, res) < 0) { res = (uint64_t)-EFAULT; } else if ((int64_t)res >= 0) entry->offset += res;
             if (kbuf != (uint8_t*)local_buf) free(kbuf);
-        } else if (match_vfs_path(entry->path, "devpts", rel)) {
+        } else if (is_devpts_path(entry->path, rel)) {
             if (count == 0 || count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
             char local_buf[4096];
             uint8_t *kbuf = (count <= sizeof(local_buf)) ? (uint8_t*)local_buf : malloc(count);
@@ -1754,7 +1754,7 @@ static uint64_t do_write(int fd, const void *buf, size_t count) {
     if (entry->type == FD_DEV) {
         char rel[256];
         uint64_t res;
-        if (match_vfs_path(entry->path, "devtmpfs", rel)) {
+        if (is_devtmpfs_path(entry->path, rel)) {
             if (count == 0 || count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
             uint8_t *kbuf = count <= sizeof(local_buf) ? local_buf : malloc(count);
             if (!kbuf) { return (uint64_t)-ENOMEM; }
@@ -1762,7 +1762,7 @@ static uint64_t do_write(int fd, const void *buf, size_t count) {
             res = write_device(rel, kbuf, count, entry->offset);
             if ((int64_t)res >= 0) entry->offset += res;
             if (kbuf != local_buf) free(kbuf);
-        } else if (match_vfs_path(entry->path, "devpts", rel)) {
+        } else if (is_devpts_path(entry->path, rel)) {
             if (count == 0 || count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
             uint8_t *kbuf = count <= sizeof(local_buf) ? local_buf : malloc(count);
             if (!kbuf) { return (uint64_t)-ENOMEM; }
@@ -2300,7 +2300,7 @@ static void statx_add_fs_metadata(struct statx *sx, const char *path, bool follo
             sx->stx_btime.tv_sec = file.btime.tv_sec;
             sx->stx_btime.tv_nsec = file.btime.tv_nsec;
             sx->stx_mask |= STATX_BTIME;
-        } else if (!check_ext4_path(path) && !check_iso9660_path(path) && !is_procfs_path(path) && !match_vfs_path(path, "devtmpfs", NULL) && !match_vfs_path(path, "devpts", NULL)) {
+        } else if (!check_ext4_path(path) && !check_iso9660_path(path) && !is_procfs_path(path) && !is_devtmpfs_path(path, NULL) && !is_devpts_path(path, NULL)) {
             initrd_file_t initrd_file = follow ? stat_initrd(path) : stat_initrd_nofollow(path);
             if (initrd_file.mode) {
                 sx->stx_btime.tv_sec = initrd_file.btime.tv_sec;
@@ -2370,7 +2370,12 @@ static int set_advisory_lock(fd_entry_t *entry, int lock_type, bool nonblocking,
 
     while (find_advisory_lock_conflict(entry, lock_type, process_lock)) {
         if (nonblocking) return -EAGAIN;
-        sleep(10);
+        // Avoid deadlock: flock is called with sched_lock held, so sleeping
+        // with a raw delay would hold the spinlock. Yield properly instead.
+        spin_unlock(&sched_lock);
+        let_current_task_sleep(10000);
+        spin_lock(&sched_lock);
+        if (signal_pending()) return -EINTR;
     }
 
     if (!entry->handle) {
@@ -2620,7 +2625,7 @@ void sys_open(syscall_frame_t *frame) {
 
     char rel_path[256];
     // Check devpts BEFORE devtmpfs: /dev/pts is a sub-path of /dev (devtmpfs), // so devtmpfs would incorrectly match /dev/pts paths with rel="pts/...".
-    if (match_vfs_path(abs_path, "devpts", rel_path)) {
+    if (is_devpts_path(abs_path, rel_path)) {
         if (strcmp(rel_path, "ptmx") == 0) {
             int idx = alloc_pty();
             if (idx < 0) { frame->rax = (uint64_t)-ENOSPC; return; }
@@ -2654,7 +2659,7 @@ void sys_open(syscall_frame_t *frame) {
             release_pty_slave(pty_idx);
         frame->rax = (uint64_t)fd;
         return;
-    } else if (match_vfs_path(abs_path, "devtmpfs", rel_path)) {
+    } else if (is_devtmpfs_path(abs_path, rel_path)) {
         if (rel_path[0] != '\0' && !device_exists_on_devtmpfs(rel_path)) {
             initrd_file_t file = read_initrd(abs_path);
             if (!S_ISDIR(file.mode)) {
@@ -2997,9 +3002,9 @@ void sys_poll(syscall_frame_t *frame) {
                 } else if (entry->type == FD_DEV) { \
                     char rel[256]; \
                     int tty_idx = -1; \
-                    if (match_vfs_path(entry->path, "devtmpfs", rel)) { \
+                    if (is_devtmpfs_path(entry->path, rel)) { \
                         tty_idx = tty_rel_to_idx(rel); \
-                    } else if (match_vfs_path(entry->path, "devpts", rel)) { \
+                    } else if (is_devpts_path(entry->path, rel)) { \
                         tty_idx = current_task_ptr->ctty_idx; \
                     } \
                     if (tty_idx >= 0) { \
@@ -3073,7 +3078,7 @@ void sys_lseek(syscall_frame_t *frame) {
     if (entry->type == FD_DEV) {
         char rel[256];
         uint64_t size;
-        if (match_vfs_path(entry->path, "devpts", rel) || !match_vfs_path(entry->path, "devtmpfs", rel)) {
+        if (is_devpts_path(entry->path, rel) || !is_devtmpfs_path(entry->path, rel)) {
             frame->rax = -ESPIPE;
             return;
         }
@@ -3177,6 +3182,13 @@ void sys_mmap(syscall_frame_t *frame) {
     bool fixed = (flags & MAP_FIXED) != 0;
     bool fixed_noreplace = (flags & MAP_FIXED_NOREPLACE) != 0;
     if ((fixed || fixed_noreplace) && (addr & (PAGE_SIZE - 1))) { frame->rax = (uint64_t)-EINVAL; return; }
+    bool anonymous = (flags & MAP_ANONYMOUS) != 0;
+    // Prevent mapping the zero page (NULL dereference mitigation).
+    // MAP_FIXED at address 0 is explicitly forbidden; anonymous hint 0
+    // is allowed but allocator must not return 0 (handled below).
+    if ((fixed || fixed_noreplace) && addr < PAGE_SIZE) { frame->rax = (uint64_t)-EPERM; return; }
+    if (!anonymous && fixed && fd == -1) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (anonymous && fd != -1) { frame->rax = (uint64_t)-EINVAL; return; }
 
     // Reject W+X mappings (W^X policy)
     if ((prot & PROT_WRITE) && (prot & PROT_EXEC)) {
@@ -3191,7 +3203,6 @@ void sys_mmap(syscall_frame_t *frame) {
         frame->rax = (uint64_t)-EINVAL;
         return;
     }
-    bool anonymous = (flags & MAP_ANONYMOUS) != 0;
     if (!anonymous && offset > UINT64_MAX - map_size) { frame->rax = (uint64_t)-EINVAL; return; }
     bool requested_fb = false;
     struct limine_framebuffer *mapped_fb = NULL;
@@ -3205,7 +3216,7 @@ void sys_mmap(syscall_frame_t *frame) {
             return;
         }
         char rel[256];
-        if (mapping_entry->type == FD_DEV && match_vfs_path(mapping_entry->path, "devtmpfs", rel) && rel[0] == 'f' && rel[1] == 'b' && rel[2] >= '0' && rel[2] <= '9' && rel[3] == '\0') {
+        if (mapping_entry->type == FD_DEV && is_devtmpfs_path(mapping_entry->path, rel) && rel[0] == 'f' && rel[1] == 'b' && rel[2] >= '0' && rel[2] <= '9' && rel[3] == '\0') {
             requested_fb = true;
             if (current_task_ptr->euid != 0) { frame->rax = (uint64_t)-EACCES; return; }
             int idx = rel[2] - '0';
@@ -3693,7 +3704,7 @@ void sys_ioctl(syscall_frame_t *frame) {
     // Handle framebuffer ioctl requests
     if (entry && entry->type == FD_DEV) {
         char rel[256];
-        if (match_vfs_path(entry->path, "devtmpfs", rel)) {
+        if (is_devtmpfs_path(entry->path, rel)) {
             if (strncmp(rel, "fb", 2) == 0) {
                 int idx = rel[2] - '0';
                 if (fb_req.response && idx >= 0 && idx < (int)fb_req.response->framebuffer_count) {
@@ -3790,9 +3801,9 @@ void sys_ioctl(syscall_frame_t *frame) {
     if (!is_tty) {
         if (entry && entry->type == FD_DEV) {
             char rel[256];
-            if (match_vfs_path(entry->path, "devtmpfs", rel)) {
+            if (is_devtmpfs_path(entry->path, rel)) {
                 if (strncmp(rel, "tty", 3) == 0 || strncmp(rel, "pts/", 4) == 0 || strcmp(rel, "console") == 0) is_tty = 1;
-            } else if (match_vfs_path(entry->path, "devpts", rel)) {
+            } else if (is_devpts_path(entry->path, rel)) {
                 is_tty = 1;
             }
         }
@@ -3800,9 +3811,10 @@ void sys_ioctl(syscall_frame_t *frame) {
 
     switch (req) {
         case BLKRRPART: {
+            if (!current_task_ptr || current_task_ptr->euid != 0) { frame->rax = (uint64_t)-EPERM; return; }
             if (!entry || entry->type != FD_DEV) { frame->rax = (uint64_t)-ENOTTY; return; }
             char rel[256];
-            if (!match_vfs_path(entry->path, "devtmpfs", rel)) { frame->rax = (uint64_t)-ENOTTY; return; }
+            if (!is_devtmpfs_path(entry->path, rel)) { frame->rax = (uint64_t)-ENOTTY; return; }
             uint64_t blk_size;
             if (get_block_device_size(rel, &blk_size) < 0) { frame->rax = (uint64_t)-EINVAL; return; }
             device_bus_t bus;
@@ -3827,7 +3839,7 @@ void sys_ioctl(syscall_frame_t *frame) {
         case BLKGETSIZE: {
             if (!entry || entry->type != FD_DEV) { frame->rax = (uint64_t)-ENOTTY; return; }
             char rel[256];
-            if (!match_vfs_path(entry->path, "devtmpfs", rel)) { frame->rax = (uint64_t)-ENOTTY; return; }
+            if (!is_devtmpfs_path(entry->path, rel)) { frame->rax = (uint64_t)-ENOTTY; return; }
             uint64_t size;
             if (get_block_device_size(rel, &size) < 0) { frame->rax = (uint64_t)-EINVAL; return; }
             unsigned long sectors = (unsigned long)(size / 512);
@@ -3876,6 +3888,8 @@ void sys_ioctl(syscall_frame_t *frame) {
             struct console_font_op font_op;
             if (copy_from_user(&font_op, (const void *)argp, sizeof(font_op)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
             if (font_op.op != KD_FONT_OP_SET || (font_op.flags & ~KD_FONT_FLAG_DONT_RECALC) != 0 || font_op.width != 8 || font_op.height == 0 || font_op.height > 32 || font_op.charcount != 256 || !font_op.data) { frame->rax = (uint64_t)-EINVAL; return; }
+            // Validate entire user buffer (256 glyphs * 32 bytes stride) is accessible
+            if (!user_range_ok(current_task_ptr->ctx, (uint64_t)font_op.data, 256ULL * 32ULL)) { frame->rax = (uint64_t)-EFAULT; return; }
             uint64_t font_size = 256ULL * font_op.height;
             unsigned char *font_data = malloc(font_size);
             if (!font_data) { frame->rax = (uint64_t)-ENOMEM; return; }
@@ -3968,12 +3982,12 @@ void sys_ioctl(syscall_frame_t *frame) {
         case TCFLSH:
             if (entry && entry->type == FD_DEV) {
                 char rel[256];
-                if (match_vfs_path(entry->path, "devtmpfs", rel)) {
+                if (is_devtmpfs_path(entry->path, rel)) {
                     int idx = tty_rel_to_idx(rel);
                     if (idx >= 0 && idx < NUM_TTYS) {
                         if (argp == 0 || argp == 2) { get_tty(idx)->input.head = get_tty(idx)->input.tail = 0; }
                     }
-                } else if (match_vfs_path(entry->path, "devpts", rel)) {
+                } else if (is_devpts_path(entry->path, rel)) {
                     int idx = 0;
                     const char *p = rel;
                     while (*p >= '0' && *p <= '9') { idx = idx * 10 + (*p - '0'); p++; }
@@ -4016,13 +4030,13 @@ void sys_ioctl(syscall_frame_t *frame) {
                     tidx = 0;
                 } else if (entry->type == FD_DEV) {
                     char rel[256];
-                    if (match_vfs_path(entry->path, "devtmpfs", rel)) {
+                    if (is_devtmpfs_path(entry->path, rel)) {
                         tidx = tty_rel_to_idx(rel);
                         if (tidx < 0 && strncmp(rel, "pts/", 4) == 0) {
                             int pidx = pty_rel_to_idx(rel + 4);
                             if (pidx >= 0) tidx = 100 + pidx;
                         }
-                    } else if (match_vfs_path(entry->path, "devpts", rel)) {
+                    } else if (is_devpts_path(entry->path, rel)) {
                         int pidx = pty_rel_to_idx(rel);
                         if (pidx >= 0) tidx = 100 + pidx;
                     }
@@ -4146,7 +4160,7 @@ void sys_ioctl(syscall_frame_t *frame) {
         case BLKGETSIZE64: {
             if (!entry || entry->type != FD_DEV) { frame->rax = (uint64_t)-ENOTTY; return; }
             char rel[256];
-            if (!match_vfs_path(entry->path, "devtmpfs", rel)) { frame->rax = (uint64_t)-ENOTTY; return; }
+            if (!is_devtmpfs_path(entry->path, rel)) { frame->rax = (uint64_t)-ENOTTY; return; }
             uint64_t size;
             if (get_block_device_size(rel, &size) < 0) { frame->rax = (uint64_t)-EINVAL; return; }
             if (copy_to_user((void *)argp, &size, sizeof(size)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
@@ -5835,7 +5849,7 @@ void sys_getdents(syscall_frame_t *frame) {
     // Check if this directory is a virtual device filesystem
     // Check devpts BEFORE devtmpfs: /dev/pts is a sub-path of /dev (devtmpfs)
     char rel[256];
-    if (match_vfs_path(resolved_path, "devpts", rel)) {
+    if (is_devpts_path(resolved_path, rel)) {
         if (index == 0) {
             if (!emit_dirent(bufp, &written, buflen, 1, 1, DT_DIR, ".")) { frame->rax = written; return; }
             index = 1;
@@ -5862,7 +5876,7 @@ void sys_getdents(syscall_frame_t *frame) {
         return;
     }
 
-    if (match_vfs_path(resolved_path, "devtmpfs", rel)) {
+    if (is_devtmpfs_path(resolved_path, rel)) {
         // Emit . and .. for virtual filesystems too
         if (index == 0) {
             if (!emit_dirent(bufp, &written, buflen, 1, 1, DT_DIR, ".")) { frame->rax = written; return; }
@@ -6581,12 +6595,13 @@ void sys_setuid(syscall_frame_t *frame) {
     if (current_task_ptr && current_task_ptr->euid == 0) {
         current_task_ptr->uid = uid;
         current_task_ptr->euid = uid;
+        current_task_ptr->suid = uid;
         current_task_ptr->fsuid = uid;
         frame->rax = 0;
         return;
     }
 
-    if (uid == current_task_ptr->uid || uid == current_task_ptr->euid) {
+    if (uid == current_task_ptr->uid || uid == current_task_ptr->euid || uid == current_task_ptr->suid) {
         current_task_ptr->euid = uid;
         current_task_ptr->fsuid = uid;
         frame->rax = 0;
@@ -6602,12 +6617,13 @@ void sys_setgid(syscall_frame_t *frame) {
     if (current_task_ptr && current_task_ptr->euid == 0) {
         current_task_ptr->gid = gid;
         current_task_ptr->egid = gid;
+        current_task_ptr->sgid = gid;
         current_task_ptr->fsgid = gid;
         frame->rax = 0;
         return;
     }
 
-    if (gid == current_task_ptr->gid || gid == current_task_ptr->egid) {
+    if (gid == current_task_ptr->gid || gid == current_task_ptr->egid || gid == current_task_ptr->sgid) {
         current_task_ptr->egid = gid;
         current_task_ptr->fsgid = gid;
         frame->rax = 0;
@@ -6733,13 +6749,13 @@ void sys_setresuid(syscall_frame_t *frame) {
 
     bool privileged = current_task_ptr && current_task_ptr->euid == 0;
     if (!privileged) {
-        if (ruid != no_change && ruid != current_task_ptr->uid && ruid != current_task_ptr->euid) {
+        if (ruid != no_change && ruid != current_task_ptr->uid && ruid != current_task_ptr->euid && ruid != current_task_ptr->suid) {
             frame->rax = (uint64_t)-EPERM; return;
         }
-        if (euid != no_change && euid != current_task_ptr->uid && euid != current_task_ptr->euid) {
+        if (euid != no_change && euid != current_task_ptr->uid && euid != current_task_ptr->euid && euid != current_task_ptr->suid) {
             frame->rax = (uint64_t)-EPERM; return;
         }
-        if (suid != no_change && suid != current_task_ptr->uid && suid != current_task_ptr->euid) {
+        if (suid != no_change && suid != current_task_ptr->uid && suid != current_task_ptr->euid && suid != current_task_ptr->suid) {
             frame->rax = (uint64_t)-EPERM; return;
         }
     }
@@ -6749,6 +6765,7 @@ void sys_setresuid(syscall_frame_t *frame) {
         current_task_ptr->euid = euid;
         current_task_ptr->fsuid = euid;
     }
+    if (suid != no_change) current_task_ptr->suid = suid;
     frame->rax = 0;
 }
 
@@ -6764,7 +6781,7 @@ void sys_getresuid(syscall_frame_t *frame) {
 
     uid_t r = current_task_ptr->uid;
     uid_t e = current_task_ptr->euid;
-    uid_t s = current_task_ptr->euid;
+    uid_t s = current_task_ptr->suid;
     if (write_vmm(current_task_ptr->ctx, (uint64_t)ruid, &r, sizeof(r)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
     if (write_vmm(current_task_ptr->ctx, (uint64_t)euid, &e, sizeof(e)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
     if (write_vmm(current_task_ptr->ctx, (uint64_t)suid, &s, sizeof(s)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
@@ -6779,13 +6796,13 @@ void sys_setresgid(syscall_frame_t *frame) {
 
     bool privileged = current_task_ptr && current_task_ptr->euid == 0;
     if (!privileged) {
-        if (rgid != no_change && rgid != current_task_ptr->gid && rgid != current_task_ptr->egid) {
+        if (rgid != no_change && rgid != current_task_ptr->gid && rgid != current_task_ptr->egid && rgid != current_task_ptr->sgid) {
             frame->rax = (uint64_t)-EPERM; return;
         }
-        if (egid != no_change && egid != current_task_ptr->gid && egid != current_task_ptr->egid) {
+        if (egid != no_change && egid != current_task_ptr->gid && egid != current_task_ptr->egid && egid != current_task_ptr->sgid) {
             frame->rax = (uint64_t)-EPERM; return;
         }
-        if (sgid != no_change && sgid != current_task_ptr->gid && sgid != current_task_ptr->egid) {
+        if (sgid != no_change && sgid != current_task_ptr->gid && sgid != current_task_ptr->egid && sgid != current_task_ptr->sgid) {
             frame->rax = (uint64_t)-EPERM; return;
         }
     }
@@ -6795,6 +6812,7 @@ void sys_setresgid(syscall_frame_t *frame) {
         current_task_ptr->egid = egid;
         current_task_ptr->fsgid = egid;
     }
+    if (sgid != no_change) current_task_ptr->sgid = sgid;
     frame->rax = 0;
 }
 
@@ -6810,7 +6828,7 @@ void sys_getresgid(syscall_frame_t *frame) {
 
     gid_t r = current_task_ptr->gid;
     gid_t e = current_task_ptr->egid;
-    gid_t s = current_task_ptr->egid;
+    gid_t s = current_task_ptr->sgid;
     if (write_vmm(current_task_ptr->ctx, (uint64_t)rgid, &r, sizeof(r)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
     if (write_vmm(current_task_ptr->ctx, (uint64_t)egid, &e, sizeof(e)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
     if (write_vmm(current_task_ptr->ctx, (uint64_t)sgid, &s, sizeof(s)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
@@ -6821,7 +6839,7 @@ void sys_setfsuid(syscall_frame_t *frame) {
     uid_t fsuid = (uid_t)frame->rdi;
     uid_t previous = current_task_ptr->fsuid;
 
-    if (current_task_ptr->euid == 0 || fsuid == current_task_ptr->uid || fsuid == current_task_ptr->euid || fsuid == current_task_ptr->fsuid)
+    if (current_task_ptr->euid == 0 || fsuid == current_task_ptr->uid || fsuid == current_task_ptr->euid || fsuid == current_task_ptr->suid || fsuid == current_task_ptr->fsuid)
         current_task_ptr->fsuid = fsuid;
 
     frame->rax = previous;
@@ -6831,7 +6849,7 @@ void sys_setfsgid(syscall_frame_t *frame) {
     gid_t fsgid = (gid_t)frame->rdi;
     gid_t previous = current_task_ptr->fsgid;
 
-    if (current_task_ptr->euid == 0 || fsgid == current_task_ptr->gid || fsgid == current_task_ptr->egid || fsgid == current_task_ptr->fsgid)
+    if (current_task_ptr->euid == 0 || fsgid == current_task_ptr->gid || fsgid == current_task_ptr->egid || fsgid == current_task_ptr->sgid || fsgid == current_task_ptr->fsgid)
         current_task_ptr->fsgid = fsgid;
 
     frame->rax = previous;
@@ -7808,7 +7826,7 @@ void sys_getdents64(syscall_frame_t *frame) {
     // Check if this directory is a virtual device filesystem
     // Check devpts BEFORE devtmpfs: /dev/pts is a sub-path of /dev (devtmpfs)
     char rel[256];
-    if (match_vfs_path(resolved_path, "devpts", rel)) {
+    if (is_devpts_path(resolved_path, rel)) {
         if (index == 0) {
             if (!emit_dirent64(bufp, &written, buflen, 1, 1, DT_DIR, ".")) { frame->rax = written; return; }
             index = 1;
@@ -7835,7 +7853,7 @@ void sys_getdents64(syscall_frame_t *frame) {
         return;
     }
 
-    if (match_vfs_path(resolved_path, "devtmpfs", rel)) {
+    if (is_devtmpfs_path(resolved_path, rel)) {
         if (index == 0) {
             if (!emit_dirent64(bufp, &written, buflen, 1, 1, DT_DIR, ".")) { frame->rax = written; return; }
             index = 1;
@@ -8111,9 +8129,8 @@ void sys_tgkill(syscall_frame_t *frame) {
     for (int i = 0; i < MAX_TASKS; i++) {
         if (tasks[i]->state == TASK_DEAD) continue;
         if (tasks[i]->pid != tid) continue;
-        if (tgid > 0 && tasks[i]->pgid != current_task_ptr->pgid) {
-            // tgkill requires the tid to be in the caller's thread group;
-            // fallback: also allow same-pgid match for our process model.
+        if (tgid > 0 && tgid != tasks[i]->pid && tgid != current_task_ptr->pid) {
+            frame->rax = (uint64_t)-ESRCH; return;
         }
         if (current_task_ptr->euid != 0 && current_task_ptr->uid != tasks[i]->uid) {
             frame->rax = (uint64_t)-EPERM; return;
@@ -8151,7 +8168,7 @@ void sys_openat(syscall_frame_t *frame) {
     }
 
     char rel_path[256];
-    if (match_vfs_path(abs_path, "devtmpfs", rel_path)) {
+    if (is_devtmpfs_path(abs_path, rel_path)) {
         if (rel_path[0] != '\0' && !device_exists_on_devtmpfs(rel_path)) {
             initrd_file_t file = read_initrd(abs_path);
             if (!S_ISDIR(file.mode)) {
@@ -8189,7 +8206,7 @@ void sys_openat(syscall_frame_t *frame) {
             release_pty_slave(pty_idx);
         frame->rax = (uint64_t)fd;
         return;
-    } else if (match_vfs_path(abs_path, "devpts", rel_path)) {
+    } else if (is_devpts_path(abs_path, rel_path)) {
         if (strcmp(rel_path, "ptmx") == 0) {
             int idx = alloc_pty();
             if (idx < 0) { frame->rax = (uint64_t)-ENOSPC; return; }

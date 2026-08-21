@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <main/string.h>
 #include <io/devpts.h>
+#include <io/vfs.h>
 #include <io/pty.h>
 
 int get_pts_idx(const char *name) {
@@ -55,6 +56,10 @@ const char *devpts_get_slave_name(int index) {
         names[index][2] = '\0';
     }
     return names[index];
+}
+
+bool is_devpts_path(const char *path, char *rel_out) {
+    return match_vfs_path(path, "devpts", rel_out);
 }
 
 const char *devpts_get_device_name(int index) {

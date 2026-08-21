@@ -15,3 +15,4 @@ int get_block_device_size(const char *name, uint64_t *size);
 int get_block_device_bus(const char *name, device_bus_t *bus, int *disk_index);
 int get_device_mode(const char *name, mode_t *mode);
 int unregister_device(const char* name);
+bool is_device_path(const char *path, char *rel_out, const char **fs_type_out);
