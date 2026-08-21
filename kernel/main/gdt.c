@@ -13,12 +13,12 @@ extern void flush_tss(void);
 
 static void set_gdt_entry(uint64_t *gdt, int num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran) {
     gdt[num] = (limit & 0xFFFF)
-             | ((base  & 0xFFFFULL)     << 16)
-             | ((base >> 16 & 0xFFULL)  << 32)
-             | ((uint64_t)access        << 40)
-             | ((limit >> 16 & 0x0FULL) << 48)
-             | ((uint64_t)(gran & 0xF0) << 48)
-             | ((base >> 24 & 0xFFULL)  << 56);
+             | ((base  & 0xFFFFULL)   << 16)
+             | ((base >> 16 & 0xFFULL) << 32)
+             | ((uint64_t)access       << 40)
+             | ((limit >> 16 & 0x0FULL)<< 48)
+             | ((uint64_t)(gran & 0xF0)<< 48)
+             | ((base >> 24 & 0xFFULL) << 56);
 }
 
 static void write_tss(cpu_gdt_t *g) {
@@ -53,7 +53,8 @@ void init_gdt_for_cpu(int cpu_index) {
     write_tss(g);                                     // 0x28: TSS (slots 5+6)
 
     struct gdt_ptr ptr = {
-        .limit = sizeof(g->entries) - 1, .base  = (uint64_t)g->entries
+        .limit = sizeof(g->entries) - 1,
+        .base  = (uint64_t)g->entries
     };
 
     flush_gdt((uint64_t)&ptr);

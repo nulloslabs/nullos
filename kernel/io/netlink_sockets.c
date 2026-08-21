@@ -258,7 +258,21 @@ static bool check_netlink_socket_readable(socket_t *socket) {
 }
 
 static const socket_ops_t netlink_socket_ops = {
-    .bind = bind_netlink_socket, .connect = connect_netlink_socket, .listen = listen_netlink_socket, .accept = accept_netlink_socket, .sendto = send_netlink_message, .recvfrom = receive_netlink_message, .getsockname = get_netlink_socket_name, .getpeername = get_netlink_peer_name, .getsockopt = get_netlink_socket_option, .setsockopt = set_netlink_socket_option, .shutdown = shutdown_netlink_socket, .close = close_netlink_socket, .read = read_netlink_socket, .write = write_netlink_socket, .is_readable = check_netlink_socket_readable,
+    .bind = bind_netlink_socket,
+    .connect = connect_netlink_socket,
+    .listen = listen_netlink_socket,
+    .accept = accept_netlink_socket,
+    .sendto = send_netlink_message,
+    .recvfrom = receive_netlink_message,
+    .getsockname = get_netlink_socket_name,
+    .getpeername = get_netlink_peer_name,
+    .getsockopt = get_netlink_socket_option,
+    .setsockopt = set_netlink_socket_option,
+    .shutdown = shutdown_netlink_socket,
+    .close = close_netlink_socket,
+    .read = read_netlink_socket,
+    .write = write_netlink_socket,
+    .is_readable = check_netlink_socket_readable,
 };
 
 int create_netlink_socket(int type, int protocol, socket_t **out) {

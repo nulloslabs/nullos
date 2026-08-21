@@ -32,7 +32,8 @@ uint64_t fb_write_index(int idx, const void* buf, uint64_t count, uint64_t offse
     if (!fb_req.response || idx >= (int)fb_req.response->framebuffer_count) return (uint64_t)-ENODEV;
     struct limine_framebuffer *fb = fb_req.response->framebuffers[idx];
     uint64_t size = (idx == 0 && fb_yres_virtual ? fb_yres_virtual : fb->height) * fb->pitch;
-    // Writing past the end of the framebuffer is "no space left on device", // not "EOF". Tools like `cat urandom > /dev/fb0` rely on this to know
+    // Writing past the end of the framebuffer is "no space left on device",
+    // not "EOF". Tools like `cat urandom > /dev/fb0` rely on this to know
     // when to surface ENOSPC instead of looping forever on a 0-byte write.
     if (offset >= size) return (uint64_t)-ENOSPC;
     if (count > size - offset) count = size - offset;

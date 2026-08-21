@@ -68,7 +68,9 @@ static bool read_rtc_stable_time(rtc_time_t *time, uint8_t *status_b) {
         prev.day = read_rtc_register(RTC_REG_DAY);
         prev.month = read_rtc_register(RTC_REG_MONTH);
         prev.year = read_rtc_register(RTC_REG_YEAR);
-    } while (cur.second != prev.second || cur.minute != prev.minute || cur.hour != prev.hour || cur.day != prev.day || cur.month != prev.month || cur.year != prev.year);
+    } while (cur.second != prev.second || cur.minute != prev.minute ||
+             cur.hour != prev.hour || cur.day != prev.day ||
+             cur.month != prev.month || cur.year != prev.year);
 
     *status_b = read_rtc_register(RTC_REG_STATUS_B);
     *time = cur;
@@ -132,7 +134,8 @@ uint64_t read_rtc_unix_time(void) {
         time.hour = (uint8_t)(((time.hour & 0x7F) + 12) % 24);
     }
 
-    if (time.month < 1 || time.month > 12 || time.day < 1 || time.day > 31 || time.hour > 23 || time.minute > 59 || time.second > 59) {
+    if (time.month < 1 || time.month > 12 || time.day < 1 || time.day > 31 ||
+        time.hour > 23 || time.minute > 59 || time.second > 59) {
         return 0;
     }
 

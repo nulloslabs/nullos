@@ -74,8 +74,8 @@ extern tmpfs_inode_t *tmpfs_inodes[TMPFS_MAX_INODES];
 extern spinlock_t    tmpfs_lock;
 
 // Mount management (used by sys_mount/sys_umount2 only)
-int  create_tmpfs_root(const char *mount_path);
-int  destroy_tmpfs_root(const char *mount_path);
+int  mount_tmpfs(const char *source, const char *path, unsigned long flags, const char *data);
+int  unmount_tmpfs(const char *path);
 bool is_tmpfs_dir(const char *abs_path);
 
 // Path-based API mirroring initrd exactly

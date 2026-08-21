@@ -72,6 +72,9 @@
 #include <io/tmpfs.h>
 #include <io/ext4.h>
 #include <io/iso9660.h>
+#include <io/vfat.h>
+#include <io/mbr.h>
+#include <io/gpt.h>
 #include <io/usb.h>
 #include <mm/mm.h>
 #include <mm/vmm.h>
@@ -569,6 +572,11 @@ static bool stat_iso9660_to_kst(const char *abs_path, struct stat *kst, bool fol
     return stat_iso9660(abs_path, kst, follow) == 0;
 }
 
+static bool stat_vfat_to_kst(const char *abs_path, struct stat *kst, bool follow) {
+    if (!check_vfat_path(abs_path)) return false;
+    return stat_vfat(abs_path, kst, follow) == 0;
+}
+
 static int check_directory_access(const char *path, bool write) {
     struct stat st;
     if (check_ext4_path(path)) {
@@ -576,6 +584,9 @@ static int check_directory_access(const char *path, bool write) {
         if (write) return -EROFS;
     } else if (check_iso9660_path(path)) {
         if (!stat_iso9660_to_kst(path, &st, true)) return -ENOENT;
+        if (write) return -EROFS;
+    } else if (check_vfat_path(path)) {
+        if (!stat_vfat_to_kst(path, &st, true)) return -ENOENT;
         if (write) return -EROFS;
     } else if (is_tmpfs_dir(path)) {
         if (!stat_tmpfs_to_kst(path, &st, true)) return -ENOENT;
@@ -772,6 +783,18 @@ static int open_iso9660_common(const char *abs_path, uint32_t flags) {
     if ((flags & O_DIRECTORY) && !S_ISDIR(st.st_mode)) return -ENOTDIR;
     if (!can_access_stat_mode(&st, 1, 0, S_ISDIR(st.st_mode))) return -EACCES;
     return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_ISO9660, flags);
+}
+
+static int open_fat32_common(const char *abs_path, uint32_t flags) {
+    if (!check_vfat_path(abs_path)) return 1;
+    int want_write = (flags & O_WRONLY) || (flags & O_RDWR);
+    if (want_write || (flags & (O_CREAT | O_TRUNC))) return -EROFS;
+    struct stat st;
+    int status = stat_vfat(abs_path, &st, true);
+    if (status < 0) return status;
+    if ((flags & O_DIRECTORY) && !S_ISDIR(st.st_mode)) return -ENOTDIR;
+    if (!can_access_stat_mode(&st, 1, 0, S_ISDIR(st.st_mode))) return -EACCES;
+    return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_VFAT, flags);
 }
 
 static uint64_t resolve_futex_key(uint32_t *uaddr, syscall_frame_t *frame) {
@@ -1247,77 +1270,6 @@ static int select_check_fd(int fd) {
     return result;
 }
 
-static int64_t do_select(int nfds, uint8_t *k_read, uint8_t *k_write, uint8_t *k_except, uint8_t *out_read, uint8_t *out_write, uint8_t *out_except, int out_bytes, int64_t timeout_us) {
-    int count = 0;
-
-    // First pass: non-blocking check
-    for (int fd = 0; fd < nfds; fd++) {
-        int check = 0;
-        if (k_read   && fd_isset(k_read,   fd)) check |= 1;
-        if (k_write  && fd_isset(k_write,  fd)) check |= 2;
-        if (k_except && fd_isset(k_except, fd)) check |= 4;
-        if (!check) continue;
-
-        int status = select_check_fd(fd);
-        if (status < 0) {
-            // bad fd => treat as ready so caller sees EBADF-ish behavior
-            if (k_read   && fd_isset(k_read,   fd)) fd_set_bit(out_read,   fd);
-            if (k_write  && fd_isset(k_write,  fd)) fd_set_bit(out_write,  fd);
-            count++;
-            continue;
-        }
-        int hit = 0;
-        if ((check & 1) && (status & 1)) { fd_set_bit(out_read, fd); hit = 1; }
-        if ((check & 2) && (status & 2)) { fd_set_bit(out_write, fd); hit = 1; }
-        // exceptfds: no special conditions yet, always 0
-        if (hit) count++;
-    }
-
-    if (count > 0 || timeout_us == 0) {
-        return count;
-    }
-
-    // Blocking loop
-    uint64_t start = get_monotonic_time_us();
-    while (1) {
-        if (signal_pending()) return -EINTR;
-
-        count = 0;
-        if (out_read) memset(out_read, 0, out_bytes);
-        if (out_write) memset(out_write, 0, out_bytes);
-        if (out_except) memset(out_except, 0, out_bytes);
-
-        for (int fd = 0; fd < nfds; fd++) {
-            int check = 0;
-            if (k_read   && fd_isset(k_read,   fd)) check |= 1;
-            if (k_write  && fd_isset(k_write,  fd)) check |= 2;
-            if (k_except && fd_isset(k_except, fd)) check |= 4;
-            if (!check) continue;
-
-            int status = select_check_fd(fd);
-            if (status < 0) {
-                if (k_read   && fd_isset(k_read,   fd)) fd_set_bit(out_read,   fd);
-                if (k_write  && fd_isset(k_write,  fd)) fd_set_bit(out_write,  fd);
-                count++;
-                continue;
-            }
-            int hit = 0;
-            if ((check & 1) && (status & 1)) { fd_set_bit(out_read, fd); hit = 1; }
-            if ((check & 2) && (status & 2)) { fd_set_bit(out_write, fd); hit = 1; }
-            if (hit) count++;
-        }
-
-        if (count > 0) {
-            return count;
-        }
-        if (timeout_us > 0 && (int64_t)(get_monotonic_time_us() - start) >= timeout_us) {
-            return 0;
-        }
-
-        let_current_task_sleep(1000);
-    }
-}
-
 static int sleep_clock_status(int clock_id) {
     switch (clock_id) {
     case CLOCK_REALTIME:
@@ -1357,44 +1309,6 @@ static ktime_t sleep_ns_add(ktime_t left, ktime_t right) {
 static struct timespec sleep_ns_to_timespec(ktime_t ns) {
     struct timespec result = { .tv_sec = ns / 1000000000LL, .tv_nsec = ns % 1000000000LL };
     return result;
-}
-
-static int do_clock_nanosleep(int clock_id, int flags, const struct timespec *req, struct timespec *rem) {
-    int clock_status = sleep_clock_status(clock_id);
-    if (clock_status < 0) return clock_status;
-    if (flags & ~TIMER_ABSTIME) return -EINVAL;
-
-    struct timespec request;
-    if (!req || copy_from_user(&request, req, sizeof(request)) < 0) return -EFAULT;
-    if (request.tv_sec < 0 || request.tv_nsec < 0 || request.tv_nsec >= 1000000000L) return -EINVAL;
-
-    bool absolute = (flags & TIMER_ABSTIME) != 0;
-    int wait_clock = absolute ? clock_id : CLOCK_MONOTONIC;
-    ktime_t request_ns = sleep_timespec_to_ns(&request);
-    ktime_t deadline = absolute ? request_ns : sleep_ns_add(sleep_clock_now_ns(wait_clock), request_ns);
-
-    while (sleep_clock_now_ns(wait_clock) < deadline) {
-        if (signal_pending()) {
-            if (!absolute && rem) {
-                ktime_t now = sleep_clock_now_ns(wait_clock);
-                struct timespec remaining = sleep_ns_to_timespec(now < deadline ? deadline - now : 0);
-                if (copy_to_user(rem, &remaining, sizeof(remaining)) < 0) return -EFAULT;
-            }
-            return -EINTR;
-        }
-
-        ktime_t remaining_ns = deadline - sleep_clock_now_ns(wait_clock);
-        uint64_t remaining_us = ((uint64_t)remaining_ns + 999) / 1000;
-        uint64_t now_us = get_monotonic_time_us();
-        current_task_ptr->sleep_deadline_us = remaining_us > UINT64_MAX - now_us ? UINT64_MAX : now_us + remaining_us;
-        current_task_ptr->state = TASK_SLEEPING;
-        spin_unlock(&sched_lock);
-        yield_sched();
-        spin_lock(&sched_lock);
-    }
-
-    current_task_ptr->sleep_deadline_us = 0;
-    return 0;
 }
 
 static task_t *find_priority_task(int which, id_t who) {
@@ -1611,6 +1525,364 @@ static int epoll_find_interest(epoll_instance_t *epi, int fd) {
         if (epi->interests[i].watched_fd == fd) return i;
     }
     return -1;
+}
+
+static int64_t do_select(int nfds, uint8_t *k_read, uint8_t *k_write, uint8_t *k_except, uint8_t *out_read, uint8_t *out_write, uint8_t *out_except, int out_bytes, int64_t timeout_us) {
+    int count = 0;
+
+    // First pass: non-blocking check
+    for (int fd = 0; fd < nfds; fd++) {
+        int check = 0;
+        if (k_read   && fd_isset(k_read,   fd)) check |= 1;
+        if (k_write  && fd_isset(k_write,  fd)) check |= 2;
+        if (k_except && fd_isset(k_except, fd)) check |= 4;
+        if (!check) continue;
+
+        int status = select_check_fd(fd);
+        if (status < 0) {
+            // bad fd => treat as ready so caller sees EBADF-ish behavior
+            if (k_read   && fd_isset(k_read,   fd)) fd_set_bit(out_read,   fd);
+            if (k_write  && fd_isset(k_write,  fd)) fd_set_bit(out_write,  fd);
+            count++;
+            continue;
+        }
+        int hit = 0;
+        if ((check & 1) && (status & 1)) { fd_set_bit(out_read, fd); hit = 1; }
+        if ((check & 2) && (status & 2)) { fd_set_bit(out_write, fd); hit = 1; }
+        // exceptfds: no special conditions yet, always 0
+        if (hit) count++;
+    }
+
+    if (count > 0 || timeout_us == 0) {
+        return count;
+    }
+
+    // Blocking loop
+    uint64_t start = get_monotonic_time_us();
+    while (1) {
+        if (signal_pending()) return -EINTR;
+
+        count = 0;
+        if (out_read) memset(out_read, 0, out_bytes);
+        if (out_write) memset(out_write, 0, out_bytes);
+        if (out_except) memset(out_except, 0, out_bytes);
+
+        for (int fd = 0; fd < nfds; fd++) {
+            int check = 0;
+            if (k_read   && fd_isset(k_read,   fd)) check |= 1;
+            if (k_write  && fd_isset(k_write,  fd)) check |= 2;
+            if (k_except && fd_isset(k_except, fd)) check |= 4;
+            if (!check) continue;
+
+            int status = select_check_fd(fd);
+            if (status < 0) {
+                if (k_read   && fd_isset(k_read,   fd)) fd_set_bit(out_read,   fd);
+                if (k_write  && fd_isset(k_write,  fd)) fd_set_bit(out_write,  fd);
+                count++;
+                continue;
+            }
+            int hit = 0;
+            if ((check & 1) && (status & 1)) { fd_set_bit(out_read, fd); hit = 1; }
+            if ((check & 2) && (status & 2)) { fd_set_bit(out_write, fd); hit = 1; }
+            if (hit) count++;
+        }
+
+        if (count > 0) {
+            return count;
+        }
+        if (timeout_us > 0 && (int64_t)(get_monotonic_time_us() - start) >= timeout_us) {
+            return 0;
+        }
+
+        let_current_task_sleep(1000);
+    }
+}
+
+static uint64_t do_read(int fd, void *buf, size_t count) {
+    // Validate user buffer
+    if (count > 0 && !user_write_range_ok(current_task_ptr->ctx, (uint64_t)buf, count)) { return (uint64_t)-EFAULT; }
+
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { return (uint64_t)-EBADF; }
+    if (!fd_allows_read(entry)) { return (uint64_t)-EBADF; }
+
+    if (entry->type == FD_STREAM) {
+        if (count == 0 || count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
+        uint8_t *kbuf = malloc(count);
+        if (!kbuf) { return (uint64_t)-ENOMEM; }
+        // For FD_STREAM, use the process's controlling terminal if set
+        // This handles cases where a process has been assigned a TTY via TIOCSCTTY
+        int tty_idx = current_task_ptr->ctty_idx >= 0 ? current_task_ptr->ctty_idx : 1;
+        // If ctty_idx is not set, try to parse the device path (e.g. /dev/tty1).
+        if (current_task_ptr->ctty_idx < 0) {
+            const char *path = entry->path;
+            if (strstr(path, "tty")) {
+                const char *p = strstr(path, "tty");
+                if (p && p[3] >= '0' && p[3] <= '7') {
+                    tty_idx = p[3] - '0';
+                }
+            }
+        }
+        int64_t got = read_dev_tty((char *)kbuf, count, tty_idx);
+        if (got >= 0 && write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, (uint64_t)got) < 0) got = -EFAULT;
+        free(kbuf);
+        return (uint64_t)got;
+    }
+
+    if (entry->type == FD_DEV) {
+        char rel[256];
+        uint64_t res;
+        if (match_vfs_path(entry->path, "devtmpfs", rel)) {
+            if (count == 0 || count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
+
+            int tty_idx = tty_rel_to_idx(rel);
+            if (tty_idx >= 0) {
+                char local_buf[4096];
+                uint8_t *kbuf = (count <= sizeof(local_buf)) ? (uint8_t*)local_buf : malloc(count);
+                if (!kbuf) { return (uint64_t)-ENOMEM; }
+                int64_t got = read_dev_tty((char *)kbuf, count, tty_idx);
+                if (got >= 0 && write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, (uint64_t)got) < 0) got = -EFAULT;
+                if (kbuf != (uint8_t*)local_buf) free(kbuf);
+                return (uint64_t)got;
+            }
+
+            char local_buf[4096];
+            uint8_t *kbuf = (count <= sizeof(local_buf)) ? (uint8_t*)local_buf : malloc(count);
+            if (!kbuf) { return (uint64_t)-ENOMEM; }
+            res = read_device(rel, kbuf, count, entry->offset);
+            if ((int64_t)res >= 0 && write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, res) < 0) { res = (uint64_t)-EFAULT; } else if ((int64_t)res >= 0) entry->offset += res;
+            if (kbuf != (uint8_t*)local_buf) free(kbuf);
+        } else if (match_vfs_path(entry->path, "devpts", rel)) {
+            if (count == 0 || count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
+            char local_buf[4096];
+            uint8_t *kbuf = (count <= sizeof(local_buf)) ? (uint8_t*)local_buf : malloc(count);
+            if (!kbuf) { return (uint64_t)-ENOMEM; }
+            res = read_pts_device(rel, kbuf, count, entry->offset);
+            if ((int64_t)res >= 0 && write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, res) < 0) { res = (uint64_t)-EFAULT; } else if ((int64_t)res >= 0) entry->offset += res;
+            if (kbuf != (uint8_t*)local_buf) free(kbuf);
+        } else {
+            return (uint64_t)-ENODEV;
+        }
+        return res;
+    }
+
+    if (entry->type == FD_PTY_MASTER) {
+        int idx = ptm_path_idx(entry->path);
+        if (count == 0 || count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
+        uint8_t *kbuf = malloc(count);
+        if (!kbuf) { return (uint64_t)-ENOMEM; }
+        int got = read_pty_master(idx, (char *)kbuf, (int)count);
+        if (got >= 0 && write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, got) < 0) got = -EFAULT;
+        free(kbuf);
+        return (got < 0) ? (uint64_t)-EIO : (uint64_t)got;
+    }
+
+    if (entry->type == FD_PIPE) {
+        if (count == 0 || count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
+        uint8_t *kbuf = malloc(count);
+        if (!kbuf) { return (uint64_t)-ENOMEM; }
+        int64_t got = read_unix_handle((unix_handle_t *)entry->handle, kbuf, count, entry->flags);
+        if (got >= 0 && write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, got) < 0) got = -EFAULT;
+        free(kbuf);
+        return (uint64_t)got;
+    }
+
+    if (entry->type == FD_SOCKET) {
+        if (count == 0 || count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
+        uint8_t *kbuf = malloc(count);
+        if (!kbuf) { return (uint64_t)-ENOMEM; }
+        socket_t *sock = (socket_t *)entry->handle;
+        int64_t got = -EBADF;
+        if (sock && sock->ops && sock->ops->read) {
+            got = sock->ops->read(sock, kbuf, count, entry->flags);
+        }
+        if (got >= 0 && write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, got) < 0) got = -EFAULT;
+        free(kbuf);
+        return (uint64_t)got;
+    }
+
+    if (entry->type == FD_PROC || entry->type == FD_TMPFS || entry->type == FD_EXT4 || entry->type == FD_ISO9660 || entry->type == FD_VFAT || entry->type == FD_FILE) {
+        if (count == 0) { return 0; }
+        if (count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
+        char local_buf[4096];
+        uint8_t *kbuf = count <= sizeof(local_buf) ? (uint8_t *)local_buf : malloc(count);
+        if (!kbuf) { return (uint64_t)-ENOMEM; }
+        int64_t got = read_vfs(entry->path, kbuf, count, entry->offset);
+        if (got >= 0) {
+            if (write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, (uint64_t)got) < 0) got = -EFAULT;
+            else entry->offset += (uint64_t)got;
+        }
+        if (kbuf != (uint8_t *)local_buf) free(kbuf);
+        return (uint64_t)got;
+    }
+
+    return (uint64_t)-EBADF;
+}
+
+static uint64_t do_write(int fd, const void *buf, size_t count) {
+    int tty_idx;
+
+    // Validate user buffer pointer
+    if (!buf) { return (uint64_t)-EINVAL; }
+    if (count > 0 && !user_range_ok(current_task_ptr->ctx, (uint64_t)buf, count)) { return (uint64_t)-EFAULT; }
+
+    fd_entry_t *entry = get_current_fd(fd);
+    if (!entry) { return (uint64_t)-EBADF; }
+    if (!fd_allows_write(entry)) { return (uint64_t)-EBADF; }
+
+    if (entry->type == FD_EXT4) { return (uint64_t)-EROFS; }
+    if (entry->type == FD_ISO9660) { return (uint64_t)-EROFS; }
+    if (entry->type == FD_VFAT) { return (uint64_t)-EROFS; }
+
+    uint8_t local_buf[4096];
+
+    if (entry->type == FD_STREAM) {
+        tty_idx = current_task_ptr->ctty_idx >= 0 && current_task_ptr->ctty_idx < NUM_TTYS ? current_task_ptr->ctty_idx : keyboard_tty;
+        uint64_t processed = 0;
+        while (processed < count) {
+            poll_usb_hcds();
+            if (signal_pending()) break;
+            uint64_t chunk = count - processed;
+            if (chunk > sizeof(local_buf)) chunk = sizeof(local_buf);
+            if (read_vmm(current_task_ptr->ctx, local_buf, (uint64_t)buf + processed, chunk) < 0) { return (uint64_t)-EFAULT; }
+            write_terminal_tty(tty_idx, (const char *)local_buf, chunk, false);
+            processed += chunk;
+        }
+        return !processed && signal_pending() ? (uint64_t)-EINTR : processed;
+    }
+
+    if (entry->type == FD_DEV) {
+        char rel[256];
+        uint64_t res;
+        if (match_vfs_path(entry->path, "devtmpfs", rel)) {
+            if (count == 0 || count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
+            uint8_t *kbuf = count <= sizeof(local_buf) ? local_buf : malloc(count);
+            if (!kbuf) { return (uint64_t)-ENOMEM; }
+            if (read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count) < 0) { if (kbuf != local_buf) free(kbuf); return (uint64_t)-EFAULT; }
+            res = write_device(rel, kbuf, count, entry->offset);
+            if ((int64_t)res >= 0) entry->offset += res;
+            if (kbuf != local_buf) free(kbuf);
+        } else if (match_vfs_path(entry->path, "devpts", rel)) {
+            if (count == 0 || count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
+            uint8_t *kbuf = count <= sizeof(local_buf) ? local_buf : malloc(count);
+            if (!kbuf) { return (uint64_t)-ENOMEM; }
+            if (read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count) < 0) { if (kbuf != local_buf) free(kbuf); return (uint64_t)-EFAULT; }
+            res = write_pts_device(rel, kbuf, count, entry->offset);
+            if ((int64_t)res >= 0) entry->offset += res;
+            if (kbuf != local_buf) free(kbuf);
+        } else {
+            return (uint64_t)-ENODEV;
+        }
+        return res;
+    }
+
+    if (entry->type == FD_PTY_MASTER) {
+        int idx = ptm_path_idx(entry->path);
+        if (count == 0 || count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
+        uint8_t *kbuf = count <= sizeof(local_buf) ? local_buf : malloc(count);
+        if (!kbuf) { return (uint64_t)-ENOMEM; }
+        if (read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count) < 0) { if (kbuf != local_buf) free(kbuf); return (uint64_t)-EFAULT; }
+        int w = write_pty_master(idx, (const char *)kbuf, (int)count);
+        if (kbuf != local_buf) free(kbuf);
+        return (w < 0) ? (uint64_t)-EIO : (uint64_t)w;
+    }
+
+    if (entry->type == FD_PIPE) {
+        if (count == 0 || count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
+        uint8_t *kbuf = count <= sizeof(local_buf) ? local_buf : malloc(count);
+        if (!kbuf) { return (uint64_t)-ENOMEM; }
+        if (read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count) < 0) { if (kbuf != local_buf) free(kbuf); return (uint64_t)-EFAULT; }
+        int64_t w = write_unix_handle((unix_handle_t *)entry->handle, kbuf, count, entry->flags);
+        if (kbuf != local_buf) free(kbuf);
+        return (uint64_t)w;
+    }
+
+    if (entry->type == FD_SOCKET) {
+        if (count == 0 || count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
+        uint8_t *kbuf = count <= sizeof(local_buf) ? local_buf : malloc(count);
+        if (!kbuf) { return (uint64_t)-ENOMEM; }
+        if (read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count) < 0) { if (kbuf != local_buf) free(kbuf); return (uint64_t)-EFAULT; }
+        socket_t *sock = (socket_t *)entry->handle;
+        int64_t w = -EBADF;
+        if (sock && sock->ops && sock->ops->write) {
+            w = sock->ops->write(sock, kbuf, count, entry->flags);
+        }
+        if (kbuf != local_buf) free(kbuf);
+        return (uint64_t)w;
+    }
+
+    if (entry->type == FD_TMPFS) {
+        tmpfs_file_t tf = read_tmpfs(entry->path);
+
+        // O_APPEND: write at current end of file
+        if (entry->flags & O_APPEND) entry->offset = tf.size;
+
+        uint8_t *kbuf = count <= sizeof(local_buf) ? local_buf : malloc(count);
+        if (!kbuf) { return (uint64_t)-ENOMEM; }
+        if (read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count) < 0) { if (kbuf != local_buf) free(kbuf); return (uint64_t)-EFAULT; }
+
+        int res = write_tmpfs_partial(entry->path, kbuf, entry->offset, count, tf.mode ? tf.mode : 0644, tf.mode ? tf.uid : current_task_ptr->euid, tf.mode ? tf.gid : current_task_ptr->egid);
+        if (kbuf != local_buf) free(kbuf);
+        if (res < 0) { return (uint64_t)res; }
+        entry->offset += count;
+        return count;
+    }
+
+    // O_APPEND: every write goes to the current end of file
+    if (entry->flags & O_APPEND) {
+        initrd_file_t file = read_initrd(entry->path);
+        entry->offset = file.size;
+    }
+
+    uint8_t *kbuf = count <= sizeof(local_buf) ? local_buf : malloc(count);
+    if (!kbuf) { return (uint64_t)-ENOMEM; }
+    if (read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count) < 0) { if (kbuf != local_buf) free(kbuf); return (uint64_t)-EFAULT; }
+
+    int res = write_initrd_partial(entry->path, kbuf, entry->offset, count);
+    if (kbuf != local_buf) free(kbuf);
+
+    if (res < 0) { return (uint64_t)res; }
+    entry->offset += count;
+    return count;
+}
+
+
+static int do_clock_nanosleep(int clock_id, int flags, const struct timespec *req, struct timespec *rem) {
+    int clock_status = sleep_clock_status(clock_id);
+    if (clock_status < 0) return clock_status;
+    if (flags & ~TIMER_ABSTIME) return -EINVAL;
+
+    struct timespec request;
+    if (!req || copy_from_user(&request, req, sizeof(request)) < 0) return -EFAULT;
+    if (request.tv_sec < 0 || request.tv_nsec < 0 || request.tv_nsec >= 1000000000L) return -EINVAL;
+
+    bool absolute = (flags & TIMER_ABSTIME) != 0;
+    int wait_clock = absolute ? clock_id : CLOCK_MONOTONIC;
+    ktime_t request_ns = sleep_timespec_to_ns(&request);
+    ktime_t deadline = absolute ? request_ns : sleep_ns_add(sleep_clock_now_ns(wait_clock), request_ns);
+
+    while (sleep_clock_now_ns(wait_clock) < deadline) {
+        if (signal_pending()) {
+            if (!absolute && rem) {
+                ktime_t now = sleep_clock_now_ns(wait_clock);
+                struct timespec remaining = sleep_ns_to_timespec(now < deadline ? deadline - now : 0);
+                if (copy_to_user(rem, &remaining, sizeof(remaining)) < 0) return -EFAULT;
+            }
+            return -EINTR;
+        }
+
+        ktime_t remaining_ns = deadline - sleep_clock_now_ns(wait_clock);
+        uint64_t remaining_us = ((uint64_t)remaining_ns + 999) / 1000;
+        uint64_t now_us = get_monotonic_time_us();
+        current_task_ptr->sleep_deadline_us = remaining_us > UINT64_MAX - now_us ? UINT64_MAX : now_us + remaining_us;
+        current_task_ptr->state = TASK_SLEEPING;
+        spin_unlock(&sched_lock);
+        yield_sched();
+        spin_lock(&sched_lock);
+    }
+
+    current_task_ptr->sleep_deadline_us = 0;
+    return 0;
 }
 
 static int do_epoll_create1(int flags) {
@@ -2065,6 +2337,195 @@ static int stat_fd_to_kst(int fd, struct stat *kst) {
     return 0;
 }
 
+static void rollback_mmap(void *ptr, uint64_t num_pages, uint64_t retained_pages) {
+    if (!ptr) return;
+    uint64_t start = (uint64_t)ptr;
+    for (uint64_t i = 0; i < num_pages; i++) unmap_vmm(current_task_ptr->ctx, start + i * PAGE_SIZE);
+    remove_vma(&current_task_ptr->ctx->vmas, start, start + num_pages * PAGE_SIZE);
+    current_task_ptr->ctx->mmap_pages = retained_pages;
+}
+
+static flock_obj_t *find_advisory_lock_conflict(const fd_entry_t *entry, int requested_type, bool process_lock) {
+    for (int i = 0; i < 128; i++) {
+        flock_obj_t *obj = &global_flocks[i];
+        if (!obj->used || obj->lock_type == 0 || strcmp(obj->path, entry->path) != 0) continue;
+        if (process_lock && obj->owner_pid == current_task_ptr->pid) continue;
+        if (!process_lock && obj == (flock_obj_t *)entry->handle) continue;
+        if (requested_type == LOCK_EX || obj->lock_type == LOCK_EX) return obj;
+    }
+    return NULL;
+}
+
+static int set_advisory_lock(fd_entry_t *entry, int lock_type, bool nonblocking, bool process_lock) {
+    if (lock_type == 0) {
+        if (entry->handle) {
+            flock_obj_t *obj = (flock_obj_t *)entry->handle;
+            if (!process_lock || obj->owner_pid == current_task_ptr->pid) {
+                obj->lock_type = 0;
+                obj->owner_pid = 0;
+            }
+        }
+        return 0;
+    }
+
+    while (find_advisory_lock_conflict(entry, lock_type, process_lock)) {
+        if (nonblocking) return -EAGAIN;
+        sleep(10);
+    }
+
+    if (!entry->handle) {
+        entry->handle = alloc_flock_obj(entry->path);
+        if (!entry->handle) return -ENOLCK;
+    }
+    flock_obj_t *obj = (flock_obj_t *)entry->handle;
+    obj->lock_type = lock_type;
+    obj->owner_pid = process_lock ? current_task_ptr->pid : 0;
+    return 0;
+}
+
+static int do_truncate_path(const char *abs_path, uint64_t length) {
+    if (check_ext4_path(abs_path)) return -EROFS;
+    if (check_iso9660_path(abs_path)) return -EROFS;
+    // tmpfs
+    if (is_tmpfs_dir(abs_path)) {
+        tmpfs_file_t f = stat_tmpfs(abs_path);
+        if (!f.mode) return -ENOENT;
+        if (!S_ISREG(f.mode)) return -EISDIR;
+        struct stat st;
+        if (!stat_tmpfs_to_kst(abs_path, &st, true) || !can_access_stat_mode(&st, 0, 1, 0)) return -EACCES;
+        return truncate_tmpfs(abs_path, length);
+    }
+    // initrd / overlay
+    initrd_file_t f = read_initrd(abs_path);
+    if (!f.mode) return -ENOENT;
+    if (f.size && !f.data) return -EIO;
+    if (!can_access_initrd(&f, 0, 1, 0)) return -EACCES;
+    if (length > INITRD_MAX_FILE_SIZE) return -EFBIG;
+
+    if (length == f.size) return 0;
+
+    if (length < f.size) {
+        // Shrink: write only the first 'length' bytes back.
+        return write_initrd(abs_path, f.data, length, f.mode ? f.mode : 0644, f.uid, f.gid);
+    } else {
+        // Extend: write existing data + zero-pad to 'length'.
+        uint64_t extra = length - f.size;
+        void *newbuf = malloc(length);
+        if (!newbuf) return -ENOMEM;
+        if (f.size) memcpy(newbuf, f.data, f.size);
+        memset((char *)newbuf + f.size, 0, extra);
+        int r = write_initrd(abs_path, newbuf, length, f.mode ? f.mode : 0644, f.uid, f.gid);
+        free(newbuf);
+        return r;
+    }
+}
+
+static int change_working_directory(const char *abs_path) {
+    char resolved[256];
+    resolve_path_symlinks(abs_path, resolved, sizeof(resolved));
+
+    int access = check_directory_access(resolved, false);
+    if (access < 0 && !is_procfs_path(resolved)) return access;
+
+    // procfs directories (e.g. /proc/<pid>, /proc/self, /proc/<pid>/fd) are
+    // virtual: they have no initrd backing, so validate them through the
+    // procfs resolver. Without this, `cd /proc/<pid>` fails with ENOENT even
+    // though getdents on /proc lists the pid.
+    if (is_procfs_path(resolved)) {
+        int self = proc_self_idx();
+        proc_node_t n;
+        if (!resolve_procfs(resolved, self, &n)) return -ENOENT;
+        if (!is_procfs_dir(&n)) return -ENOTDIR;
+        strncpy(current_task_ptr->cwd, resolved, 255);
+        current_task_ptr->cwd[255] = '\0';
+        return 0;
+    }
+
+    // tmpfs directories: validate via tmpfs, then set cwd.
+    if (is_tmpfs_dir(resolved)) {
+        tmpfs_file_t dir = stat_tmpfs(resolved);
+        if (!dir.mode) return -ENOENT;
+        if (!S_ISDIR(dir.mode)) return -ENOTDIR;
+        strncpy(current_task_ptr->cwd, resolved, 255);
+        current_task_ptr->cwd[255] = '\0';
+        return 0;
+    }
+
+    if (check_ext4_path(resolved)) {
+        struct stat st;
+        int status = stat_ext4(resolved, &st, true);
+        if (status < 0) return status;
+        if (!S_ISDIR(st.st_mode)) return -ENOTDIR;
+        if (!can_access_stat_mode(&st, 1, 0, 1)) return -EACCES;
+        strncpy(current_task_ptr->cwd, resolved, 255);
+        current_task_ptr->cwd[255] = '\0';
+        return 0;
+    }
+
+    if (check_iso9660_path(resolved)) {
+        struct stat st;
+        int status = stat_iso9660(resolved, &st, true);
+        if (status < 0) return status;
+        if (!S_ISDIR(st.st_mode)) return -ENOTDIR;
+        if (!can_access_stat_mode(&st, 1, 0, 1)) return -EACCES;
+        strncpy(current_task_ptr->cwd, resolved, 255);
+        current_task_ptr->cwd[255] = '\0';
+        return 0;
+    }
+
+    if (check_vfat_path(resolved)) {
+        struct stat st;
+        int status = stat_vfat(resolved, &st, true);
+        if (status < 0) return status;
+        if (!S_ISDIR(st.st_mode)) return -ENOTDIR;
+        if (!can_access_stat_mode(&st, 1, 0, 1)) return -EACCES;
+        strncpy(current_task_ptr->cwd, resolved, 255);
+        current_task_ptr->cwd[255] = '\0';
+        return 0;
+    }
+
+    initrd_file_t dir = read_initrd(resolved);
+    if (!dir.data && !dir.mode) return -ENOENT;
+    if (!S_ISDIR(dir.mode) && strcmp(resolved, "/") != 0) return -ENOTDIR;
+
+    strncpy(current_task_ptr->cwd, resolved, 255);
+    current_task_ptr->cwd[255] = '\0';
+    return 0;
+}
+
+static int check_path_access(const char *path, const char *abs_path, int mode, bool follow) {
+    int want_read = (mode & R_OK) != 0;
+    int want_write = (mode & W_OK) != 0;
+    int want_exec = (mode & X_OK) != 0;
+
+    if (want_write && (check_ext4_path(abs_path) || check_iso9660_path(abs_path))) return -EROFS;
+
+    struct stat kst = {0};
+    if (stat_virtual_device(abs_path, &kst) || stat_tmpfs_to_kst(abs_path, &kst, follow) || stat_ext4_to_kst(abs_path, &kst, follow) || stat_iso9660_to_kst(abs_path, &kst, follow) || stat_vfat_to_kst(abs_path, &kst, follow) || stat_proc(abs_path, path, &kst, follow)) {
+        return mode == F_OK || can_access_stat_mode(&kst, want_read, want_write, want_exec) ? 0 : -EACCES;
+    }
+
+    initrd_file_t file = follow ? stat_initrd(abs_path) : stat_initrd_nofollow(abs_path);
+    if (!file.mode) return -ENOENT;
+    return mode == F_OK || can_access_initrd(&file, want_read, want_write, want_exec) ? 0 : -EACCES;
+}
+
+static int check_access_at(int dirfd, const char *user_path, int mode, int flags) {
+    if (!user_path) return -EFAULT;
+    if (mode & ~(R_OK | W_OK | X_OK)) return -EINVAL;
+    if (flags & ~(AT_EACCESS | AT_SYMLINK_NOFOLLOW)) return -EINVAL;
+
+    char path[256];
+    int status = copy_string_from_user(path, user_path, sizeof(path));
+    if (status < 0) return status;
+    if (!path[0]) return -ENOENT;
+
+    char abs_path[256];
+    status = build_abs_path_at(dirfd, path, abs_path, sizeof(abs_path));
+    if (status < 0) return status;
+    return check_path_access(path, abs_path, mode, !(flags & AT_SYMLINK_NOFOLLOW));
+}
+
 void cleanup_futex_task(int task_idx) {
     uint64_t irq;
     spin_lock_irqsave(&futex_lock, &irq);
@@ -2124,276 +2585,18 @@ void process_robust_list(task_t *task) {
 
 void sys_read(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
-    uint8_t *buf = (uint8_t *)frame->rsi;
-    uint64_t count = frame->rdx;
+    void *buf = (void *)frame->rsi;
+    size_t count = frame->rdx;
 
-    // Validate user buffer
-    if (count > 0 && !user_write_range_ok(current_task_ptr->ctx, (uint64_t)buf, count)) { frame->rax = (uint64_t)-EFAULT; return; }
-
-    fd_entry_t *entry = get_current_fd(fd);
-    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
-    if (!fd_allows_read(entry)) { frame->rax = (uint64_t)-EBADF; return; }
-
-    if (entry->type == FD_STREAM) {
-        if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
-        uint8_t *kbuf = malloc(count);
-        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
-        // For FD_STREAM, use the process's controlling terminal if set
-        // This handles cases where a process has been assigned a TTY via TIOCSCTTY
-        int tty_idx = current_task_ptr->ctty_idx >= 0 ? current_task_ptr->ctty_idx : 1;
-        // If ctty_idx is not set, try to parse the device path (e.g. /dev/tty1).
-        if (current_task_ptr->ctty_idx < 0) {
-            const char *path = entry->path;
-            if (strstr(path, "tty")) {
-                const char *p = strstr(path, "tty");
-                if (p && p[3] >= '0' && p[3] <= '7') {
-                    tty_idx = p[3] - '0';
-                }
-            }
-        }
-        int64_t got = read_dev_tty((char *)kbuf, count, tty_idx);
-        if (got >= 0 && write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, (uint64_t)got) < 0) got = -EFAULT;
-        free(kbuf);
-        frame->rax = (uint64_t)got;
-        return;
-    }
-
-    if (entry->type == FD_DEV) {
-        char rel[256];
-        uint64_t res;
-        if (match_vfs_path(entry->path, "devtmpfs", rel)) {
-            if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
-
-            int tty_idx = tty_rel_to_idx(rel);
-            if (tty_idx >= 0) {
-                char local_buf[4096];
-                uint8_t *kbuf = (count <= sizeof(local_buf)) ? (uint8_t*)local_buf : malloc(count);
-                if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
-                int64_t got = read_dev_tty((char *)kbuf, count, tty_idx);
-                if (got >= 0 && write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, (uint64_t)got) < 0) got = -EFAULT;
-                if (kbuf != (uint8_t*)local_buf) free(kbuf);
-                frame->rax = (uint64_t)got;
-                return;
-            }
-
-            char local_buf[4096];
-            uint8_t *kbuf = (count <= sizeof(local_buf)) ? (uint8_t*)local_buf : malloc(count);
-            if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
-            res = read_device(rel, kbuf, count, entry->offset);
-            if ((int64_t)res >= 0 && write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, res) < 0) { res = (uint64_t)-EFAULT; } else if ((int64_t)res >= 0) entry->offset += res;
-            if (kbuf != (uint8_t*)local_buf) free(kbuf);
-        } else if (match_vfs_path(entry->path, "devpts", rel)) {
-            if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
-            char local_buf[4096];
-            uint8_t *kbuf = (count <= sizeof(local_buf)) ? (uint8_t*)local_buf : malloc(count);
-            if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
-            res = read_pts_device(rel, kbuf, count, entry->offset);
-            if ((int64_t)res >= 0 && write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, res) < 0) { res = (uint64_t)-EFAULT; } else if ((int64_t)res >= 0) entry->offset += res;
-            if (kbuf != (uint8_t*)local_buf) free(kbuf);
-        } else {
-            frame->rax = (uint64_t)-ENODEV; return;
-        }
-        frame->rax = res;
-        return;
-    }
-
-    if (entry->type == FD_PTY_MASTER) {
-        int idx = ptm_path_idx(entry->path);
-        if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
-        uint8_t *kbuf = malloc(count);
-        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
-        int got = read_pty_master(idx, (char *)kbuf, (int)count);
-        if (got >= 0 && write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, got) < 0) got = -EFAULT;
-        free(kbuf);
-        frame->rax = (got < 0) ? (uint64_t)-EIO : (uint64_t)got;
-        return;
-    }
-
-    if (entry->type == FD_PIPE) {
-        if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
-        uint8_t *kbuf = malloc(count);
-        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
-        int64_t got = read_unix_handle((unix_handle_t *)entry->handle, kbuf, count, entry->flags);
-        if (got >= 0 && write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, got) < 0) got = -EFAULT;
-        free(kbuf);
-        frame->rax = (uint64_t)got;
-        return;
-    }
-
-    if (entry->type == FD_SOCKET) {
-        if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
-        uint8_t *kbuf = malloc(count);
-        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
-        socket_t *sock = (socket_t *)entry->handle;
-        int64_t got = -EBADF;
-        if (sock && sock->ops && sock->ops->read) {
-            got = sock->ops->read(sock, kbuf, count, entry->flags);
-        }
-        if (got >= 0 && write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, got) < 0) got = -EFAULT;
-        free(kbuf);
-        frame->rax = (uint64_t)got;
-        return;
-    }
-
-    if (entry->type == FD_PROC || entry->type == FD_TMPFS || entry->type == FD_EXT4 || entry->type == FD_ISO9660 || entry->type == FD_FILE) {
-        if (count == 0) { frame->rax = 0; return; }
-        if (count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
-        char local_buf[4096];
-        uint8_t *kbuf = count <= sizeof(local_buf) ? (uint8_t *)local_buf : malloc(count);
-        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
-        int64_t got = read_vfs(entry->path, kbuf, count, entry->offset);
-        if (got >= 0) {
-            if (write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, (uint64_t)got) < 0) got = -EFAULT;
-            else entry->offset += (uint64_t)got;
-        }
-        if (kbuf != (uint8_t *)local_buf) free(kbuf);
-        frame->rax = (uint64_t)got;
-        return;
-    }
-
-    frame->rax = (uint64_t)-EBADF;
+    frame->rax = do_read(fd, buf, count);
 }
 
 void sys_write(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
-    int tty_idx;
-    const uint8_t *buf = (const uint8_t *)frame->rsi;
-    uint64_t count = frame->rdx;
+    const void *buf = (const void *)frame->rsi;
+    size_t count = (size_t)frame->rdx;
 
-    // Validate user buffer pointer
-    if (!buf) { frame->rax = (uint64_t)-EINVAL; return; }
-    if (count > 0 && !user_range_ok(current_task_ptr->ctx, (uint64_t)buf, count)) { frame->rax = (uint64_t)-EFAULT; return; }
-
-    fd_entry_t *entry = get_current_fd(fd);
-    if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
-    if (!fd_allows_write(entry)) { frame->rax = (uint64_t)-EBADF; return; }
-
-    if (entry->type == FD_EXT4) { frame->rax = (uint64_t)-EROFS; return; }
-    if (entry->type == FD_ISO9660) { frame->rax = (uint64_t)-EROFS; return; }
-
-    uint8_t local_buf[4096];
-
-    if (entry->type == FD_STREAM) {
-        tty_idx = current_task_ptr->ctty_idx >= 0 && current_task_ptr->ctty_idx < NUM_TTYS ? current_task_ptr->ctty_idx : keyboard_tty;
-        uint64_t processed = 0;
-        while (processed < count) {
-            poll_usb_hcds();
-            if (signal_pending()) break;
-            uint64_t chunk = count - processed;
-            if (chunk > sizeof(local_buf)) chunk = sizeof(local_buf);
-            if (read_vmm(current_task_ptr->ctx, local_buf, (uint64_t)buf + processed, chunk) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
-            write_terminal_tty(tty_idx, (const char *)local_buf, chunk, false);
-            processed += chunk;
-        }
-        frame->rax = !processed && signal_pending() ? (uint64_t)-EINTR : processed;
-        return;
-    }
-
-    if (entry->type == FD_DEV) {
-        char rel[256];
-        uint64_t res;
-        if (match_vfs_path(entry->path, "devtmpfs", rel)) {
-            if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
-            uint8_t *kbuf = count <= sizeof(local_buf) ? local_buf : malloc(count);
-            if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
-            if (read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count) < 0) { if (kbuf != local_buf) free(kbuf); frame->rax = (uint64_t)-EFAULT; return; }
-            res = write_device(rel, kbuf, count, entry->offset);
-            if ((int64_t)res >= 0) entry->offset += res;
-            if (kbuf != local_buf) free(kbuf);
-        } else if (match_vfs_path(entry->path, "devpts", rel)) {
-            if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
-            uint8_t *kbuf = count <= sizeof(local_buf) ? local_buf : malloc(count);
-            if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
-            if (read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count) < 0) { if (kbuf != local_buf) free(kbuf); frame->rax = (uint64_t)-EFAULT; return; }
-            res = write_pts_device(rel, kbuf, count, entry->offset);
-            if ((int64_t)res >= 0) entry->offset += res;
-            if (kbuf != local_buf) free(kbuf);
-        } else {
-            frame->rax = (uint64_t)-ENODEV; return;
-        }
-        frame->rax = res;
-        return;
-    }
-
-    if (entry->type == FD_PTY_MASTER) {
-        int idx = ptm_path_idx(entry->path);
-        if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
-        uint8_t *kbuf = count <= sizeof(local_buf) ? local_buf : malloc(count);
-        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
-        if (read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count) < 0) { if (kbuf != local_buf) free(kbuf); frame->rax = (uint64_t)-EFAULT; return; }
-        int w = write_pty_master(idx, (const char *)kbuf, (int)count);
-        if (kbuf != local_buf) free(kbuf);
-        frame->rax = (w < 0) ? (uint64_t)-EIO : (uint64_t)w;
-        return;
-    }
-
-    if (entry->type == FD_PIPE) {
-        if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
-        uint8_t *kbuf = count <= sizeof(local_buf) ? local_buf : malloc(count);
-        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
-        if (read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count) < 0) { if (kbuf != local_buf) free(kbuf); frame->rax = (uint64_t)-EFAULT; return; }
-        int64_t w = write_unix_handle((unix_handle_t *)entry->handle, kbuf, count, entry->flags);
-        if (kbuf != local_buf) free(kbuf);
-        frame->rax = (uint64_t)w;
-        return;
-    }
-
-    if (entry->type == FD_SOCKET) {
-        if (count == 0 || count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
-        uint8_t *kbuf = count <= sizeof(local_buf) ? local_buf : malloc(count);
-        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
-        if (read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count) < 0) { if (kbuf != local_buf) free(kbuf); frame->rax = (uint64_t)-EFAULT; return; }
-        socket_t *sock = (socket_t *)entry->handle;
-        int64_t w = -EBADF;
-        if (sock && sock->ops && sock->ops->write) {
-            w = sock->ops->write(sock, kbuf, count, entry->flags);
-        }
-        if (kbuf != local_buf) free(kbuf);
-        frame->rax = (uint64_t)w;
-        return;
-    }
-
-    if (entry->type == FD_TMPFS) {
-        tmpfs_file_t tf = read_tmpfs(entry->path);
-
-        // O_APPEND: write at current end of file
-        if (entry->flags & O_APPEND) entry->offset = tf.size;
-
-        uint8_t *kbuf = count <= sizeof(local_buf) ? local_buf : malloc(count);
-        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
-        if (read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count) < 0) { if (kbuf != local_buf) free(kbuf); frame->rax = (uint64_t)-EFAULT; return; }
-
-        int res = write_tmpfs_partial(entry->path, kbuf, entry->offset, count, tf.mode ? tf.mode : 0644, tf.mode ? tf.uid : current_task_ptr->euid, tf.mode ? tf.gid : current_task_ptr->egid);
-        if (kbuf != local_buf) free(kbuf);
-        if (res < 0) { frame->rax = (uint64_t)res; return; }
-        entry->offset += count;
-        frame->rax = count;
-        return;
-    }
-
-    // O_APPEND: every write goes to the current end of file
-    if (entry->flags & O_APPEND) {
-        initrd_file_t file = read_initrd(entry->path);
-        entry->offset = file.size;
-    }
-
-    // Copy the new bytes into a small kernel buffer first, then hand them to
-    // write_initrd_partial which reuses the file's existing overlay buffer
-    // (growing it geometrically) instead of re-copying the whole file on
-    // every write.  This turns O(file_size) per write into O(off+count) —
-    // critical for tools like dd that issue many small writes to a growing
-    // file (e.g. building a 1.5MB image in 512-byte chunks previously cost
-    // ~4GB of redundant memcpy -> 35s).
-    uint8_t *kbuf = count <= sizeof(local_buf) ? local_buf : malloc(count);
-    if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
-    if (read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count) < 0) { if (kbuf != local_buf) free(kbuf); frame->rax = (uint64_t)-EFAULT; return; }
-
-    int res = write_initrd_partial(entry->path, kbuf, entry->offset, count);
-    if (kbuf != local_buf) free(kbuf);
-
-    if (res < 0) { frame->rax = (uint64_t)res; return; }
-    entry->offset += count;
-    frame->rax = count;
+    frame->rax = do_write(fd, buf, count);
 }
 
 void sys_open(syscall_frame_t *frame) {
@@ -2556,6 +2759,11 @@ void sys_open(syscall_frame_t *frame) {
         if (ir != 1) { frame->rax = (uint64_t)ir; return; }
     }
 
+    {
+        int vr = open_fat32_common(abs_path, flags);
+        if (vr != 1) { frame->rax = (uint64_t)vr; return; }
+    }
+
     initrd_file_t file = read_initrd(abs_path);
 
     if (!file.mode && !(flags & O_CREAT)) { frame->rax = (uint64_t)-ENOENT; return; }
@@ -2613,7 +2821,7 @@ void sys_stat(syscall_frame_t *frame) {
     abs_path[sizeof(abs_path) - 1] = '\0';
 
     struct stat kst = {0};
-    if (stat_virtual_device(abs_path, &kst) || stat_tmpfs_to_kst(abs_path, &kst, true) || stat_ext4_to_kst(abs_path, &kst, true) || stat_iso9660_to_kst(abs_path, &kst, true)) {
+    if (stat_virtual_device(abs_path, &kst) || stat_tmpfs_to_kst(abs_path, &kst, true) || stat_ext4_to_kst(abs_path, &kst, true) || stat_iso9660_to_kst(abs_path, &kst, true) || stat_vfat_to_kst(abs_path, &kst, true)) {
         if (write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
         frame->rax = 0;
         return;
@@ -2691,6 +2899,14 @@ void sys_fstat(syscall_frame_t *frame) {
         frame->rax = 0;
         return;
     }
+    if (entry->type == FD_VFAT) {
+        struct stat kst = {0};
+        int status = stat_vfat(entry->path, &kst, true);
+        if (status < 0) { frame->rax = (uint64_t)status; return; }
+        if (write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+        frame->rax = 0;
+        return;
+    }
     if (entry->type == FD_PROC) {
         struct stat kst = {0};
         if (stat_proc(entry->path, NULL, &kst, true)) {
@@ -2730,7 +2946,7 @@ void sys_lstat(syscall_frame_t *frame) {
     }
 
     struct stat kst = {0};
-    if (stat_virtual_device(abs_path, &kst) || stat_tmpfs_to_kst(abs_path, &kst, false) || stat_ext4_to_kst(abs_path, &kst, false) || stat_iso9660_to_kst(abs_path, &kst, false)) {
+    if (stat_virtual_device(abs_path, &kst) || stat_tmpfs_to_kst(abs_path, &kst, false) || stat_ext4_to_kst(abs_path, &kst, false) || stat_iso9660_to_kst(abs_path, &kst, false) || stat_vfat_to_kst(abs_path, &kst, false)) {
         if (write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
         frame->rax = 0;
         return;
@@ -2891,6 +3107,12 @@ void sys_lseek(syscall_frame_t *frame) {
         if (status < 0) { frame->rax = status; return; }
         if (st.st_size < 0) { frame->rax = -EOVERFLOW; return; }
         file_size = st.st_size;
+    } else if (entry->type == FD_VFAT) {
+        struct stat st;
+        int status = stat_vfat(entry->path, &st, true);
+        if (status < 0) { frame->rax = status; return; }
+        if (st.st_size < 0) { frame->rax = -EOVERFLOW; return; }
+        file_size = st.st_size;
     } else {
         initrd_file_t file = read_initrd(entry->path);
         if (!file.mode) { frame->rax = -ENOENT; return; }
@@ -2929,14 +3151,6 @@ void sys_lseek(syscall_frame_t *frame) {
     if (block_device && new_offset > (uint64_t)file_size) { frame->rax = -EINVAL; return; }
     entry->offset = new_offset;
     frame->rax = new_offset;
-}
-
-static void rollback_mmap(void *ptr, uint64_t num_pages, uint64_t retained_pages) {
-    if (!ptr) return;
-    uint64_t start = (uint64_t)ptr;
-    for (uint64_t i = 0; i < num_pages; i++) unmap_vmm(current_task_ptr->ctx, start + i * PAGE_SIZE);
-    remove_vma(&current_task_ptr->ctx->vmas, start, start + num_pages * PAGE_SIZE);
-    current_task_ptr->ctx->mmap_pages = retained_pages;
 }
 
 void sys_mmap(syscall_frame_t *frame) {
@@ -3002,7 +3216,7 @@ void sys_mmap(syscall_frame_t *frame) {
             uint64_t available_pages = offset < fb_size ? (fb_size - offset + PAGE_SIZE - 1) / PAGE_SIZE : 0;
             if (num_pages > available_pages) { frame->rax = (uint64_t)-EINVAL; return; }
         }
-        if (!requested_fb && mapping_entry->type != FD_FILE && mapping_entry->type != FD_TMPFS && mapping_entry->type != FD_EXT4 && mapping_entry->type != FD_ISO9660) {
+        if (!requested_fb && mapping_entry->type != FD_FILE && mapping_entry->type != FD_TMPFS && mapping_entry->type != FD_EXT4 && mapping_entry->type != FD_ISO9660 && mapping_entry->type != FD_VFAT) {
             frame->rax = (uint64_t)-ENODEV;
             return;
         }
@@ -3138,6 +3352,22 @@ void sys_mmap(syscall_frame_t *frame) {
                 uint64_t amount = map_size - copied;
                 if (amount > 65536) amount = 65536;
                 int64_t got = read_iso9660(entry->path, chunk, amount, offset + copied);
+                if (got < 0) { free(chunk); rollback_mmap(ptr, num_pages, retained_pages); frame->rax = (uint64_t)got; return; }
+                if (got == 0) break;
+                if (write_vmm(current_task_ptr->ctx, (uint64_t)ptr + copied, chunk, (uint64_t)got) < 0) { free(chunk); rollback_mmap(ptr, num_pages, retained_pages); frame->rax = (uint64_t)-EFAULT; return; }
+                copied += (uint64_t)got;
+                if ((uint64_t)got < amount) break;
+            }
+            free(chunk);
+        } else if (entry->type == FD_VFAT) {
+            uint8_t *chunk = malloc(65536);
+            if (!chunk) { rollback_mmap(ptr, num_pages, retained_pages); frame->rax = (uint64_t)-ENOMEM; return; }
+            uint64_t copied = 0;
+            uint64_t map_size = num_pages * PAGE_SIZE;
+            while (copied < map_size) {
+                uint64_t amount = map_size - copied;
+                if (amount > 65536) amount = 65536;
+                int64_t got = read_vfat(entry->path, chunk, amount, offset + copied);
                 if (got < 0) { free(chunk); rollback_mmap(ptr, num_pages, retained_pages); frame->rax = (uint64_t)got; return; }
                 if (got == 0) break;
                 if (write_vmm(current_task_ptr->ctx, (uint64_t)ptr + copied, chunk, (uint64_t)got) < 0) { free(chunk); rollback_mmap(ptr, num_pages, retained_pages); frame->rax = (uint64_t)-EFAULT; return; }
@@ -3569,6 +3799,56 @@ void sys_ioctl(syscall_frame_t *frame) {
     }
 
     switch (req) {
+        case BLKRRPART: {
+            if (!entry || entry->type != FD_DEV) { frame->rax = (uint64_t)-ENOTTY; return; }
+            char rel[256];
+            if (!match_vfs_path(entry->path, "devtmpfs", rel)) { frame->rax = (uint64_t)-ENOTTY; return; }
+            uint64_t blk_size;
+            if (get_block_device_size(rel, &blk_size) < 0) { frame->rax = (uint64_t)-EINVAL; return; }
+            device_bus_t bus;
+            int disk_index;
+            if (get_block_device_bus(rel, &bus, &disk_index) < 0) { frame->rax = (uint64_t)-EINVAL; return; }
+            if (bus == DEV_BUS_PATA) {
+                remove_gpt_partitions(disk_index, true);
+                remove_mbr_partitions(disk_index, true);
+                if (!probe_gpt_for_pata_disk(disk_index, rel, blk_size)) probe_mbr_for_pata_disk(disk_index, rel, blk_size);
+            } else if (bus == DEV_BUS_SATA) {
+                remove_gpt_partitions(disk_index, false);
+                remove_mbr_partitions(disk_index, false);
+                if (!probe_gpt_for_sata_disk(disk_index, rel, blk_size)) probe_mbr_for_sata_disk(disk_index, rel, blk_size);
+            } else {
+                frame->rax = (uint64_t)-EINVAL;
+                return;
+            }
+            frame->rax = 0;
+            return;
+        }
+
+        case BLKGETSIZE: {
+            if (!entry || entry->type != FD_DEV) { frame->rax = (uint64_t)-ENOTTY; return; }
+            char rel[256];
+            if (!match_vfs_path(entry->path, "devtmpfs", rel)) { frame->rax = (uint64_t)-ENOTTY; return; }
+            uint64_t size;
+            if (get_block_device_size(rel, &size) < 0) { frame->rax = (uint64_t)-EINVAL; return; }
+            unsigned long sectors = (unsigned long)(size / 512);
+            if (copy_to_user((void *)argp, &sectors, sizeof(sectors)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+            frame->rax = 0;
+            return;
+        }
+
+        case BLKFLSBUF: {
+            frame->rax = 0;
+            return;
+        }
+
+        case BLKSSZGET: {
+            if (!entry || entry->type != FD_DEV) { frame->rax = (uint64_t)-ENOTTY; return; }
+            int sector_size = 512;
+            if (copy_to_user((void *)argp, &sector_size, sizeof(sector_size)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+            frame->rax = 0;
+            return;
+        }
+
         case KDGKBENT: {
             struct kbentry entry_map;
             if (!is_tty) { frame->rax = (uint64_t)-ENOTTY; return; }
@@ -3593,20 +3873,16 @@ void sys_ioctl(syscall_frame_t *frame) {
             int idx = ioctl_tty_idx(entry);
             if (!is_tty || idx < 0 || idx >= 100) { frame->rax = (uint64_t)-ENOTTY; return; }
             if (!current_task_ptr || current_task_ptr->euid != 0) { frame->rax = (uint64_t)-EPERM; return; }
-
             struct console_font_op font_op;
             if (copy_from_user(&font_op, (const void *)argp, sizeof(font_op)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
             if (font_op.op != KD_FONT_OP_SET || (font_op.flags & ~KD_FONT_FLAG_DONT_RECALC) != 0 || font_op.width != 8 || font_op.height == 0 || font_op.height > 32 || font_op.charcount != 256 || !font_op.data) { frame->rax = (uint64_t)-EINVAL; return; }
-
             uint64_t font_size = 256ULL * font_op.height;
             unsigned char *font_data = malloc(font_size);
             if (!font_data) { frame->rax = (uint64_t)-ENOMEM; return; }
-
             for (uint64_t glyph = 0; glyph < 256; glyph++) {
                 uint64_t user_glyph = (uint64_t)font_op.data + glyph * 32ULL;
                 if (copy_from_user(font_data + glyph * font_op.height, (const void *)user_glyph, font_op.height) < 0) { free(font_data); frame->rax = (uint64_t)-EFAULT; return; }
             }
-
             int status = change_font_data(font_data, 8, (uint8_t)font_op.height);
             free(font_data);
             frame->rax = (uint64_t)status;
@@ -3616,23 +3892,16 @@ void sys_ioctl(syscall_frame_t *frame) {
         case TCGETS: {
             struct termios t = {0};
             int idx = ioctl_tty_idx(entry);
-            if (idx < 0) {
-                frame->rax = (uint64_t)-ENOTTY; return;
-            }
+            if (idx < 0) { frame->rax = (uint64_t)-ENOTTY; return; }
             if (idx >= 100) {
                 pty_t *pty_tcgets = get_pty(idx - 100);
-                if (!pty_tcgets || !pty_tcgets->allocated) {
-                    frame->rax = (uint64_t)-ENOTTY; return;
-                }
+                if (!pty_tcgets || !pty_tcgets->allocated) { frame->rax = (uint64_t)-ENOTTY; return; }
                 t = pty_tcgets->termios;
             } else {
                 tty_t *tty_tcgets = get_tty(idx);
-                if (!tty_tcgets) {
-                    frame->rax = (uint64_t)-ENOTTY; return;
-                }
+                if (!tty_tcgets) { frame->rax = (uint64_t)-ENOTTY; return; }
                 t = tty_tcgets->termios;
             }
-        
             if (copy_to_user((void *)argp, &t, sizeof(t)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
             frame->rax = 0;
             return;
@@ -3649,13 +3918,10 @@ void sys_ioctl(syscall_frame_t *frame) {
                 bool pty_was_icanon = !!(pty_tcsets->termios.c_lflag & ICANON);
                 if (copy_from_user(&pty_tcsets->termios, (const void *)argp, sizeof(struct termios)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
                 bool pty_now_icanon = !!(pty_tcsets->termios.c_lflag & ICANON);
-                if ((req == TCSETSF) || (pty_was_icanon && !pty_now_icanon)) {
-                    pty_tcsets->m2s.head = pty_tcsets->m2s.tail = 0;
-                }
+                if ((req == TCSETSF) || (pty_was_icanon && !pty_now_icanon)) { pty_tcsets->m2s.head = pty_tcsets->m2s.tail = 0; }
             } else {
                 tty_t *tty_tcsets = get_tty(idx);
                 if (!tty_tcsets) { frame->rax = (uint64_t)-ENOTTY; return; }
-                // Same reasoning as the PTY branch above.
                 bool tty_was_icanon = !!(tty_tcsets->termios.c_lflag & ICANON);
                 if (copy_from_user(&tty_tcsets->termios, (const void *)argp, sizeof(struct termios)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
                 bool tty_now_icanon = !!(tty_tcsets->termios.c_lflag & ICANON);
@@ -3664,10 +3930,9 @@ void sys_ioctl(syscall_frame_t *frame) {
                     spin_lock_irqsave(&tty_lock, &irq);
                     tty_tcsets->input.head = tty_tcsets->input.tail = 0;
                     spin_unlock_irqrestore(&tty_lock, irq);
-                    // Also drop any half-cooked canonical line in this task.
                     spin_lock_irqsave(&stdin_lock, &irq);
-                    current_task_ptr->stdin_buf_len  = 0;
-                    current_task_ptr->stdin_buf_pos  = 0;
+                    current_task_ptr->stdin_buf_len = 0;
+                    current_task_ptr->stdin_buf_pos = 0;
                     spin_unlock_irqrestore(&stdin_lock, irq);
                 }
             }
@@ -3676,7 +3941,6 @@ void sys_ioctl(syscall_frame_t *frame) {
         }
 
         case TIOCGWINSZ: {
-            // Calculate real terminal size from framebuffer + font metrics
             winsize_t ws = { .ws_row = 25, .ws_col = 80, .ws_xpixel = 0, .ws_ypixel = 0 };
             if (fb_req.response && fb_req.response->framebuffer_count > 0) {
                 struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
@@ -3693,7 +3957,6 @@ void sys_ioctl(syscall_frame_t *frame) {
         }
 
         case TIOCSWINSZ:
-            // Accept but ignore window size sets
             frame->rax = 0;
             return;
 
@@ -3708,31 +3971,23 @@ void sys_ioctl(syscall_frame_t *frame) {
                 if (match_vfs_path(entry->path, "devtmpfs", rel)) {
                     int idx = tty_rel_to_idx(rel);
                     if (idx >= 0 && idx < NUM_TTYS) {
-                        if (argp == 0 || argp == 2) {
-                            get_tty(idx)->input.head = get_tty(idx)->input.tail = 0;
-                        }
+                        if (argp == 0 || argp == 2) { get_tty(idx)->input.head = get_tty(idx)->input.tail = 0; }
                     }
                 } else if (match_vfs_path(entry->path, "devpts", rel)) {
                     int idx = 0;
                     const char *p = rel;
                     while (*p >= '0' && *p <= '9') { idx = idx * 10 + (*p - '0'); p++; }
-                        if (idx >= 0 && idx < NUM_PTYS) {
-                            if (argp == 0 || argp == 2) {
-                            }
-                        }
+                    if (idx >= 0 && idx < NUM_PTYS) {
+                        if (argp == 0 || argp == 2) { }
                     }
                 }
+            }
             frame->rax = 0;
             return;
 
         case TIOCGPGRP: {
-            // Return the foreground process group of the controlling tty.
-            // Resolve the idx the same way sys_read() does so the value the
-            // shell reads here matches the terminal read() actually gates.
             int idx = ioctl_tty_idx(entry);
-            if (idx < 0) {
-                frame->rax = (uint64_t)-ENOTTY; return;
-            }
+            if (idx < 0) { frame->rax = (uint64_t)-ENOTTY; return; }
             pid_t pgrp = current_task_ptr->pgid;
             if (idx >= 100) {
                 pty_t *p = get_pty(idx - 100);
@@ -3741,7 +3996,7 @@ void sys_ioctl(syscall_frame_t *frame) {
                 tty_t *tty_fg = get_tty(idx);
                 if (tty_fg && tty_fg->fg_pgrp > 0) pgrp = tty_fg->fg_pgrp;
             }
-            if(argp){
+            if (argp) {
                 pid_t pgrp_val = pgrp;
                 if (copy_to_user((void *)argp, &pgrp_val, sizeof(pid_t)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
             }
@@ -3749,41 +4004,8 @@ void sys_ioctl(syscall_frame_t *frame) {
             return;
         }
 
-        case TIOCSPGRP: {
-            // Set the foreground process group of the controlling tty.
-            pid_t new_pgrp = 0;
-            if (copy_from_user(&new_pgrp, (const void *)argp, sizeof(pid_t)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
-
-            int idx = ioctl_tty_idx(entry);
-            if (idx < 0) { frame->rax = (uint64_t)-ENOTTY; return; }
-
-            if (idx >= 100) {
-                pty_t *p = get_pty(idx - 100);
-                if (!p) { frame->rax = (uint64_t)-ENOTTY; return; }
-                p->fg_pgrp = new_pgrp;
-            } else {
-                tty_t *tty_sp = get_tty(idx);
-                if (!tty_sp) { frame->rax = (uint64_t)-ENOTTY; return; }
-                tty_sp->fg_pgrp = new_pgrp;
-            }
-            frame->rax = 0;
-            return;
-        }
-
-        case FIONREAD: {
-            // Report bytes available in per-task stdin buffer; 0 for everything else
-            uint64_t irq;
-            spin_lock_irqsave(&stdin_lock, &irq);
-            int avail = (fd == 0) ? (current_task_ptr->stdin_buf_len - current_task_ptr->stdin_buf_pos) : 0;
-            spin_unlock_irqrestore(&stdin_lock, irq);
-            if (copy_to_user((void *)argp, &avail, sizeof(int)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
-            frame->rax = 0;
-            return;
-        }
-
         case TIOCEXCL:
         case TIOCNXCL:
-            // Exclusive mode, no-op
             frame->rax = 0;
             return;
 
@@ -3817,11 +4039,6 @@ void sys_ioctl(syscall_frame_t *frame) {
                 if (!tty_ct) { frame->rax = (uint64_t)-ENOTTY; return; }
                 current_task_ptr->ctty_idx = tidx;
                 tty_ct->fg_pgrp = current_task_ptr->pgid;
-                // Drop any keystrokes that arrived on this TTY before a
-                // reader existed (e.g. a key held during boot).  PS/2
-                // keyboards auto-repeat in hardware, so a single held key
-                // can flood the ring with hundreds of bytes; without this
-                // flush they'd be read first and wedge the input parser.
                 uint64_t irq;
                 spin_lock_irqsave(&tty_lock, &irq);
                 tty_ct->input.head = tty_ct->input.tail = 0;
@@ -3831,42 +4048,54 @@ void sys_ioctl(syscall_frame_t *frame) {
             return;
         }
 
+        case TIOCSPGRP: {
+            pid_t new_pgrp = 0;
+            if (copy_from_user(&new_pgrp, (const void *)argp, sizeof(pid_t)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+            int idx = ioctl_tty_idx(entry);
+            if (idx < 0) { frame->rax = (uint64_t)-ENOTTY; return; }
+            if (idx >= 100) {
+                pty_t *p = get_pty(idx - 100);
+                if (!p) { frame->rax = (uint64_t)-ENOTTY; return; }
+                p->fg_pgrp = new_pgrp;
+            } else {
+                tty_t *tty_sp = get_tty(idx);
+                if (!tty_sp) { frame->rax = (uint64_t)-ENOTTY; return; }
+                tty_sp->fg_pgrp = new_pgrp;
+            }
+            frame->rax = 0;
+            return;
+        }
+
+        case FIONREAD: {
+            uint64_t irq;
+            spin_lock_irqsave(&stdin_lock, &irq);
+            int avail = (fd == 0) ? (current_task_ptr->stdin_buf_len - current_task_ptr->stdin_buf_pos) : 0;
+            spin_unlock_irqrestore(&stdin_lock, irq);
+            if (copy_to_user((void *)argp, &avail, sizeof(int)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+            frame->rax = 0;
+            return;
+        }
+
         case TIOCNOTTY:
             current_task_ptr->ctty_idx = -1;
             frame->rax = 0;
             return;
 
-        case TCGETS2: {
-            struct termios t = {0};
-            struct termios2 t2 = {0};
-            int idx = ioctl_tty_idx(entry);
-            if (idx < 0) {
-                frame->rax = (uint64_t)-ENOTTY; return;
-            }
-            if (idx >= 100) {
-                pty_t *pty_tcgets = get_pty(idx - 100);
-                if (!pty_tcgets || !pty_tcgets->allocated) {
-                    frame->rax = (uint64_t)-ENOTTY; return;
-                }
-                t = pty_tcgets->termios;
-            } else {
-                tty_t *tty_tcgets = get_tty(idx);
-                if (!tty_tcgets) {
-                    frame->rax = (uint64_t)-ENOTTY; return;
-                }
-                t = tty_tcgets->termios;
-            }
+        case TIOCGSID: {
+            pid_t sid = current_task_ptr->sid;
+            if (copy_to_user((void *)argp, &sid, sizeof(sid)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+            frame->rax = 0;
+            return;
+        }
 
-            t2.c_iflag = t.c_iflag;
-            t2.c_oflag = t.c_oflag;
-            t2.c_cflag = t.c_cflag;
-            t2.c_lflag = t.c_lflag;
-            t2.c_line = t.c_line;
-            for (int i = 0; i < NCCS2; i++) t2.c_cc[i] = t.c_cc[i];
-            t2.c_ispeed = t.c_ispeed;
-            t2.c_ospeed = t.c_ospeed;
-
-            if (copy_to_user((void *)argp, &t2, sizeof(t2)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+        case TIOCSPTLCK: {
+            if (!entry || entry->type != FD_PTY_MASTER) { frame->rax = (uint64_t)-ENOTTY; return; }
+            int idx = ptm_path_idx(entry->path);
+            pty_t *p = get_pty(idx);
+            if (!p) { frame->rax = (uint64_t)-EBADF; return; }
+            int val = 0;
+            if (copy_from_user(&val, (const void *)argp, sizeof(int)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+            p->locked = (val != 0);
             frame->rax = 0;
             return;
         }
@@ -3905,18 +4134,6 @@ void sys_ioctl(syscall_frame_t *frame) {
             return;
         }
 
-        case TIOCSPTLCK: {
-            if (!entry || entry->type != FD_PTY_MASTER) { frame->rax = (uint64_t)-ENOTTY; return; }
-            int idx = ptm_path_idx(entry->path);
-            pty_t *p = get_pty(idx);
-            if (!p) { frame->rax = (uint64_t)-EBADF; return; }
-            int val = 0;
-            if (copy_from_user(&val, (const void *)argp, sizeof(int)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
-            p->locked = (val != 0);
-            frame->rax = 0;
-            return;
-        }
-
         case TIOCGPTN: {
             if (!entry || entry->type != FD_PTY_MASTER) { frame->rax = (uint64_t)-ENOTTY; return; }
             int idx = ptm_path_idx(entry->path);
@@ -3926,8 +4143,45 @@ void sys_ioctl(syscall_frame_t *frame) {
             return;
         }
 
+        case BLKGETSIZE64: {
+            if (!entry || entry->type != FD_DEV) { frame->rax = (uint64_t)-ENOTTY; return; }
+            char rel[256];
+            if (!match_vfs_path(entry->path, "devtmpfs", rel)) { frame->rax = (uint64_t)-ENOTTY; return; }
+            uint64_t size;
+            if (get_block_device_size(rel, &size) < 0) { frame->rax = (uint64_t)-EINVAL; return; }
+            if (copy_to_user((void *)argp, &size, sizeof(size)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+            frame->rax = 0;
+            return;
+        }
+
+        case TCGETS2: {
+            struct termios t = {0};
+            struct termios2 t2 = {0};
+            int idx = ioctl_tty_idx(entry);
+            if (idx < 0) { frame->rax = (uint64_t)-ENOTTY; return; }
+            if (idx >= 100) {
+                pty_t *pty_tcgets = get_pty(idx - 100);
+                if (!pty_tcgets || !pty_tcgets->allocated) { frame->rax = (uint64_t)-ENOTTY; return; }
+                t = pty_tcgets->termios;
+            } else {
+                tty_t *tty_tcgets = get_tty(idx);
+                if (!tty_tcgets) { frame->rax = (uint64_t)-ENOTTY; return; }
+                t = tty_tcgets->termios;
+            }
+            t2.c_iflag = t.c_iflag;
+            t2.c_oflag = t.c_oflag;
+            t2.c_cflag = t.c_cflag;
+            t2.c_lflag = t.c_lflag;
+            t2.c_line = t.c_line;
+            for (int i = 0; i < NCCS2; i++) t2.c_cc[i] = t.c_cc[i];
+            t2.c_ispeed = t.c_ispeed;
+            t2.c_ospeed = t.c_ospeed;
+            if (copy_to_user((void *)argp, &t2, sizeof(t2)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+            frame->rax = 0;
+            return;
+        }
+
         default:
-            (void)is_tty;
             frame->rax = (uint64_t)-EINVAL;
             return;
     }
@@ -3966,6 +4220,17 @@ void sys_pread64(syscall_frame_t *frame) {
         frame->rax = (uint64_t)got;
         return;
     }
+    if (entry->type == FD_VFAT) {
+        if (count == 0) { frame->rax = 0; return; }
+        if (count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
+        uint8_t *kbuf = malloc(count);
+        if (!kbuf) { frame->rax = (uint64_t)-ENOMEM; return; }
+        int64_t got = read_vfat(entry->path, kbuf, count, offset);
+        if (got >= 0 && write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, (uint64_t)got) < 0) got = -EFAULT;
+        free(kbuf);
+        frame->rax = (uint64_t)got;
+        return;
+    }
     if (entry->type != FD_FILE) { frame->rax = (uint64_t)-ESPIPE; return; }
 
     initrd_file_t file = read_initrd(entry->path);
@@ -3980,6 +4245,7 @@ void sys_pread64(syscall_frame_t *frame) {
 }
 
 void sys_readv(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
     const struct iovec *uiov = (const struct iovec *)frame->rsi;
     int iovcnt = (int)frame->rdx;
 
@@ -3997,16 +4263,7 @@ void sys_readv(syscall_frame_t *frame) {
         if (!kiov[i].iov_base) continue;
         if (kiov[i].iov_len == 0) continue;
 
-        // Hand this segment off to the regular read path by spoofing rsi/rdx.
-        uint64_t saved_rsi = frame->rsi;
-        uint64_t saved_rdx = frame->rdx;
-        frame->rsi = (uint64_t)kiov[i].iov_base;
-        frame->rdx = kiov[i].iov_len;
-        sys_read(frame); // Depend on sys_read() cuz why the fuck not.
-        frame->rsi = saved_rsi;
-        frame->rdx = saved_rdx;
-
-        int64_t got = (int64_t)frame->rax;
+        int64_t got = do_read(fd, kiov[i].iov_base, kiov[i].iov_len);
         if (got < 0) {
             // Pass the error up, but report bytes already read (if any) per POSIX.
             if (total > 0) { frame->rax = total; return; }
@@ -4021,6 +4278,7 @@ void sys_readv(syscall_frame_t *frame) {
 }
 
 void sys_writev(syscall_frame_t *frame) {
+    int fd = (int)frame->rdi;
     const struct iovec *uiov = (const struct iovec *)frame->rsi;
     int iovcnt = (int)frame->rdx;
 
@@ -4038,15 +4296,7 @@ void sys_writev(syscall_frame_t *frame) {
         if (!kiov[i].iov_base) continue;
         if (kiov[i].iov_len == 0) continue;
 
-        uint64_t saved_rsi = frame->rsi;
-        uint64_t saved_rdx = frame->rdx;
-        frame->rsi = (uint64_t)kiov[i].iov_base;
-        frame->rdx = kiov[i].iov_len;
-        sys_write(frame); // Depend on sys_write() cuz why the fuck not.
-        frame->rsi = saved_rsi;
-        frame->rdx = saved_rdx;
-
-        int64_t wrote = (int64_t)frame->rax;
+        int64_t wrote = (int64_t)do_write(fd, kiov[i].iov_base, kiov[i].iov_len);
         if (wrote < 0) {
             if (total > 0) { frame->rax = total; return; }
             return;
@@ -4057,39 +4307,6 @@ void sys_writev(syscall_frame_t *frame) {
     }
 
     frame->rax = total;
-}
-
-static int check_path_access(const char *path, const char *abs_path, int mode, bool follow) {
-    int want_read = (mode & R_OK) != 0;
-    int want_write = (mode & W_OK) != 0;
-    int want_exec = (mode & X_OK) != 0;
-
-    if (want_write && (check_ext4_path(abs_path) || check_iso9660_path(abs_path))) return -EROFS;
-
-    struct stat kst = {0};
-    if (stat_virtual_device(abs_path, &kst) || stat_tmpfs_to_kst(abs_path, &kst, follow) || stat_ext4_to_kst(abs_path, &kst, follow) || stat_iso9660_to_kst(abs_path, &kst, follow) || stat_proc(abs_path, path, &kst, follow)) {
-        return mode == F_OK || can_access_stat_mode(&kst, want_read, want_write, want_exec) ? 0 : -EACCES;
-    }
-
-    initrd_file_t file = follow ? stat_initrd(abs_path) : stat_initrd_nofollow(abs_path);
-    if (!file.mode) return -ENOENT;
-    return mode == F_OK || can_access_initrd(&file, want_read, want_write, want_exec) ? 0 : -EACCES;
-}
-
-static int check_access_at(int dirfd, const char *user_path, int mode, int flags) {
-    if (!user_path) return -EFAULT;
-    if (mode & ~(R_OK | W_OK | X_OK)) return -EINVAL;
-    if (flags & ~(AT_EACCESS | AT_SYMLINK_NOFOLLOW)) return -EINVAL;
-
-    char path[256];
-    int status = copy_string_from_user(path, user_path, sizeof(path));
-    if (status < 0) return status;
-    if (!path[0]) return -ENOENT;
-
-    char abs_path[256];
-    status = build_abs_path_at(dirfd, path, abs_path, sizeof(abs_path));
-    if (status < 0) return status;
-    return check_path_access(path, abs_path, mode, !(flags & AT_SYMLINK_NOFOLLOW));
 }
 
 void sys_access(syscall_frame_t *frame) {
@@ -5327,44 +5544,6 @@ void sys_uname(syscall_frame_t *frame) {
     frame->rax = 0;
 }
 
-static flock_obj_t *find_advisory_lock_conflict(const fd_entry_t *entry, int requested_type, bool process_lock) {
-    for (int i = 0; i < 128; i++) {
-        flock_obj_t *obj = &global_flocks[i];
-        if (!obj->used || obj->lock_type == 0 || strcmp(obj->path, entry->path) != 0) continue;
-        if (process_lock && obj->owner_pid == current_task_ptr->pid) continue;
-        if (!process_lock && obj == (flock_obj_t *)entry->handle) continue;
-        if (requested_type == LOCK_EX || obj->lock_type == LOCK_EX) return obj;
-    }
-    return NULL;
-}
-
-static int set_advisory_lock(fd_entry_t *entry, int lock_type, bool nonblocking, bool process_lock) {
-    if (lock_type == 0) {
-        if (entry->handle) {
-            flock_obj_t *obj = (flock_obj_t *)entry->handle;
-            if (!process_lock || obj->owner_pid == current_task_ptr->pid) {
-                obj->lock_type = 0;
-                obj->owner_pid = 0;
-            }
-        }
-        return 0;
-    }
-
-    while (find_advisory_lock_conflict(entry, lock_type, process_lock)) {
-        if (nonblocking) return -EAGAIN;
-        sleep(10);
-    }
-
-    if (!entry->handle) {
-        entry->handle = alloc_flock_obj(entry->path);
-        if (!entry->handle) return -ENOLCK;
-    }
-    flock_obj_t *obj = (flock_obj_t *)entry->handle;
-    obj->lock_type = lock_type;
-    obj->owner_pid = process_lock ? current_task_ptr->pid : 0;
-    return 0;
-}
-
 void sys_fcntl(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     int cmd = (int)frame->rsi;
@@ -5407,7 +5586,7 @@ void sys_fcntl(syscall_frame_t *frame) {
         case F_GETLK:
         case F_SETLK:
         case F_SETLKW: {
-            if (entry->type != FD_FILE && entry->type != FD_TMPFS && entry->type != FD_EXT4 && entry->type != FD_ISO9660) { frame->rax = (uint64_t)-EBADF; return; }
+            if (entry->type != FD_FILE && entry->type != FD_TMPFS && entry->type != FD_EXT4 && entry->type != FD_ISO9660 && entry->type != FD_VFAT) { frame->rax = (uint64_t)-EBADF; return; }
             struct flock lock;
             if (copy_from_user(&lock, (const void *)arg, sizeof(lock)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
             if (lock.l_type != F_RDLCK && lock.l_type != F_WRLCK && lock.l_type != F_UNLCK) { frame->rax = (uint64_t)-EINVAL; return; }
@@ -5445,7 +5624,7 @@ void sys_flock(syscall_frame_t *frame) {
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
 
-    if (entry->type != FD_FILE && entry->type != FD_TMPFS && entry->type != FD_EXT4 && entry->type != FD_ISO9660) { frame->rax = (uint64_t)-EBADF; return; }
+    if (entry->type != FD_FILE && entry->type != FD_TMPFS && entry->type != FD_EXT4 && entry->type != FD_ISO9660 && entry->type != FD_VFAT) { frame->rax = (uint64_t)-EBADF; return; }
 
     int op = operation & ~LOCK_NB;
     if (op != LOCK_SH && op != LOCK_EX && op != LOCK_UN) { frame->rax = (uint64_t)-EINVAL; return; }
@@ -5453,9 +5632,6 @@ void sys_flock(syscall_frame_t *frame) {
     frame->rax = (uint64_t)status;
 }
 
-// tmpfs and the initrd overlay are memory-resident and CPU-cache coherent.
-// There is no backing device to flush, so successful validation is all these
-// calls need. WBINVD here only stalls the machine and is not persistence.
 void sys_fsync(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     fd_entry_t *entry = get_current_fd(fd);
@@ -5468,44 +5644,6 @@ void sys_fdatasync(syscall_frame_t *frame) {
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
     frame->rax = 0;
-}
-
-// Helper: truncate a path (initrd or tmpfs) to 'length' bytes.
-static int do_truncate_path(const char *abs_path, uint64_t length) {
-    if (check_ext4_path(abs_path)) return -EROFS;
-    if (check_iso9660_path(abs_path)) return -EROFS;
-    // tmpfs
-    if (is_tmpfs_dir(abs_path)) {
-        tmpfs_file_t f = stat_tmpfs(abs_path);
-        if (!f.mode) return -ENOENT;
-        if (!S_ISREG(f.mode)) return -EISDIR;
-        struct stat st;
-        if (!stat_tmpfs_to_kst(abs_path, &st, true) || !can_access_stat_mode(&st, 0, 1, 0)) return -EACCES;
-        return truncate_tmpfs(abs_path, length);
-    }
-    // initrd / overlay
-    initrd_file_t f = read_initrd(abs_path);
-    if (!f.mode) return -ENOENT;
-    if (f.size && !f.data) return -EIO;
-    if (!can_access_initrd(&f, 0, 1, 0)) return -EACCES;
-    if (length > INITRD_MAX_FILE_SIZE) return -EFBIG;
-
-    if (length == f.size) return 0;
-
-    if (length < f.size) {
-        // Shrink: write only the first 'length' bytes back.
-        return write_initrd(abs_path, f.data, length, f.mode ? f.mode : 0644, f.uid, f.gid);
-    } else {
-        // Extend: write existing data + zero-pad to 'length'.
-        uint64_t extra = length - f.size;
-        void *newbuf = malloc(length);
-        if (!newbuf) return -ENOMEM;
-        if (f.size) memcpy(newbuf, f.data, f.size);
-        memset((char *)newbuf + f.size, 0, extra);
-        int r = write_initrd(abs_path, newbuf, length, f.mode ? f.mode : 0644, f.uid, f.gid);
-        free(newbuf);
-        return r;
-    }
 }
 
 void sys_truncate(syscall_frame_t *frame) {
@@ -5534,6 +5672,7 @@ void sys_ftruncate(syscall_frame_t *frame) {
 
     if (entry->type == FD_EXT4) { frame->rax = (uint64_t)-EROFS; return; }
     if (entry->type == FD_ISO9660) { frame->rax = (uint64_t)-EROFS; return; }
+    if (entry->type == FD_VFAT) { frame->rax = (uint64_t)-EROFS; return; }
 
     // tmpfs: path-based, like initrd below.
     if (entry->type == FD_TMPFS) {
@@ -5625,6 +5764,34 @@ void sys_getdents(syscall_frame_t *frame) {
             uint8_t child_type;
             ino_t child_ino;
             status = get_next_iso9660_child(&child_index, resolved_path, child, sizeof(child), &child_type, &child_ino);
+            if (status != 0) break;
+            if (!emit_dirent(bufp, &written, buflen, child_ino, (uint64_t)(child_index + 2), child_type, child)) break;
+            index = child_index + 2;
+            entry->offset = index;
+        }
+        frame->rax = written;
+        return;
+    }
+
+    if (entry->type == FD_VFAT || check_vfat_path(resolved_path)) {
+        struct stat st;
+        int status = stat_vfat(resolved_path, &st, true);
+        if (status < 0) { frame->rax = (uint64_t)status; return; }
+        if (!S_ISDIR(st.st_mode)) { frame->rax = (uint64_t)-ENOTDIR; return; }
+        if (index == 0) {
+            if (!emit_dirent(bufp, &written, buflen, st.st_ino, 1, DT_DIR, ".")) { frame->rax = written; return; }
+            index = 1; entry->offset = index;
+        }
+        if (index == 1) {
+            if (!emit_dirent(bufp, &written, buflen, st.st_ino, 2, DT_DIR, "..")) { frame->rax = written; return; }
+            index = 2; entry->offset = index;
+        }
+        int child_index = index - 2;
+        while (1) {
+            char child[256];
+            uint8_t child_type;
+            ino_t child_ino;
+            status = get_next_vfat_child(&child_index, resolved_path, child, sizeof(child), &child_type, &child_ino);
             if (status != 0) break;
             if (!emit_dirent(bufp, &written, buflen, child_ino, (uint64_t)(child_index + 2), child_type, child)) break;
             index = child_index + 2;
@@ -5813,68 +5980,6 @@ void sys_getcwd(syscall_frame_t *frame) {
     frame->rax = cwd_len;
 }
 
-static int change_working_directory(const char *abs_path) {
-    char resolved[256];
-    resolve_path_symlinks(abs_path, resolved, sizeof(resolved));
-
-    int access = check_directory_access(resolved, false);
-    if (access < 0 && !is_procfs_path(resolved)) return access;
-
-    // procfs directories (e.g. /proc/<pid>, /proc/self, /proc/<pid>/fd) are
-    // virtual: they have no initrd backing, so validate them through the
-    // procfs resolver. Without this, `cd /proc/<pid>` fails with ENOENT even
-    // though getdents on /proc lists the pid.
-    if (is_procfs_path(resolved)) {
-        int self = proc_self_idx();
-        proc_node_t n;
-        if (!resolve_procfs(resolved, self, &n)) return -ENOENT;
-        if (!is_procfs_dir(&n)) return -ENOTDIR;
-        strncpy(current_task_ptr->cwd, resolved, 255);
-        current_task_ptr->cwd[255] = '\0';
-        return 0;
-    }
-
-    // tmpfs directories: validate via tmpfs, then set cwd.
-    if (is_tmpfs_dir(resolved)) {
-        tmpfs_file_t dir = stat_tmpfs(resolved);
-        if (!dir.mode) return -ENOENT;
-        if (!S_ISDIR(dir.mode)) return -ENOTDIR;
-        strncpy(current_task_ptr->cwd, resolved, 255);
-        current_task_ptr->cwd[255] = '\0';
-        return 0;
-    }
-
-    if (check_ext4_path(resolved)) {
-        struct stat st;
-        int status = stat_ext4(resolved, &st, true);
-        if (status < 0) return status;
-        if (!S_ISDIR(st.st_mode)) return -ENOTDIR;
-        if (!can_access_stat_mode(&st, 1, 0, 1)) return -EACCES;
-        strncpy(current_task_ptr->cwd, resolved, 255);
-        current_task_ptr->cwd[255] = '\0';
-        return 0;
-    }
-
-    if (check_iso9660_path(resolved)) {
-        struct stat st;
-        int status = stat_iso9660(resolved, &st, true);
-        if (status < 0) return status;
-        if (!S_ISDIR(st.st_mode)) return -ENOTDIR;
-        if (!can_access_stat_mode(&st, 1, 0, 1)) return -EACCES;
-        strncpy(current_task_ptr->cwd, resolved, 255);
-        current_task_ptr->cwd[255] = '\0';
-        return 0;
-    }
-
-    initrd_file_t dir = read_initrd(resolved);
-    if (!dir.data && !dir.mode) return -ENOENT;
-    if (!S_ISDIR(dir.mode) && strcmp(resolved, "/") != 0) return -ENOTDIR;
-
-    strncpy(current_task_ptr->cwd, resolved, 255);
-    current_task_ptr->cwd[255] = '\0';
-    return 0;
-}
-
 void sys_chdir(syscall_frame_t *frame) {
     const char *user_path = (const char *)frame->rdi;
     if (!user_path) { frame->rax = (uint64_t)-EINVAL; return; }
@@ -5891,7 +5996,7 @@ void sys_fchdir(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
-    if (entry->type != FD_FILE && entry->type != FD_TMPFS && entry->type != FD_EXT4 && entry->type != FD_ISO9660 && entry->type != FD_PROC && entry->type != FD_DEV) { frame->rax = (uint64_t)-ENOTDIR; return; }
+    if (entry->type != FD_FILE && entry->type != FD_TMPFS && entry->type != FD_EXT4 && entry->type != FD_ISO9660 && entry->type != FD_VFAT && entry->type != FD_PROC && entry->type != FD_DEV) { frame->rax = (uint64_t)-ENOTDIR; return; }
 
     int status = change_working_directory(entry->path);
     frame->rax = (uint64_t)(status == -ENOENT ? -ENOTDIR : status);
@@ -6230,6 +6335,7 @@ void sys_fchmod(syscall_frame_t *frame) {
 
     if (entry->type == FD_EXT4) { frame->rax = (uint64_t)-EROFS; return; }
     if (entry->type == FD_ISO9660) { frame->rax = (uint64_t)-EROFS; return; }
+    if (entry->type == FD_VFAT) { frame->rax = (uint64_t)-EROFS; return; }
 
     // tmpfs file: stat the inode to check ownership, then chmod by path.
     if (entry->type == FD_TMPFS) {
@@ -6270,7 +6376,7 @@ void sys_fchown(syscall_frame_t *frame) {
     gid_t gid = (gid_t)frame->rdx;
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
-    if (entry->type != FD_FILE && entry->type != FD_TMPFS && entry->type != FD_EXT4 && entry->type != FD_ISO9660) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (entry->type != FD_FILE && entry->type != FD_TMPFS && entry->type != FD_EXT4 && entry->type != FD_ISO9660 && entry->type != FD_VFAT) { frame->rax = (uint64_t)-EINVAL; return; }
     frame->rax = (uint64_t)change_path_ownership(entry->path, uid, gid, true);
 }
 
@@ -7260,6 +7366,15 @@ void sys_readahead(syscall_frame_t *frame) {
         return;
     }
 
+    if (entry->type == FD_VFAT) {
+        uint8_t *buffer = malloc(count);
+        if (!buffer) { frame->rax = (uint64_t)-ENOMEM; return; }
+        int64_t status = read_vfat(entry->path, buffer, count, (uint64_t)offset);
+        free(buffer);
+        frame->rax = status < 0 ? (uint64_t)status : 0;
+        return;
+    }
+
     // FD_FILE (initrd): data is already fully in memory.
     // Validate the requested range lies within the file.
     initrd_file_t file = read_initrd(entry->path);
@@ -7622,6 +7737,34 @@ void sys_getdents64(syscall_frame_t *frame) {
             uint8_t child_type;
             ino_t child_ino;
             status = get_next_iso9660_child(&child_index, resolved_path, child, sizeof(child), &child_type, &child_ino);
+            if (status != 0) break;
+            if (!emit_dirent64(bufp, &written, buflen, child_ino, (uint64_t)(child_index + 2), child_type, child)) break;
+            index = child_index + 2;
+            entry->offset = index;
+        }
+        frame->rax = written;
+        return;
+    }
+
+    if (entry->type == FD_VFAT || check_vfat_path(resolved_path)) {
+        struct stat st;
+        int status = stat_vfat(resolved_path, &st, true);
+        if (status < 0) { frame->rax = (uint64_t)status; return; }
+        if (!S_ISDIR(st.st_mode)) { frame->rax = (uint64_t)-ENOTDIR; return; }
+        if (index == 0) {
+            if (!emit_dirent64(bufp, &written, buflen, st.st_ino, 1, DT_DIR, ".")) { frame->rax = written; return; }
+            index = 1; entry->offset = index;
+        }
+        if (index == 1) {
+            if (!emit_dirent64(bufp, &written, buflen, st.st_ino, 2, DT_DIR, "..")) { frame->rax = written; return; }
+            index = 2; entry->offset = index;
+        }
+        int child_index = index - 2;
+        while (1) {
+            char child[256];
+            uint8_t child_type;
+            ino_t child_ino;
+            status = get_next_vfat_child(&child_index, resolved_path, child, sizeof(child), &child_type, &child_ino);
             if (status != 0) break;
             if (!emit_dirent64(bufp, &written, buflen, child_ino, (uint64_t)(child_index + 2), child_type, child)) break;
             index = child_index + 2;
@@ -8100,6 +8243,11 @@ void sys_openat(syscall_frame_t *frame) {
         if (ir != 1) { frame->rax = (uint64_t)ir; return; }
     }
 
+    {
+        int vr = open_fat32_common(abs_path, flags);
+        if (vr != 1) { frame->rax = (uint64_t)vr; return; }
+    }
+
     initrd_file_t file = read_initrd(abs_path);
 
     if (!file.mode && !(flags & O_CREAT)) { frame->rax = (uint64_t)-ENOENT; return; }
@@ -8147,7 +8295,7 @@ void sys_fchownat(syscall_frame_t *frame) {
         if (!(flags & AT_EMPTY_PATH)) { frame->rax = (uint64_t)-ENOENT; return; }
         fd_entry_t *entry = get_current_fd(dirfd);
         if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
-        if (entry->type != FD_FILE && entry->type != FD_TMPFS && entry->type != FD_EXT4 && entry->type != FD_ISO9660) { frame->rax = (uint64_t)-EINVAL; return; }
+        if (entry->type != FD_FILE && entry->type != FD_TMPFS && entry->type != FD_EXT4 && entry->type != FD_ISO9660 && entry->type != FD_VFAT) { frame->rax = (uint64_t)-EINVAL; return; }
         frame->rax = (uint64_t)change_path_ownership(entry->path, uid, gid, true);
         return;
     }
@@ -8212,6 +8360,11 @@ void sys_fstatat(syscall_frame_t *frame) {
         return;
     }
     if (stat_iso9660_to_kst(abs_path, &kst, follow_final)) {
+        if (write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+        frame->rax = 0;
+        return;
+    }
+    if (stat_vfat_to_kst(abs_path, &kst, follow_final)) {
         if (write_vmm(current_task_ptr->ctx, (uint64_t)st, &kst, sizeof(struct stat)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
         frame->rax = 0;
         return;
@@ -8829,7 +8982,7 @@ void sys_statx(syscall_frame_t *frame) {
             char cwd[256];
             strncpy(cwd, current_task_ptr->cwd, sizeof(cwd) - 1);
             cwd[sizeof(cwd) - 1] = '\0';
-            status = stat_tmpfs_to_kst(cwd, &kst, true) || stat_ext4_to_kst(cwd, &kst, true) || stat_iso9660_to_kst(cwd, &kst, true) || stat_proc(cwd, cwd, &kst, true) || stat_initrd_to_kst(cwd, &kst, true) || stat_virtual_device(cwd, &kst) ? 0 : -ENOENT;
+            status = stat_tmpfs_to_kst(cwd, &kst, true) || stat_ext4_to_kst(cwd, &kst, true) || stat_iso9660_to_kst(cwd, &kst, true) || stat_vfat_to_kst(cwd, &kst, true) || stat_proc(cwd, cwd, &kst, true) || stat_initrd_to_kst(cwd, &kst, true) || stat_virtual_device(cwd, &kst) ? 0 : -ENOENT;
         } else {
             status = stat_fd_to_kst(dirfd, &kst);
         }
@@ -8865,7 +9018,7 @@ void sys_statx(syscall_frame_t *frame) {
         abs_path[sizeof(abs_path) - 1] = '\0';
     }
 
-    if (!((stat_virtual_device(abs_path, &kst)) || (follow_final ? stat_tmpfs_to_kst(abs_path, &kst, true) : stat_tmpfs_to_kst(abs_path, &kst, false)) || (stat_ext4_to_kst(abs_path, &kst, follow_final)) || (stat_iso9660_to_kst(abs_path, &kst, follow_final)) || (stat_proc(abs_path, path, &kst, follow_final)))) {
+    if (!((stat_virtual_device(abs_path, &kst)) || (follow_final ? stat_tmpfs_to_kst(abs_path, &kst, true) : stat_tmpfs_to_kst(abs_path, &kst, false)) || (stat_ext4_to_kst(abs_path, &kst, follow_final)) || (stat_iso9660_to_kst(abs_path, &kst, follow_final)) || (stat_vfat_to_kst(abs_path, &kst, follow_final)) || (stat_proc(abs_path, path, &kst, follow_final)))) {
         if (!stat_initrd_to_kst(abs_path, &kst, follow_final)) { frame->rax = (uint64_t)-ENOENT; return; }
     }
 

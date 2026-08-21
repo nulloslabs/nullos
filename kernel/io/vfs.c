@@ -7,6 +7,7 @@
 #include <main/string.h>
 #include <io/devtmpfs.h>
 #include <io/ext4.h>
+#include <io/vfat.h>
 #include <io/initrd.h>
 #include <io/iso9660.h>
 #include <io/procfs.h>
@@ -18,36 +19,16 @@ static vfs_mount_t mounts[VFS_MAX_MOUNTS];
 static uint64_t next_mount_id = 2;
 static spinlock_t mount_lock = SPINLOCK_INIT;
 
-typedef struct {
-    const char *fs_type;
-    int (*mount_fs)(const char *source, const char *path, unsigned long flags, const char *data);
-    int (*unmount_fs)(const char *path);
-} vfs_backend_t;
-
-static int mount_tmpfs(const char *source, const char *path, unsigned long flags, const char *data) {
-    (void)source;
-    (void)flags;
-    (void)data;
-    return create_tmpfs_root(path);
-}
-
-static int unmount_tmpfs(const char *path) {
-    return destroy_tmpfs_root(path);
-}
-
-static int mount_ext(const char *source, const char *path, unsigned long flags, const char *data) {
-    if (!source || !source[0]) return -EINVAL;
-    if (flags & ~(MS_RDONLY | MS_SILENT)) return -EOPNOTSUPP;
-    if (data && data[0] && strcmp(data, "ro") != 0) return -EOPNOTSUPP;
-    return mount_ext4(source, path);
-}
-
-static int unmount_ext(const char *path) {
-    return unmount_ext4(path);
-}
-
 static const vfs_backend_t backends[] = {
-    { "tmpfs",    mount_tmpfs, unmount_tmpfs }, { "ext2",     mount_ext,   unmount_ext   }, { "ext3",     mount_ext,   unmount_ext   }, { "ext4",     mount_ext,   unmount_ext   }, { "iso9660",  mount_iso9660, unmount_iso9660 }, { "proc",     NULL,        NULL          }, { "devtmpfs", NULL,        NULL          }, { "devpts",   NULL,        NULL          },
+    { "devtmpfs", NULL,          NULL            },
+    { "devpts",   NULL,          NULL            },
+    { "proc",     NULL,          NULL            },
+    { "tmpfs",    mount_tmpfs,   unmount_tmpfs   },
+    { "ext2",     mount_ext4,    unmount_ext4    },
+    { "ext3",     mount_ext4,    unmount_ext4    },
+    { "ext4",     mount_ext4,    unmount_ext4    },
+    { "iso9660",  mount_iso9660, unmount_iso9660 },
+    { "vfat",     mount_vfat,    unmount_vfat    },
 };
 
 static const vfs_backend_t *find_backend(const char *fs_type) {
@@ -97,9 +78,11 @@ int register_vfs_mount(const char *source, const char *path, const char *fs_type
 
     vfs_mount_t *mount = &mounts[free_slot];
     memset(mount, 0, sizeof(*mount));
-    strncpy(mount->source, source && source[0] ? source : "none", sizeof(mount->source) - 1);
+    strncpy(mount->source, source && source[0] ? source : "none",
+            sizeof(mount->source) - 1);
     strncpy(mount->path, path, sizeof(mount->path) - 1);
-    strncpy(mount->fs_type, fs_type, sizeof(mount->fs_type) - 1);
+    strncpy(mount->fs_type, fs_type,
+            sizeof(mount->fs_type) - 1);
     mount->flags = flags;
     mount->id = next_mount_id++;
     mount->active = true;
@@ -382,7 +365,9 @@ int list_vfs_mount(int index, char *out_line, size_t line_size) {
         if (!mounts[i].active) continue;
         if (count++ != index) continue;
         const char *parts[] = {
-            mounts[i].source[0] ? mounts[i].source : "none", " ", mounts[i].path, " ", mounts[i].fs_type, " ", (mounts[i].flags & MS_RDONLY) ? "ro" : "rw", " 0 0"
+            mounts[i].source[0] ? mounts[i].source : "none", " ",
+            mounts[i].path, " ", mounts[i].fs_type, " ",
+            (mounts[i].flags & MS_RDONLY) ? "ro" : "rw", " 0 0"
         };
         size_t written = 0;
         for (size_t part = 0; part < sizeof(parts) / sizeof(parts[0]); part++) {

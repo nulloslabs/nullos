@@ -7,11 +7,12 @@
 #include <io/devices.h>
 #include <io/gpt.h>
 #include <io/sata.h>
+#include <io/pata.h>
 
 static gpt_partition_t gpt_partitions[GPT_MAX_PARTITIONS];
 static int gpt_partition_count;
 
-static uint32_t gpt_crc32(const void *data, uint64_t size) {
+static uint32_t compute_gpt_crc32(const void *data, uint64_t size) {
     const uint8_t *bytes = data;
     uint32_t crc = UINT32_MAX;
     for (uint64_t i = 0; i < size; i++) {
@@ -21,12 +22,12 @@ static uint32_t gpt_crc32(const void *data, uint64_t size) {
     return ~crc;
 }
 
-static bool gpt_guid_empty(const uint8_t guid[16]) {
+static bool is_gpt_guid_empty(const uint8_t guid[16]) {
     for (int i = 0; i < 16; i++) if (guid[i]) return false;
     return true;
 }
 
-static bool gpt_make_partition_name(char *name, uint64_t name_size, const char *disk_name, int number) {
+static bool make_gpt_partition_name(char *name, uint64_t name_size, const char *disk_name, int number) {
     uint64_t length = strlen(disk_name);
     char digits[12];
     uint64_t digit_count = 0;
@@ -42,79 +43,102 @@ static bool gpt_make_partition_name(char *name, uint64_t name_size, const char *
 }
 
 static uint64_t read_gpt_partition(void *data, uint64_t count, uint64_t offset, int index) {
-    if (index < 0 || index >= gpt_partition_count) return (uint64_t)-ENODEV;
+    if (index < 0 || index >= gpt_partition_count || !gpt_partitions[index].active) return (uint64_t)-ENODEV;
     gpt_partition_t *partition = &gpt_partitions[index];
     if (offset >= partition->size) return 0;
     if (count > partition->size - offset) count = partition->size - offset;
-    return read_sata_device(data, count, partition->offset + offset, partition->disk_index);
+    if (partition->is_pata) {
+        return read_pata_device(data, count, partition->offset + offset, partition->disk_index);
+    } else {
+        return read_sata_device(data, count, partition->offset + offset, partition->disk_index);
+    }
 }
 
 static uint64_t write_gpt_partition(const void *data, uint64_t count, uint64_t offset, int index) {
-    if (index < 0 || index >= gpt_partition_count) return (uint64_t)-ENODEV;
+    if (index < 0 || index >= gpt_partition_count || !gpt_partitions[index].active) return (uint64_t)-ENODEV;
     gpt_partition_t *partition = &gpt_partitions[index];
     if (offset >= partition->size) return (uint64_t)-ENOSPC;
     if (count > partition->size - offset) count = partition->size - offset;
-    return write_sata_device(data, count, partition->offset + offset, partition->disk_index);
+    if (partition->is_pata) {
+        return write_pata_device(data, count, partition->offset + offset, partition->disk_index);
+    } else {
+        return write_sata_device(data, count, partition->offset + offset, partition->disk_index);
+    }
 }
 
-static bool gpt_read_header(int disk_index, uint64_t header_lba, uint64_t disk_sectors, gpt_header_t *header) {
+static bool read_gpt_header(int disk_index, uint64_t header_lba, uint64_t disk_sectors, gpt_header_t *header, bool is_pata) {
+    uint64_t sector_size = is_pata ? PATA_SECTOR_SIZE : SATA_SECTOR_SIZE;
     uint8_t sector[SATA_SECTOR_SIZE];
     if (header_lba >= disk_sectors) return false;
-    if (read_sata_device(sector, sizeof(sector), header_lba * SATA_SECTOR_SIZE, disk_index) != sizeof(sector)) return false;
+    uint64_t result = is_pata ? read_pata_device(sector, sizeof(sector), header_lba * sector_size, disk_index)
+                              : read_sata_device(sector, sizeof(sector), header_lba * sector_size, disk_index);
+    if (result != sizeof(sector)) return false;
     memcpy(header, sector, sizeof(*header));
     if (header->signature != GPT_SIGNATURE || header->header_size < GPT_MIN_HEADER_SIZE || header->header_size > SATA_SECTOR_SIZE) return false;
     if (header->current_lba != header_lba || header->backup_lba >= disk_sectors || header->first_usable_lba > header->last_usable_lba || header->last_usable_lba >= disk_sectors) return false;
     uint32_t expected_crc = header->header_crc32;
     ((gpt_header_t *)sector)->header_crc32 = 0;
-    if (gpt_crc32(sector, header->header_size) != expected_crc) return false;
+    if (compute_gpt_crc32(sector, header->header_size) != expected_crc) return false;
     return true;
 }
 
-static uint8_t *gpt_read_entries(int disk_index, uint64_t disk_sectors, const gpt_header_t *header, uint64_t *entries_size) {
+static uint8_t *read_gpt_entries(int disk_index, uint64_t disk_sectors, const gpt_header_t *header, uint64_t *entries_size, bool is_pata) {
+    uint64_t sector_size = is_pata ? PATA_SECTOR_SIZE : SATA_SECTOR_SIZE;
     if (header->entry_size < GPT_MIN_ENTRY_SIZE || header->entry_size % 8 || !header->entry_count) return NULL;
     if (header->entry_count > UINT64_MAX / header->entry_size) return NULL;
     *entries_size = (uint64_t)header->entry_count * header->entry_size;
     if (*entries_size > GPT_MAX_ENTRY_BYTES) return NULL;
-    uint64_t entry_sectors = (*entries_size + SATA_SECTOR_SIZE - 1) / SATA_SECTOR_SIZE;
+    uint64_t entry_sectors = (*entries_size + sector_size - 1) / sector_size;
     if (header->entry_lba >= disk_sectors || entry_sectors > disk_sectors - header->entry_lba) return NULL;
     uint8_t *entries = malloc(*entries_size);
     if (!entries) return NULL;
-    uint64_t result = read_sata_device(entries, *entries_size, header->entry_lba * SATA_SECTOR_SIZE, disk_index);
-    if (result == *entries_size && gpt_crc32(entries, *entries_size) == header->entry_crc32) return entries;
+    uint64_t result = is_pata ? read_pata_device(entries, *entries_size, header->entry_lba * sector_size, disk_index)
+                              : read_sata_device(entries, *entries_size, header->entry_lba * sector_size, disk_index);
+    if (result == *entries_size && compute_gpt_crc32(entries, *entries_size) == header->entry_crc32) return entries;
     free(entries);
     return NULL;
 }
 
-static bool gpt_register_partition(int disk_index, const char *disk_name, int number, uint64_t first_lba, uint64_t last_lba, uint64_t disk_sectors) {
-    if (gpt_partition_count >= GPT_MAX_PARTITIONS || first_lba > last_lba || first_lba >= disk_sectors || last_lba >= disk_sectors) return false;
+static bool register_gpt_partition(int disk_index, const char *disk_name, int number, uint64_t first_lba, uint64_t last_lba, uint64_t disk_sectors, bool is_pata) {
+    if (first_lba > last_lba || first_lba >= disk_sectors || last_lba >= disk_sectors) return false;
     uint64_t sectors = last_lba - first_lba + 1;
-    if (sectors > UINT64_MAX / SATA_SECTOR_SIZE) return false;
+    uint64_t sector_size = is_pata ? PATA_SECTOR_SIZE : SATA_SECTOR_SIZE;
+    if (sectors > UINT64_MAX / sector_size) return false;
     char name[24];
-    if (!gpt_make_partition_name(name, sizeof(name), disk_name, number)) return false;
-    int index = gpt_partition_count;
+    if (!make_gpt_partition_name(name, sizeof(name), disk_name, number)) return false;
+    int index = -1;
+    for (int i = 0; i < gpt_partition_count; i++) {
+        if (!gpt_partitions[i].active) { index = i; break; }
+    }
+    if (index < 0) {
+        if (gpt_partition_count >= GPT_MAX_PARTITIONS) return false;
+        index = gpt_partition_count++;
+    }
     gpt_partitions[index].disk_index = disk_index;
-    gpt_partitions[index].offset = first_lba * SATA_SECTOR_SIZE;
-    gpt_partitions[index].size = sectors * SATA_SECTOR_SIZE;
+    gpt_partitions[index].offset = first_lba * sector_size;
+    gpt_partitions[index].size = sectors * sector_size;
+    gpt_partitions[index].is_pata = is_pata;
     if (register_block_device_idx(name, read_gpt_partition, write_gpt_partition, index, gpt_partitions[index].size) < 0) return false;
-    gpt_partition_count++;
+    strcpy(gpt_partitions[index].name, name);
+    gpt_partitions[index].active = true;
     log("gpt: registered %s, lba %llu-%llu\n", name, first_lba, last_lba);
     return true;
 }
 
-bool gpt_probe_sata_disk(int disk_index, const char *disk_name, uint64_t disk_size) {
+static bool probe_gpt_disk(int disk_index, const char *disk_name, uint64_t disk_size, bool is_pata) {
     if (!disk_name || disk_size < SATA_SECTOR_SIZE * 2) return false;
-    uint64_t disk_sectors = disk_size / SATA_SECTOR_SIZE;
+    uint64_t disk_sectors = disk_size / (is_pata ? PATA_SECTOR_SIZE : SATA_SECTOR_SIZE);
     gpt_header_t header;
     bool using_backup = false;
-    if (!gpt_read_header(disk_index, 1, disk_sectors, &header)) {
-        if (!gpt_read_header(disk_index, disk_sectors - 1, disk_sectors, &header)) return false;
+    if (!read_gpt_header(disk_index, 1, disk_sectors, &header, is_pata)) {
+        if (!read_gpt_header(disk_index, disk_sectors - 1, disk_sectors, &header, is_pata)) return false;
         using_backup = true;
     }
     uint64_t entries_size;
-    uint8_t *entries = gpt_read_entries(disk_index, disk_sectors, &header, &entries_size);
+    uint8_t *entries = read_gpt_entries(disk_index, disk_sectors, &header, &entries_size, is_pata);
     if (!entries && !using_backup) {
-        if (!gpt_read_header(disk_index, disk_sectors - 1, disk_sectors, &header)) return false;
-        entries = gpt_read_entries(disk_index, disk_sectors, &header, &entries_size);
+        if (!read_gpt_header(disk_index, disk_sectors - 1, disk_sectors, &header, is_pata)) return false;
+        entries = read_gpt_entries(disk_index, disk_sectors, &header, &entries_size, is_pata);
         using_backup = true;
     }
     if (!entries) return false;
@@ -123,10 +147,27 @@ bool gpt_probe_sata_disk(int disk_index, const char *disk_name, uint64_t disk_si
     bool found = false;
     for (uint32_t index = 0; index < header.entry_count; index++) {
         gpt_entry_t *entry = (gpt_entry_t *)(entries + (uint64_t)index * header.entry_size);
-        if (gpt_guid_empty(entry->type_guid)) continue;
+        if (is_gpt_guid_empty(entry->type_guid)) continue;
         if (entry->first_lba < header.first_usable_lba || entry->last_lba > header.last_usable_lba) continue;
-        if (gpt_register_partition(disk_index, disk_name, index + 1, entry->first_lba, entry->last_lba, disk_sectors)) found = true;
+        if (register_gpt_partition(disk_index, disk_name, index + 1, entry->first_lba, entry->last_lba, disk_sectors, is_pata)) found = true;
     }
     free(entries);
     return found;
+}
+
+bool probe_gpt_for_sata_disk(int disk_index, const char *disk_name, uint64_t disk_size) {
+    return probe_gpt_disk(disk_index, disk_name, disk_size, false);
+}
+
+bool probe_gpt_for_pata_disk(int disk_index, const char *disk_name, uint64_t disk_size) {
+    return probe_gpt_disk(disk_index, disk_name, disk_size, true);
+}
+
+void remove_gpt_partitions(int disk_index, bool is_pata) {
+    for (int i = 0; i < gpt_partition_count; i++) {
+        if (!gpt_partitions[i].active || gpt_partitions[i].disk_index != disk_index || gpt_partitions[i].is_pata != is_pata) continue;
+        unregister_device(gpt_partitions[i].name);
+        gpt_partitions[i].active = false;
+        gpt_partitions[i].name[0] = '\0';
+    }
 }

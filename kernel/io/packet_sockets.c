@@ -206,7 +206,21 @@ static bool packet_op_is_readable(socket_t *sock) {
 }
 
 static const socket_ops_t packet_socket_ops = {
-    .bind        = packet_op_bind, .connect     = packet_op_connect, .listen      = packet_op_listen, .accept      = packet_op_accept, .sendto      = packet_op_sendto, .recvfrom    = packet_op_recvfrom, .getsockname = packet_op_getsockname, .getpeername = packet_op_getpeername, .getsockopt  = packet_op_getsockopt, .setsockopt  = packet_op_setsockopt, .shutdown    = packet_op_shutdown, .close       = packet_op_close, .read        = packet_op_read, .write       = packet_op_write, .is_readable = packet_op_is_readable,
+    .bind        = packet_op_bind,
+    .connect     = packet_op_connect,
+    .listen      = packet_op_listen,
+    .accept      = packet_op_accept,
+    .sendto      = packet_op_sendto,
+    .recvfrom    = packet_op_recvfrom,
+    .getsockname = packet_op_getsockname,
+    .getpeername = packet_op_getpeername,
+    .getsockopt  = packet_op_getsockopt,
+    .setsockopt  = packet_op_setsockopt,
+    .shutdown    = packet_op_shutdown,
+    .close       = packet_op_close,
+    .read        = packet_op_read,
+    .write       = packet_op_write,
+    .is_readable = packet_op_is_readable,
 };
 
 int create_packet_socket_obj(int type, int protocol, socket_t **out) {

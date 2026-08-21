@@ -183,7 +183,9 @@ static bool find_archive_symlink(const char *abs_path, char *resolved_abs, size_
 
     // Check overlay symlinks first (created via symlink_initrd)
     for (int i = 0; i < modified_capacity; i++) {
-        if (modified_files[i].is_active && !modified_files[i].is_tombstone && (modified_files[i].mode & 0xF000) == 0xA000 && compare_archive_names(modified_files[i].path, norm) == 0) {
+        if (modified_files[i].is_active && !modified_files[i].is_tombstone &&
+            (modified_files[i].mode & 0xF000) == 0xA000 &&
+            compare_archive_names(modified_files[i].path, norm) == 0) {
             char target[101];
             strncpy(target, (const char *)modified_files[i].data, 100);
             target[100] = '\0';
@@ -267,7 +269,9 @@ static void resolve_path_symlinks_ex(const char *in_abs, char *out_abs, size_t o
 }
 
 typedef enum {
-    INITRD_TIME_CREATE, INITRD_TIME_CONTENT, INITRD_TIME_CHANGE,
+    INITRD_TIME_CREATE,
+    INITRD_TIME_CONTENT,
+    INITRD_TIME_CHANGE,
 } initrd_time_change_t;
 
 static void set_modified_times(modified_file_t *file, int archive_idx, bool new_entry, initrd_time_change_t change) {
@@ -507,14 +511,25 @@ initrd_file_t read_initrd(const char *path) {
 
 static initrd_file_t stat_initrd_ex(const char *path, bool follow_final) {
     char norm[256];
-    // Normalizes the path and resolves directory symlinks in the prefix, // optionally resolving the final component too (follow_final).
+    // Normalizes the path and resolves directory symlinks in the prefix,
+    // optionally resolving the final component too (follow_final).
     get_norm_path_ex(path, norm, sizeof(norm), follow_final);
 
     // check overlay first
     for (int i = 0; i < modified_capacity; i++) {
         if (modified_files[i].is_active && strcmp(modified_files[i].path, norm) == 0) {
             initrd_file_t result = {
-                .inode = modified_files[i].inode, .data = modified_files[i].data, .size = modified_files[i].size, .mode = modified_files[i].mode, .uid  = modified_files[i].uid, .gid  = modified_files[i].gid, .atime = modified_files[i].atime, .btime = modified_files[i].btime, .mtime = modified_files[i].mtime, .ctime = modified_files[i].ctime, };
+                .inode = modified_files[i].inode,
+                .data = modified_files[i].data,
+                .size = modified_files[i].size,
+                .mode = modified_files[i].mode,
+                .uid  = modified_files[i].uid,
+                .gid  = modified_files[i].gid,
+                .atime = modified_files[i].atime,
+                .btime = modified_files[i].btime,
+                .mtime = modified_files[i].mtime,
+                .ctime = modified_files[i].ctime,
+            };
             return result;
         }
     }
@@ -529,7 +544,17 @@ static initrd_file_t stat_initrd_ex(const char *path, bool follow_final) {
     if (idx >= 0) {
         struct initrd_archive_entry *entry = &archive_entries[idx];
         initrd_file_t result = {
-            .inode = entry->ino, .data = ((entry->mode & 0xF000) == 0xA000) ? (void *)entry->link_target : (void *)entry->data, .size = entry->size, .mode = entry->mode, .uid = entry->uid, .gid = entry->gid, .atime = entry->atime, .btime = entry->btime, .mtime = entry->mtime, .ctime = entry->ctime, };
+            .inode = entry->ino,
+            .data = ((entry->mode & 0xF000) == 0xA000) ? (void *)entry->link_target : (void *)entry->data,
+            .size = entry->size,
+            .mode = entry->mode,
+            .uid = entry->uid,
+            .gid = entry->gid,
+            .atime = entry->atime,
+            .btime = entry->btime,
+            .mtime = entry->mtime,
+            .ctime = entry->ctime,
+        };
         return result;
     }
 
@@ -574,7 +599,9 @@ int write_initrd(const char *path, const void *data, uint64_t size, uint32_t mod
 static modified_file_t *find_overlay_entry(const char *norm) {
     if (last_overlay_entry && last_overlay_entry->is_active && !last_overlay_entry->is_tombstone && strcmp(last_overlay_entry->path, norm) == 0) return last_overlay_entry;
     for (int i = 0; i < modified_capacity; i++) {
-        if (modified_files[i].is_active && !modified_files[i].is_tombstone && strcmp(modified_files[i].path, norm) == 0) {
+        if (modified_files[i].is_active &&
+            !modified_files[i].is_tombstone &&
+            strcmp(modified_files[i].path, norm) == 0) {
             last_overlay_entry = &modified_files[i];
             return last_overlay_entry;
         }
@@ -642,7 +669,8 @@ int write_initrd_partial(const char *path, const void *data, uint64_t off, uint6
         return 0;
     }
 
-    // No overlay entry yet.  Snapshot current contents (tar-backed or empty), // apply the patch into a fresh buffer, and store it as a new overlay entry.
+    // No overlay entry yet.  Snapshot current contents (tar-backed or empty),
+    // apply the patch into a fresh buffer, and store it as a new overlay entry.
     initrd_file_t cur = read_initrd(path);
     uint64_t base_size = cur.size;
     if (base_size > INITRD_MAX_FILE_SIZE) return -EFBIG;
@@ -734,7 +762,8 @@ int rmdir_initrd(const char *path) {
         if (!modified_files[i].is_active) continue;
         if (modified_files[i].is_tombstone) continue;
         if (strcmp(modified_files[i].path, norm) == 0) continue; // itself
-        if (strncmp(modified_files[i].path, norm, norm_len) == 0 && modified_files[i].path[norm_len] == '/') return -ENOTEMPTY;
+        if (strncmp(modified_files[i].path, norm, norm_len) == 0 &&
+            modified_files[i].path[norm_len] == '/') return -ENOTEMPTY;
     }
 
     // Check archive entries for children. The sorted index lets us
@@ -768,7 +797,8 @@ int rmdir_initrd(const char *path) {
             struct initrd_archive_entry *entry = &archive_entries[i];
             // If this entry doesn't start with "<norm>/", we've passed the
             // children block (sorted order) — stop scanning.
-            if (strncmp(entry->path, norm, norm_len) != 0 || entry->path[norm_len] != '/') break;
+            if (strncmp(entry->path, norm, norm_len) != 0 ||
+                entry->path[norm_len] != '/') break;
 
             // Skip tombstoned (deleted) children — they're invisible.
             if (archive_tombstone_bits && archive_tombstone_bits[i]) continue;
@@ -825,7 +855,8 @@ int chmod_initrd(const char *path, mode_t mode) {
 
     // Search for the entry in the overlay and update its mode in-place.
     // We must NOT call read_initrd + add_modified_file here because
-    // read_initrd returns the same data pointer stored in the overlay, // and add_modified_file would free(old_data) then store the
+    // read_initrd returns the same data pointer stored in the overlay,
+    // and add_modified_file would free(old_data) then store the
     // now-dangling pointer back — use-after-free.
     for (int i = 0; i < modified_capacity; i++) {
         if (modified_files[i].is_active && strcmp(modified_files[i].path, norm) == 0) {
@@ -950,7 +981,8 @@ int get_initrd_entry(int index, directory_entry_t *entry) {
     return -1; // Index out of range
 }
 
-int next_initrd_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size, uint8_t *child_type, ino_t *child_ino) {
+int next_initrd_child(int *index, const char *dir_norm, char *child_name, size_t child_name_size,
+                      uint8_t *child_type, ino_t *child_ino) {
     char normalized_dir[256];
     get_norm_path(dir_norm, normalized_dir, sizeof(normalized_dir));
     struct timespec now = time_get_realtime_ts();
@@ -986,7 +1018,8 @@ int next_initrd_child(int *index, const char *dir_norm, char *child_name, size_t
 
             if (strncmp(abs_entry, prefix, prefix_len) == 0) {
                 const char *child = abs_entry + prefix_len;
-                if (*child && !strchr(child, '/') && strcmp(child, ".") != 0 && strcmp(child, "..") != 0) {
+                if (*child && !strchr(child, '/') &&
+                    strcmp(child, ".") != 0 && strcmp(child, "..") != 0) {
 
                     if (!archive_tombstone_bits || !archive_tombstone_bits[i]) {
                         strncpy(child_name, child, child_name_size - 1);
@@ -1023,7 +1056,8 @@ int next_initrd_child(int *index, const char *dir_norm, char *child_name, size_t
 
         if (strncmp(abs_entry, prefix, prefix_len) == 0) {
             const char *child = abs_entry + prefix_len;
-            if (*child && !strchr(child, '/') && strcmp(child, ".") != 0 && strcmp(child, "..") != 0) {
+            if (*child && !strchr(child, '/') &&
+                strcmp(child, ".") != 0 && strcmp(child, "..") != 0) {
 
                 strncpy(child_name, child, child_name_size - 1);
                 child_name[child_name_size - 1] = '\0';
@@ -1129,7 +1163,8 @@ void init_initrd(void) {
                 panic("invalid newc initrd header"); free(decompressed); return;
             }
             uint32_t namesize, filesize;
-            if (!parse_cpio_hex(ptr + 94, &namesize) || !parse_cpio_hex(ptr + 54, &filesize) || namesize == 0 || namesize > 256) {
+            if (!parse_cpio_hex(ptr + 94, &namesize) || !parse_cpio_hex(ptr + 54, &filesize) ||
+                namesize == 0 || namesize > 256) {
                 panic("invalid newc initrd entry"); free(decompressed); return;
             }
             uint8_t *name = ptr + 110;
@@ -1189,7 +1224,8 @@ void init_initrd(void) {
             if ((entry->mode & 0xF000) != 0x8000 || entry->nlink < 2) continue;
             for (int j = 0; j < count; j++) {
                 struct initrd_archive_entry *peer = &archive_entries[j];
-                if (peer->ino == entry->ino && peer->devmajor == entry->devmajor && peer->devminor == entry->devminor && peer->size > 0) {
+                if (peer->ino == entry->ino && peer->devmajor == entry->devmajor &&
+                    peer->devminor == entry->devminor && peer->size > 0) {
                     entry->data = peer->data;
                     entry->size = peer->size;
                     break;

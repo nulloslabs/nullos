@@ -19,10 +19,15 @@ typedef struct {
 } __attribute__((packed)) mbr_entry_t;
 
 typedef struct {
+    char name[24];
     int disk_index;
     uint64_t offset;
     uint64_t size;
+    bool is_pata;
+    bool active;
 } mbr_partition_t;
 
-bool mbr_probe_sata_disk(int disk_index, const char *disk_name, uint64_t disk_size);
+bool probe_mbr_for_sata_disk(int disk_index, const char *disk_name, uint64_t disk_size);
+bool probe_mbr_for_pata_disk(int disk_index, const char *disk_name, uint64_t disk_size);
+void remove_mbr_partitions(int disk_index, bool is_pata);
 

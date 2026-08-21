@@ -149,7 +149,8 @@ static int64_t inet_op_recvfrom(socket_t *sock, void *buf, size_t len, int flags
             }
         } else {
             // isr32 skips schedule() while sched_lock is held, so we must
-            // release it and fire cpu_yield() to actually yield to the scheduler, // letting NIC interrupts deliver incoming datagrams.
+            // release it and fire cpu_yield() to actually yield to the scheduler,
+            // letting NIC interrupts deliver incoming datagrams.
             spin_unlock(&sched_lock);
             do { yield_sched(); } while (inet->udp_count == 0);
             spin_lock(&sched_lock);
@@ -294,7 +295,21 @@ void net_udp_tap_rx(uint32_t src_ip, uint16_t src_port, uint16_t dst_port, const
 }
 
 static const socket_ops_t inet_socket_ops = {
-    .bind        = inet_op_bind, .connect     = inet_op_connect, .listen      = inet_op_listen, .accept      = inet_op_accept, .sendto      = inet_op_sendto, .recvfrom    = inet_op_recvfrom, .getsockname = inet_op_getsockname, .getpeername = inet_op_getpeername, .getsockopt  = inet_op_getsockopt, .setsockopt  = inet_op_setsockopt, .shutdown    = inet_op_shutdown, .close       = inet_op_close, .read        = inet_op_read, .write       = inet_op_write, .is_readable = inet_op_is_readable,
+    .bind        = inet_op_bind,
+    .connect     = inet_op_connect,
+    .listen      = inet_op_listen,
+    .accept      = inet_op_accept,
+    .sendto      = inet_op_sendto,
+    .recvfrom    = inet_op_recvfrom,
+    .getsockname = inet_op_getsockname,
+    .getpeername = inet_op_getpeername,
+    .getsockopt  = inet_op_getsockopt,
+    .setsockopt  = inet_op_setsockopt,
+    .shutdown    = inet_op_shutdown,
+    .close       = inet_op_close,
+    .read        = inet_op_read,
+    .write       = inet_op_write,
+    .is_readable = inet_op_is_readable,
 };
 
 int create_inet_socket_obj(int type, int protocol, socket_t **out) {

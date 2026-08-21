@@ -151,8 +151,8 @@ extern spinlock_t ext4_lock;
 
 /* Functions */
 
-int mount_ext4(const char *source, const char *target);
-int unmount_ext4(const char *target);
+int mount_ext4(const char *source, const char *path, unsigned long flags, const char *data);
+int unmount_ext4(const char *path);
 bool check_ext4_path(const char *path);
 int stat_ext4(const char *path, struct stat *st, bool follow);
 int statx_ext4_metadata(const char *path, struct statx *stx, bool follow);

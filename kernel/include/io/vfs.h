@@ -12,6 +12,12 @@
 #define VFS_FS_TYPE_MAX 32
 
 typedef struct {
+    const char *fs_type;
+    int (*mount_fs)(const char *source, const char *path, unsigned long flags, const char *data);
+    int (*unmount_fs)(const char *path);
+} vfs_backend_t;
+
+typedef struct {
     uint64_t id;
     char source[VFS_SOURCE_MAX];
     char path[VFS_PATH_MAX];
@@ -50,7 +56,6 @@ uint64_t get_vfs_id(const char *path, bool *is_mount_root);
 
 int list_vfs_mount(int index, char *out_line, size_t line_size);
 
-// VFS file operations mirroring initrd/tmpfs
 vfs_file_t read_vfs_file(const char *path);
 vfs_file_t stat_vfs_file(const char *path);
 int write_vfs_file(const char *path, const void *data, uint64_t size, mode_t mode, uid_t uid, gid_t gid);

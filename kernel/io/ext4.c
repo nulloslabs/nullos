@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <errno.h>
+#include <sys/mount.h>
 #include <sys/statx.h>
 #include <main/string.h>
 #include <io/devices.h>
@@ -192,7 +193,8 @@ static int read_ext4_indirect_ptr(const ext4_mount_t *mnt, uint64_t block, uint3
     }
     if (block >= mnt->blocks_count || index >= mnt->block_size / 4U) return -EIO;
     uint8_t raw[4];
-    int status = read_checked_device(mnt, raw, sizeof(raw), block * (uint64_t)mnt->block_size + (uint64_t)index * 4U);
+    int status = read_checked_device(mnt, raw, sizeof(raw),
+                                     block * (uint64_t)mnt->block_size + (uint64_t)index * 4U);
     if (status < 0) return status;
     *value = read_le32(raw);
     if (*value >= mnt->blocks_count) return -EIO;
@@ -215,14 +217,16 @@ static int map_ext4_legacy_block(const ext4_mount_t *mnt, const ext4_inode_t *in
         uint64_t square = (uint64_t)ptrs * ptrs;
         if ((uint64_t)logical < square) {
             uint32_t first;
-            status = read_ext4_indirect_ptr(mnt, read_le32(inode->block + 52), logical / ptrs, &first);
+            status = read_ext4_indirect_ptr(mnt, read_le32(inode->block + 52),
+                                            logical / ptrs, &first);
             if (status == 0) status = read_ext4_indirect_ptr(mnt, first, logical % ptrs, &block);
         } else {
             uint64_t remain = (uint64_t)logical - square;
             uint64_t cube = square * ptrs;
             if (remain >= cube) return -EFBIG;
             uint32_t first, second;
-            status = read_ext4_indirect_ptr(mnt, read_le32(inode->block + 56), (uint32_t)(remain / square), &first);
+            status = read_ext4_indirect_ptr(mnt, read_le32(inode->block + 56),
+                                            (uint32_t)(remain / square), &first);
             remain %= square;
             if (status == 0) status = read_ext4_indirect_ptr(mnt, first, (uint32_t)(remain / ptrs), &second);
             if (status == 0) status = read_ext4_indirect_ptr(mnt, second, (uint32_t)(remain % ptrs), &block);
@@ -303,7 +307,8 @@ static int walk_ext4_directory(const ext4_mount_t *mnt, const ext4_inode_t *dir,
                 goto out;
             }
             if (ino && name_len) {
-                result = callback(ino, type, (char *)block + pos + 8, name_len, context);
+                result = callback(ino, type, (char *)block + pos + 8,
+                                  name_len, context);
                 if (result != 0) goto out;
             }
             pos += rec_len;
@@ -362,7 +367,8 @@ static int splice_ext4_symlink(char work[EXT4_MAX_PATH], size_t component_start,
     if (prefix_len + target_len + suffix_len + 1 > sizeof(next)) return -ENAMETOOLONG;
     if (prefix_len) memcpy(next, work, prefix_len);
     memcpy(next + prefix_len, target, target_len);
-    memcpy(next + prefix_len + target_len, work + component_end, suffix_len + 1);
+    memcpy(next + prefix_len + target_len, work + component_end,
+           suffix_len + 1);
     strlcpy(work, next, EXT4_MAX_PATH);
     return 0;
 }
@@ -419,9 +425,12 @@ restart: {
 }
 }
 
-int mount_ext4(const char *source, const char *target) {
+int mount_ext4(const char *source, const char *path, unsigned long flags, const char *data) {
+    if (!source || !source[0]) return -EINVAL;
+    if (flags & ~(MS_RDONLY | MS_SILENT)) return -EOPNOTSUPP;
+    if (data && data[0] && strcmp(data, "ro") != 0) return -EOPNOTSUPP;
     const char *dev = get_device_name(source);
-    if (!dev || !*dev || strlen(dev) > 64 || !target || target[0] != '/' || strlen(target) > 63) return -EINVAL;
+    if (!dev || !*dev || strlen(dev) > 64 || !path || path[0] != '/' || strlen(path) > 63) return -EINVAL;
 
     uint64_t device_size;
     int status = get_block_device_size(dev, &device_size);
@@ -481,7 +490,7 @@ int mount_ext4(const char *source, const char *target) {
     probe.gdt_offset = probe.block_size == 1024 ? 2048 : probe.block_size;
 
     char normalized[64];
-    strlcpy(normalized, target, sizeof(normalized));
+    strlcpy(normalized, path, sizeof(normalized));
     size_t target_len = strlen(normalized);
     while (target_len > 1 && normalized[target_len - 1] == '/')
         normalized[--target_len] = '\0';
@@ -512,11 +521,11 @@ int mount_ext4(const char *source, const char *target) {
     return 0;
 }
 
-int unmount_ext4(const char *target) {
-    if (!target) return -EINVAL;
+int unmount_ext4(const char *path) {
+    if (!path) return -EINVAL;
     char normalized[64];
-    if (strlen(target) >= sizeof(normalized)) return -ENAMETOOLONG;
-    strlcpy(normalized, target, sizeof(normalized));
+    if (strlen(path) >= sizeof(normalized)) return -ENAMETOOLONG;
+    strlcpy(normalized, path, sizeof(normalized));
     size_t length = strlen(normalized);
     while (length > 1 && normalized[length - 1] == '/')
         normalized[--length] = '\0';

@@ -25,7 +25,7 @@
 devtmpfs_device_t devtmpfs_devices[MAX_DEVTMPFS_DEVICES];
 spinlock_t devtmpfs_lock = SPINLOCK_INIT;
 
-static int register_device_info(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index, bool block, uint64_t size) {
+static int register_device_info(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index, bool block, uint64_t size, device_bus_t bus) {
     if (!name || name[0] == '\0') {
         return -EINVAL;
     }
@@ -53,6 +53,7 @@ static int register_device_info(const char *name, uint64_t (*read_fn)(void *, ui
             devtmpfs_devices[i].index = index;
             devtmpfs_devices[i].block = block;
             devtmpfs_devices[i].size = size;
+            devtmpfs_devices[i].bus = bus;
             devtmpfs_devices[i].active = true;
             spin_unlock_irqrestore(&devtmpfs_lock, irq);
             return 0;
@@ -64,15 +65,19 @@ static int register_device_info(const char *name, uint64_t (*read_fn)(void *, ui
 }
 
 int register_device(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int)) {
-    return register_device_info(name, read_fn, write_fn, 0, false, 0);
+    return register_device_info(name, read_fn, write_fn, 0, false, 0, DEV_BUS_NONE);
 }
 
 int register_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index) {
-    return register_device_info(name, read_fn, write_fn, index, false, 0);
+    return register_device_info(name, read_fn, write_fn, index, false, 0, DEV_BUS_NONE);
 }
 
 int register_block_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index, uint64_t size) {
-    return register_device_info(name, read_fn, write_fn, index, true, size);
+    return register_device_info(name, read_fn, write_fn, index, true, size, DEV_BUS_NONE);
+}
+
+int register_disk_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index, uint64_t size, device_bus_t bus) {
+    return register_device_info(name, read_fn, write_fn, index, true, size, bus);
 }
 
 int get_block_device_size(const char *name, uint64_t *size) {
@@ -90,6 +95,29 @@ int get_block_device_size(const char *name, uint64_t *size) {
             return -ESPIPE;
         }
         *size = devtmpfs_devices[i].size;
+        spin_unlock_irqrestore(&devtmpfs_lock, irq);
+        return 0;
+    }
+    spin_unlock_irqrestore(&devtmpfs_lock, irq);
+    return -ENOENT;
+}
+
+int get_block_device_bus(const char *name, device_bus_t *bus, int *disk_index) {
+    if (!name || !bus || !disk_index) return -EINVAL;
+    const char *dev_name = name;
+    while (*dev_name == '.' || *dev_name == '/') dev_name++;
+    if (strncmp(dev_name, "dev/", 4) == 0) dev_name += 4;
+
+    uint64_t irq;
+    spin_lock_irqsave(&devtmpfs_lock, &irq);
+    for (int i = 0; i < MAX_DEVTMPFS_DEVICES; i++) {
+        if (!devtmpfs_devices[i].active || strcmp(devtmpfs_devices[i].name, dev_name) != 0) continue;
+        if (!devtmpfs_devices[i].block) {
+            spin_unlock_irqrestore(&devtmpfs_lock, irq);
+            return -ESPIPE;
+        }
+        *bus = devtmpfs_devices[i].bus;
+        *disk_index = devtmpfs_devices[i].index;
         spin_unlock_irqrestore(&devtmpfs_lock, irq);
         return 0;
     }
@@ -311,6 +339,7 @@ void init_devices(void) {
         devtmpfs_devices[i].write = NULL;
         devtmpfs_devices[i].block = false;
         devtmpfs_devices[i].size = 0;
+        devtmpfs_devices[i].bus = DEV_BUS_NONE;
     }
 
     register_device("null", null_read, null_write);
@@ -353,9 +382,12 @@ void init_devices(void) {
             for (int i = 0; i < IDE_MAX_DEVICES; i++) {
                 if (!pata_device_size(i, &size)) continue;
                 if (!make_ide_disk_name(name, sizeof(name), "hd", i)) continue;
-                if (register_block_device_idx(name, read_pata_device, write_pata_device, i, size) < 0) {
+                if (register_disk_device_idx(name, read_pata_device, write_pata_device, i, size, DEV_BUS_PATA) < 0) {
                     log("devices: unable to register %s\n", name);
+                    continue;
                 }
+                // Probe for GPT/MBR partitions on PATA disks
+                if (!probe_gpt_for_pata_disk(i, name, size)) probe_mbr_for_pata_disk(i, name, size);
             }
         }
 
@@ -373,11 +405,11 @@ void init_devices(void) {
             for (int i = 0; i < sata_device_count(); i++) {
                 if (!sata_device_size(i, &size)) continue;
                 if (!make_sata_disk_name(name, sizeof(name), i)) continue;
-                if (register_block_device_idx(name, read_sata_device, write_sata_device, i, size) < 0) {
+                if (register_disk_device_idx(name, read_sata_device, write_sata_device, i, size, DEV_BUS_SATA) < 0) {
                     log("devices: unable to register %s\n", name);
                     continue;
                 }
-                if (!gpt_probe_sata_disk(i, name, size)) mbr_probe_sata_disk(i, name, size);
+                if (!probe_gpt_for_sata_disk(i, name, size)) probe_mbr_for_sata_disk(i, name, size);
             }
         }
     }

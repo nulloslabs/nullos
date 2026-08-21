@@ -23,6 +23,7 @@ typedef enum {
     FD_TMPFS = 10,      // file/dir on a tmpfs mount (handle stores inode index)
     FD_EXT4 = 11,      // file/dir on a read-only ext-family mount
     FD_ISO9660 = 12,   // file/dir on a read-only iso9660 mount
+    FD_VFAT = 13,      // file/dir on a read-only vfat mount
 } fd_type_t;
 
 typedef struct {

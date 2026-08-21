@@ -119,7 +119,10 @@ static void append_record(const char *message, size_t length) {
 
     size_t record_index = (record_head + record_count) % LOG_RECORD_COUNT;
     log_records[record_index] = (log_record_t) {
-        .sequence = next_sequence++, .offset = offset, .length = length, };
+        .sequence = next_sequence++,
+        .offset = offset,
+        .length = length,
+    };
     record_count++;
     text_used += length;
     next_text_sequence += length;

@@ -43,7 +43,10 @@ spinlock_t sched_lock = SPINLOCK_INIT; // Let's keep this public since other fun
 task_t *tasks[MAX_TASKS];
 
 static const uint32_t nice_weights[40] = {
-    88761, 71755, 56483, 46273, 36291, 29154, 23254, 18705, 14949, 11916, 9548, 7620, 6100, 4904, 3906, 3121, 2501, 1991, 1586, 1277, 1024, 820, 655, 526, 423, 335, 272, 215, 172, 137, 110, 87, 70, 56, 45, 36, 29, 23, 18, 15
+    88761, 71755, 56483, 46273, 36291, 29154, 23254, 18705, 14949, 11916,
+    9548, 7620, 6100, 4904, 3906, 3121, 2501, 1991, 1586, 1277,
+    1024, 820, 655, 526, 423, 335, 272, 215, 172, 137,
+    110, 87, 70, 56, 45, 36, 29, 23, 18, 15
 };
 
 static void idle_task(void) { idle(); }
@@ -308,7 +311,7 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
             #define PUSH(val) do { \
                 k_rsp -= 8; \
                 uint64_t _pv = (uint64_t)(val); \
-                write_vmm(&kernel_context, k_rsp, &_pv, 8); \
+                (void)write_vmm(&kernel_context, k_rsp, &_pv, 8); \
             } while(0)
 
             PUSH(0);
@@ -427,7 +430,7 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
             #define PUSH(val) do { \
                 v_rsp -= 8; \
                 uint64_t _pv = (uint64_t)(val); \
-                write_vmm(&kernel_context, v_rsp, &_pv, 8); \
+                (void)write_vmm(&kernel_context, v_rsp, &_pv, 8); \
             } while(0)
 
             PUSH(0x1B);
@@ -575,15 +578,15 @@ pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *ctx, uint64_t flag
         #define PUSH(val) do { \
             v_rsp -= 8; \
             uint64_t _pv = (uint64_t)(val); \
-            write_vmm(&kernel_context, v_rsp, &_pv, 8); \
+            (void)write_vmm(&kernel_context, v_rsp, &_pv, 8); \
         } while(0)
 
         // iretq frame
-        PUSH(0x1B);                          // ss
+        PUSH(0x1B);                           // ss
         PUSH(new_rsp ? new_rsp : frame->rsp); // user rsp
-        PUSH(frame->rflags);                 // rflags
-        PUSH(0x23);                          // cs
-        PUSH(frame->rip);                    // user rip (return point)
+        PUSH(frame->rflags);                  // rflags
+        PUSH(0x23);                           // cs
+        PUSH(frame->rip);                     // user rip (return point)
 
         // general purpose registers (rax comes first, == 0 for the child)
         PUSH(0);                              // rax -> child sees clone() == 0
@@ -638,7 +641,8 @@ void update_interval_timers(void) {
 
     for (int i = 0; i < MAX_TASKS; i++) {
         task_t *task = tasks[i];
-        if (task->state == TASK_DEAD || task->state == TASK_ZOMBIE || task->real_timer_deadline_us == 0 || now < task->real_timer_deadline_us) {
+        if (task->state == TASK_DEAD || task->state == TASK_ZOMBIE ||
+            task->real_timer_deadline_us == 0 || now < task->real_timer_deadline_us) {
             continue;
         }
 
