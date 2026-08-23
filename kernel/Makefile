@@ -8,16 +8,16 @@ endif
 include config.mk
 
 SRC := $(wildcard io/*.c) $(wildcard io/*.S) $(wildcard main/*.c) $(wildcard main/*.S) $(wildcard mm/*.c) $(wildcard mm/*.S) $(wildcard syscalls/*.c) $(wildcard syscalls/*.S)
-UACPI_SRC = $(wildcard uacpi/source/*.c)
 
 include Kconfig.mk
 
 OBJ := $(SRC:.c=.o)
 OBJ := $(OBJ:.S=.o)
-UACPI_OBJ = $(patsubst uacpi/source/%.c,uacpi/build/%.o,$(UACPI_SRC))
-
 DEP := $(OBJ:.o=.d)
-UACPI_DEP = $(UACPI_OBJ:.o=.d)
+
+UACPI_SRC := $(wildcard uacpi/source/*.c)
+UACPI_OBJ := $(patsubst uacpi/source/%.c,uacpi/build/%.o,$(UACPI_SRC))
+UACPI_DEP := $(UACPI_OBJ:.o=.d)
 
 SUBDIRS = main io mm syscalls
 

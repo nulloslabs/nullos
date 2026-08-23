@@ -11,8 +11,8 @@ CONF_SRC := main/conf.c main/zconf.tab.c
 CONF_OBJ := $(CONF_SRC:.c=.o)
 CONF_DEP := $(CONF_OBJ:.o=.d)
 
-MCONF_SRC := main/mconf.c main/zconf.tab.c $(wildcard main/lxdialog/*.c)
-MCONF_OBJ := $(MCONF_SRC:.c=.o)
+MCONF_SRC = main/mconf.c main/zconf.tab.c $(wildcard main/lxdialog/*.c)
+MCONF_OBJ = $(MCONF_SRC:.c=.o)
 MCONF_DEP = $(MCONF_OBJ:.o=.d)
 
 -include $(CONF_DEP)
@@ -33,7 +33,8 @@ gen:
 kconfig:
 	@if [ ! -e "main/.git" ]; then \
 		printf "  %-7s %s\n" "FETCH" "$(SUBDIR)/main/" && \
-		git submodule update --init --depth 1 -- main > /dev/null 2>&1; \
+		git submodule update --init --depth 1 -- main > /dev/null 2>&1 && \
+		$(MAKE); \
 	else \
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/main/ is already up to date"; \
 	fi; \
