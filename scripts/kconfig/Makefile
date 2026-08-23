@@ -55,6 +55,12 @@ main/mconf.o: main/mconf.c config.mk Makefile
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+main/zconf.tab.c main/zconf.lex.c main/zconf.hash.c:
+	@if [ ! -e "$@" ]; then \
+		printf "  %-7s %s\n" "GEN" "$(SUBDIR)/$@" && \
+		cp "$@_shipped" "$@"; \
+	fi
+
 main/zconf.tab.o: main/zconf.tab.c config.mk Makefile
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
