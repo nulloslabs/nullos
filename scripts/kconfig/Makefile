@@ -7,7 +7,7 @@ endif
 
 include config.mk
 
-$(shell test -d main/.git || { printf "  %-7s %s\n" "FETCH" "$(SUBDIR)/main/" >&2; git submodule update --init --depth 1 -- main > /dev/null 2>&1; })
+$(shell test -e main/.git || { printf "  %-7s %s\n" "FETCH" "$(SUBDIR)/main/" >&2; git submodule update --init --depth 1 -- main > /dev/null 2>&1; })
 
 CONF_SRC := main/conf.c main/zconf.tab.c
 CONF_OBJ := $(CONF_SRC:.c=.o)

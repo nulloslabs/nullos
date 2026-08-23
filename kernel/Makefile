@@ -9,7 +9,7 @@ include config.mk
 
 SRC := $(wildcard io/*.c) $(wildcard io/*.S) $(wildcard main/*.c) $(wildcard main/*.S) $(wildcard mm/*.c) $(wildcard mm/*.S) $(wildcard syscalls/*.c) $(wildcard syscalls/*.S)
 
-$(shell test -f include/generated/auto.conf || [ -n "$$KCONFIG_GEN" ] || KCONFIG_GEN=1 $(MAKE) defconfig)
+$(shell test -f include/generated/auto.conf || [ -n "$$KCONFIG_GEN" ] || KCONFIG_GEN=1 $(MAKE) defconfig 2>&1 | grep -v '^#' >&2)
 -include include/generated/auto.conf
 
 include Kconfig.mk
