@@ -147,8 +147,7 @@ $(SUBDIRS): config.mk Makefile
 
 kernel: config.mk Makefile linker.ld
 	@if [ ! -f .config ]; then \
-		printf "  %-7s %s\n" "ERROR" "No configuration file found, run 'make menuconfig' first" && \
-		exit 1; \
+		$(MAKE) defconfig; \
 	fi
 	@$(MAKE) limine_header
 	@$(MAKE) uacpi

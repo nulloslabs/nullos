@@ -54,7 +54,7 @@ A secure, fast and privacy-focused hobby OS.
 
 ## 🚀 Getting Started
 
-**1. Clone the repository:**
+**1. Clone the repository**
 
 ```bash
 # You can remove --depth=1 to clone the entire commit history (may take a while)
@@ -62,7 +62,7 @@ git clone --depth=1 https://github.com/nulloslabs/nullos.git
 cd nullos
 ```
 
-**2. Build the kernel and ISO:**
+**2. Build the kernel and ISO**
 
 > [!WARNING]
 > Use `make` if you are using Linux, else use `gmake`.
@@ -72,7 +72,7 @@ make menuconfig
 make
 ```
 
-**3. Run in QEMU:**
+**3. Run in QEMU**
 
 ```bash
 make qemu
