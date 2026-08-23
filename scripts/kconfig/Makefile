@@ -7,13 +7,15 @@ endif
 
 include config.mk
 
+$(shell test -d main/.git || { printf "  %-7s %s\n" "FETCH" "$(SUBDIR)/main/" >&2; git submodule update --init --depth 1 -- main > /dev/null 2>&1; })
+
 CONF_SRC := main/conf.c main/zconf.tab.c
 CONF_OBJ := $(CONF_SRC:.c=.o)
 CONF_DEP := $(CONF_OBJ:.o=.d)
 
-MCONF_SRC = main/mconf.c main/zconf.tab.c $(wildcard main/lxdialog/*.c)
-MCONF_OBJ = $(MCONF_SRC:.c=.o)
-MCONF_DEP = $(MCONF_OBJ:.o=.d)
+MCONF_SRC := main/mconf.c main/zconf.tab.c $(wildcard main/lxdialog/*.c)
+MCONF_OBJ := $(MCONF_SRC:.c=.o)
+MCONF_DEP := $(MCONF_OBJ:.o=.d)
 
 -include $(CONF_DEP)
 -include $(MCONF_DEP)
@@ -31,14 +33,7 @@ gen:
 	done
 
 kconfig:
-	@if [ ! -e "main/.git" ]; then \
-		printf "  %-7s %s\n" "FETCH" "$(SUBDIR)/main/" && \
-		git submodule update --init --depth 1 -- main > /dev/null 2>&1 && \
-		$(MAKE); \
-	else \
-		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/main/ is already up to date"; \
-	fi; \
-	$(MAKE) gen && \
+	@$(MAKE) gen && \
 	$(MAKE) $(CONF_OBJ) $(MCONF_OBJ) && \
 	if [ ! -f "main/$(CONF_OUTFILE)" ] || [ config.mk -nt main/$(CONF_OUTFILE) ] || [ Makefile -nt main/$(CONF_OUTFILE) ] || ( for o in $(CONF_OBJ); do [ "$$o" -nt main/$(CONF_OUTFILE) ] && exit 0; done; exit 1 ); then \
 		printf "  %-7s %s\n" "LD" "$(SUBDIR)/main/$(CONF_OUTFILE)" && \
