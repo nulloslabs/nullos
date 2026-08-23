@@ -11,6 +11,7 @@ SRC := $(wildcard io/*.c) $(wildcard io/*.S) $(wildcard main/*.c) $(wildcard mai
 UACPI_SRC = $(wildcard uacpi/source/*.c)
 
 include Kconfig.mk
+-include include/generated/auto.conf
 
 OBJ := $(SRC:.c=.o)
 OBJ := $(OBJ:.S=.o)
@@ -38,7 +39,7 @@ menuconfig:
 	if [ -f .config ] && { [ "$$oldsum" != "$$newsum" ] || [ ! -f include/generated/autoconf.h ]; }; then \
 		rm -rf include/generated && mkdir -p include/generated && \
 		KCONFIG_CONFIG=.config KCONFIG_AUTOHEADER=include/generated/autoconf.h KCONFIG_AUTOCONFIG=include/generated/auto.conf KCONFIG_TRISTATE=include/generated/tristate.conf ../scripts/kconfig/main/conf --silentoldconfig Kconfig && \
-		find include/generated -mindepth 1 ! -name 'autoconf.h' -delete; \
+		find include/generated -mindepth 1 ! -name 'autoconf.h' ! -name 'auto.conf' -delete; \
 	fi
 
 allyesconfig:
@@ -47,7 +48,7 @@ allyesconfig:
 	if [ -f .config ]; then \
 		rm -rf include/generated && mkdir -p include/generated && \
 		KCONFIG_CONFIG=.config KCONFIG_AUTOHEADER=include/generated/autoconf.h KCONFIG_AUTOCONFIG=include/generated/auto.conf KCONFIG_TRISTATE=include/generated/tristate.conf ../scripts/kconfig/main/conf --silentoldconfig Kconfig && \
-		find include/generated -mindepth 1 ! -name 'autoconf.h' -delete; \
+		find include/generated -mindepth 1 ! -name 'autoconf.h' ! -name 'auto.conf' -delete; \
 	fi
 
 allnoconfig:
@@ -56,7 +57,7 @@ allnoconfig:
 	if [ -f .config ]; then \
 		rm -rf include/generated && mkdir -p include/generated && \
 		KCONFIG_CONFIG=.config KCONFIG_AUTOHEADER=include/generated/autoconf.h KCONFIG_AUTOCONFIG=include/generated/auto.conf KCONFIG_TRISTATE=include/generated/tristate.conf ../scripts/kconfig/main/conf --silentoldconfig Kconfig && \
-		find include/generated -mindepth 1 ! -name 'autoconf.h' -delete; \
+		find include/generated -mindepth 1 ! -name 'autoconf.h' ! -name 'auto.conf' -delete; \
 	fi
 
 alldefconfig:
@@ -65,7 +66,7 @@ alldefconfig:
 	if [ -f .config ]; then \
 		rm -rf include/generated && mkdir -p include/generated && \
 		KCONFIG_CONFIG=.config KCONFIG_AUTOHEADER=include/generated/autoconf.h KCONFIG_AUTOCONFIG=include/generated/auto.conf KCONFIG_TRISTATE=include/generated/tristate.conf ../scripts/kconfig/main/conf --silentoldconfig Kconfig && \
-		find include/generated -mindepth 1 ! -name 'autoconf.h' -delete; \
+		find include/generated -mindepth 1 ! -name 'autoconf.h' ! -name 'auto.conf' -delete; \
 	fi
 
 defconfig: alldefconfig
@@ -76,7 +77,7 @@ oldconfig:
 	if [ -f .config ]; then \
 		rm -rf include/generated && mkdir -p include/generated && \
 		KCONFIG_CONFIG=.config KCONFIG_AUTOHEADER=include/generated/autoconf.h KCONFIG_AUTOCONFIG=include/generated/auto.conf KCONFIG_TRISTATE=include/generated/tristate.conf ../scripts/kconfig/main/conf --silentoldconfig Kconfig && \
-		find include/generated -mindepth 1 ! -name 'autoconf.h' -delete; \
+		find include/generated -mindepth 1 ! -name 'autoconf.h' ! -name 'auto.conf' -delete; \
 	fi
 
 olddefconfig:
@@ -85,7 +86,7 @@ olddefconfig:
 	if [ -f .config ]; then \
 		rm -rf include/generated && mkdir -p include/generated && \
 		KCONFIG_CONFIG=.config KCONFIG_AUTOHEADER=include/generated/autoconf.h KCONFIG_AUTOCONFIG=include/generated/auto.conf KCONFIG_TRISTATE=include/generated/tristate.conf ../scripts/kconfig/main/conf --silentoldconfig Kconfig && \
-		find include/generated -mindepth 1 ! -name 'autoconf.h' -delete; \
+		find include/generated -mindepth 1 ! -name 'autoconf.h' ! -name 'auto.conf' -delete; \
 	fi
 
 savedefconfig:
@@ -147,7 +148,9 @@ $(SUBDIRS): config.mk Makefile
 
 kernel: config.mk Makefile linker.ld
 	@if [ ! -f .config ]; then \
-		$(MAKE) defconfig; \
+		$(MAKE) defconfig > /dev/null 2>&1 && \
+		$(MAKE) kernel; \
+		exit $$?; \
 	fi
 	@$(MAKE) limine_header
 	@$(MAKE) uacpi
