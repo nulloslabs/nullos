@@ -22,6 +22,14 @@ MCONF_DEP = $(MCONF_OBJ:.o=.d)
 
 all: kconfig
 
+gen:
+	@for f in zconf.tab.c zconf.lex.c zconf.hash.c; do \
+		if [ ! -e "main/$$f" ]; then \
+			printf "  %-7s %s\n" "GEN" "$(SUBDIR)/main/$$f" && \
+			cp "main/$${f}_shipped" "main/$$f"; \
+		fi; \
+	done
+
 kconfig:
 	@if [ ! -e "main/.git" ]; then \
 		printf "  %-7s %s\n" "FETCH" "$(SUBDIR)/main/" && \
@@ -29,6 +37,7 @@ kconfig:
 	else \
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/main/ is already up to date"; \
 	fi; \
+	$(MAKE) gen && \
 	$(MAKE) $(CONF_OBJ) $(MCONF_OBJ) && \
 	if [ ! -f "main/$(CONF_OUTFILE)" ] || [ config.mk -nt main/$(CONF_OUTFILE) ] || [ Makefile -nt main/$(CONF_OUTFILE) ] || ( for o in $(CONF_OBJ); do [ "$$o" -nt main/$(CONF_OUTFILE) ] && exit 0; done; exit 1 ); then \
 		printf "  %-7s %s\n" "LD" "$(SUBDIR)/main/$(CONF_OUTFILE)" && \
@@ -55,12 +64,6 @@ main/mconf.o: main/mconf.c config.mk Makefile
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
-main/zconf.tab.c main/zconf.lex.c main/zconf.hash.c:
-	@if [ ! -e "$@" ]; then \
-		printf "  %-7s %s\n" "GEN" "$(SUBDIR)/$@" && \
-		cp "$@_shipped" "$@"; \
-	fi
-
 main/zconf.tab.o: main/zconf.tab.c config.mk Makefile
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
@@ -69,7 +72,11 @@ main/lxdialog/%.o: main/lxdialog/%.c config.mk Makefile
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+.PHONY: all kconfig gen clean mrproper
+
 clean:
+	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/zconf.*.c"
+	@rm -rf main/zconf.tab.c main/zconf.lex.c main/zconf.hash.c
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/conf $(SUBDIR)/main/mconf"
 	@rm -rf main/conf main/mconf
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/*.o $(SUBDIR)/main/*.d"
@@ -79,4 +86,4 @@ clean:
 
 mrproper: clean
 
-.PHONY: all kconfig clean mrproper
+.PHONY: all gen kconfig clean mrproper
