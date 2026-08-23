@@ -137,8 +137,8 @@ $(UACPI_OUTFILE): $(UACPI_OBJ) FORCE
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/$(UACPI_OUTFILE) is already up to date"; \
 	fi
 
-$(UACPI_BUILD)/%.o: uacpi/source/%.c config.mk Makefile $(UACPI_FORCE_REBUILD)
-	@mkdir -p $(UACPI_BUILD)
+uacpi/build/%.o: uacpi/source/%.c config.mk Makefile $(UACPI_FORCE_REBUILD)
+	@mkdir -p uacpi/build
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/$@"
 	@$(CC) $(UACPI_CFLAGS) -c $< -o $@
 
@@ -187,8 +187,8 @@ clean:
 	@$(MAKE) -C io clean
 	@$(MAKE) -C mm clean
 	@$(MAKE) -C syscalls clean
-	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/$(UACPI_BUILD)/"
-	@rm -rf $(UACPI_BUILD)
+	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/uacpi/build/"
+	@rm -rf uacpi/build
 
 mrproper: clean
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/include/generated/ $(SUBDIR)/.config $(SUBDIR)/.config.old $(SUBDIR)/.config.cmd"

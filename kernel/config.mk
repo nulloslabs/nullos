@@ -51,7 +51,7 @@ ifneq ($(CHECK_OBJ),)
 	endif
 endif
 
-UACPI_CHECK_OBJ := $(firstword $(wildcard $(UACPI_BUILD)/*.o))
+UACPI_CHECK_OBJ := $(firstword $(wildcard uacpi/build/*.o))
 ifneq ($(UACPI_CHECK_OBJ),)
 	UACPI_DEBUG_VAL := $(if $(filter y,$(CONFIG_DEBUG)),1,0)
 	ifneq ($(UACPI_DEBUG_VAL),$(shell $(OBJDUMP) $(OBJDUMP_FLAGS) -h $(UACPI_CHECK_OBJ) 2>/dev/null | grep -q '\.debug' && printf 1 || printf 0))
