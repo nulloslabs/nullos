@@ -147,7 +147,7 @@ $(SUBDIRS): config.mk Makefile
 	@$(MAKE) -C $@
 
 kernel: config.mk Makefile linker.ld
-	@if [ ! -f .config ]; then \
+	@if [ ! -f include/generated/auto.conf ]; then \
 		$(MAKE) defconfig > /dev/null 2>&1 && \
 		$(MAKE) kernel; \
 		exit $$?; \
