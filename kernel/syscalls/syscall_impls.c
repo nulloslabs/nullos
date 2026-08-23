@@ -35,6 +35,7 @@
 #include <sys/epoll.h>
 #include <sys/uio.h>
 #include <sys/sysmacros.h>
+#include <autoconf.h>
 #include <main/log.h>
 #include <main/limine_req.h>
 #include <main/spinlocks.h>
@@ -82,13 +83,6 @@
 #include <mm/vma.h>
 #include <syscalls/syscalls.h>
 #include <syscalls/syscall_impls.h>
-
-#define RFLAGS_IOPL (3ULL << 12)
-#define RFLAGS_NT (1ULL << 14)
-#define RFLAGS_RF (1ULL << 16)
-#define RFLAGS_VM (1ULL << 17)
-#define RFLAGS_FIXED (1ULL << 1)
-#define USER_RFLAGS_FORBIDDEN (RFLAGS_IOPL | RFLAGS_NT | RFLAGS_RF | RFLAGS_VM)
 
 /*
    Tried to fucking modularize this...
@@ -305,7 +299,9 @@ static void resolve_path_symlinks_ex(const char *path, char *out, size_t out_siz
                     followed = true;
                 }
             }
-        } else if (check_iso9660_path(prefix)) {
+        }
+#ifdef CONFIG_ISO9660
+        else if (check_iso9660_path(prefix)) {
             struct stat iso_st;
             if (stat_iso9660(prefix, &iso_st, false) == 0 && S_ISLNK(iso_st.st_mode)) {
                 char raw_target[256];
@@ -327,6 +323,7 @@ static void resolve_path_symlinks_ex(const char *path, char *out, size_t out_siz
                 }
             }
         }
+#endif
 
         if (followed) {
             link_count++;
@@ -562,32 +559,51 @@ static bool stat_initrd_to_kst(const char *abs_path, struct stat *kst, bool foll
     return true;
 }
 
+#ifdef CONFIG_EXT4
 static bool stat_ext4_to_kst(const char *abs_path, struct stat *kst, bool follow) {
     if (!check_ext4_path(abs_path)) return false;
     return stat_ext4(abs_path, kst, follow) == 0;
 }
+#else
+static bool stat_ext4_to_kst(const char *abs_path, struct stat *kst, bool follow) { (void)abs_path; (void)kst; (void)follow; return false; }
+#endif
 
+#ifdef CONFIG_ISO9660
 static bool stat_iso9660_to_kst(const char *abs_path, struct stat *kst, bool follow) {
     if (!check_iso9660_path(abs_path)) return false;
     return stat_iso9660(abs_path, kst, follow) == 0;
 }
+#else
+static bool stat_iso9660_to_kst(const char *abs_path, struct stat *kst, bool follow) { (void)abs_path; (void)kst; (void)follow; return false; }
+#endif
 
+#ifdef CONFIG_VFAT
 static bool stat_vfat_to_kst(const char *abs_path, struct stat *kst, bool follow) {
     if (!check_vfat_path(abs_path)) return false;
     return stat_vfat(abs_path, kst, follow) == 0;
 }
+#else
+static bool stat_vfat_to_kst(const char *abs_path, struct stat *kst, bool follow) { (void)abs_path; (void)kst; (void)follow; return false; }
+#endif
 
 static int check_directory_access(const char *path, bool write) {
     struct stat st;
-    if (check_ext4_path(path)) {
+    if (0) {
+#ifdef CONFIG_EXT4
+    } else if (check_ext4_path(path)) {
         if (!stat_ext4_to_kst(path, &st, true)) return -ENOENT;
         if (write) return -EROFS;
+#endif
+#ifdef CONFIG_ISO9660
     } else if (check_iso9660_path(path)) {
         if (!stat_iso9660_to_kst(path, &st, true)) return -ENOENT;
         if (write) return -EROFS;
+#endif
+#ifdef CONFIG_VFAT
     } else if (check_vfat_path(path)) {
         if (!stat_vfat_to_kst(path, &st, true)) return -ENOENT;
         if (write) return -EROFS;
+#endif
     } else if (is_tmpfs_dir(path)) {
         if (!stat_tmpfs_to_kst(path, &st, true)) return -ENOENT;
     } else {
@@ -753,6 +769,7 @@ static int open_tmpfs_common(const char *abs_path, uint32_t flags, mode_t mode) 
     return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_TMPFS, flags);
 }
 
+#ifdef CONFIG_EXT4
 // Read-only ext-family open helper. Returns 1 when the path is not on ext4.
 static int open_ext4_common(const char *abs_path, uint32_t flags) {
     if (!check_ext4_path(abs_path)) return 1;
@@ -768,7 +785,11 @@ static int open_ext4_common(const char *abs_path, uint32_t flags) {
     if (!can_access_stat_mode(&st, 1, 0, S_ISDIR(st.st_mode))) return -EACCES;
     return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_EXT4, flags);
 }
+#else
+static int open_ext4_common(const char *abs_path, uint32_t flags) { (void)abs_path; (void)flags; return 1; }
+#endif
 
+#ifdef CONFIG_ISO9660
 // Read-only iso9660 open helper. Returns 1 when the path is not on iso9660.
 static int open_iso9660_common(const char *abs_path, uint32_t flags) {
     if (!check_iso9660_path(abs_path)) return 1;
@@ -784,7 +805,11 @@ static int open_iso9660_common(const char *abs_path, uint32_t flags) {
     if (!can_access_stat_mode(&st, 1, 0, S_ISDIR(st.st_mode))) return -EACCES;
     return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_ISO9660, flags);
 }
+#else
+static int open_iso9660_common(const char *abs_path, uint32_t flags) { (void)abs_path; (void)flags; return 1; }
+#endif
 
+#ifdef CONFIG_VFAT
 static int open_fat32_common(const char *abs_path, uint32_t flags) {
     if (!check_vfat_path(abs_path)) return 1;
     int want_write = (flags & O_WRONLY) || (flags & O_RDWR);
@@ -796,6 +821,9 @@ static int open_fat32_common(const char *abs_path, uint32_t flags) {
     if (!can_access_stat_mode(&st, 1, 0, S_ISDIR(st.st_mode))) return -EACCES;
     return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_VFAT, flags);
 }
+#else
+static int open_fat32_common(const char *abs_path, uint32_t flags) { (void)abs_path; (void)flags; return 1; }
+#endif
 
 static uint64_t resolve_futex_key(uint32_t *uaddr, syscall_frame_t *frame) {
     if (!uaddr || !user_range_ok(current_task_ptr->ctx, (uint64_t)uaddr, sizeof(uint32_t))) {
@@ -1347,8 +1375,12 @@ static int prepare_unix_socket_path(uint8_t *addr, uint32_t *addrlen, bool bindi
 
 
 static int reject_procfs_mutation(const char *path) {
+#ifdef CONFIG_EXT4
     if (check_ext4_path(path)) return -EROFS;
+#endif
+#ifdef CONFIG_ISO9660
     if (check_iso9660_path(path)) return -EROFS;
+#endif
     if (is_procfs_path(path)) return -EROFS;
     return 0;
 }
@@ -1362,8 +1394,12 @@ static int reject_virtual_removal(const char *path) {
 
 static int change_path_ownership(const char *path, uid_t uid, gid_t gid, bool follow) {
     if (current_task_ptr->euid != 0) return -EPERM;
+#ifdef CONFIG_EXT4
     if (check_ext4_path(path)) return -EROFS;
+#endif
+#ifdef CONFIG_ISO9660
     if (check_iso9660_path(path)) return -EROFS;
+#endif
     if (is_devtmpfs_path(path, NULL) || is_devpts_path(path, NULL) || is_procfs_path(path)) return -EPERM;
     if (is_tmpfs_dir(path)) return chown_tmpfs(path, uid, gid, follow);
     return chown_initrd(path, uid, gid, follow);
@@ -2293,14 +2329,25 @@ static void statx_add_mount(struct statx *sx, const char *path, unsigned int mas
 
 static void statx_add_fs_metadata(struct statx *sx, const char *path, bool follow, unsigned int mask) {
     if (!path) return;
+#ifdef CONFIG_EXT4
     if (check_ext4_path(path)) statx_ext4_metadata(path, sx, follow);
+#endif
     if (mask & STATX_BTIME) {
         tmpfs_file_t file = follow ? stat_tmpfs(path) : stat_tmpfs_nofollow(path);
         if (file.mode) {
             sx->stx_btime.tv_sec = file.btime.tv_sec;
             sx->stx_btime.tv_nsec = file.btime.tv_nsec;
             sx->stx_mask |= STATX_BTIME;
-        } else if (!check_ext4_path(path) && !check_iso9660_path(path) && !is_procfs_path(path) && !is_devtmpfs_path(path, NULL) && !is_devpts_path(path, NULL)) {
+        }
+#if defined(CONFIG_EXT4) && defined(CONFIG_ISO9660)
+        else if (!check_ext4_path(path) && !check_iso9660_path(path) && !is_procfs_path(path) && !is_devtmpfs_path(path, NULL) && !is_devpts_path(path, NULL)) {
+#elif defined(CONFIG_EXT4)
+        else if (!check_ext4_path(path) && !is_procfs_path(path) && !is_devtmpfs_path(path, NULL) && !is_devpts_path(path, NULL)) {
+#elif defined(CONFIG_ISO9660)
+        else if (!check_iso9660_path(path) && !is_procfs_path(path) && !is_devtmpfs_path(path, NULL) && !is_devpts_path(path, NULL)) {
+#else
+        else if (!is_procfs_path(path) && !is_devtmpfs_path(path, NULL) && !is_devpts_path(path, NULL)) {
+#endif
             initrd_file_t initrd_file = follow ? stat_initrd(path) : stat_initrd_nofollow(path);
             if (initrd_file.mode) {
                 sx->stx_btime.tv_sec = initrd_file.btime.tv_sec;
@@ -2319,8 +2366,12 @@ static int stat_fd_to_kst(int fd, struct stat *kst) {
     if (entry->type == FD_STREAM && stat_virtual_device("/dev/tty1", kst)) return 0;
     if (entry->type == FD_FILE) return stat_initrd_to_kst(entry->path, kst, true) ? 0 : -ENOENT;
     if (entry->type == FD_TMPFS) return stat_tmpfs_to_kst(entry->path, kst, true) ? 0 : -ENOENT;
+#ifdef CONFIG_EXT4
     if (entry->type == FD_EXT4) return stat_ext4(entry->path, kst, true);
+#endif
+#ifdef CONFIG_ISO9660
     if (entry->type == FD_ISO9660) return stat_iso9660(entry->path, kst, true);
+#endif
     if (entry->type == FD_PROC) return stat_proc(entry->path, NULL, kst, true) ? 0 : -ENOENT;
     memset(kst, 0, sizeof(*kst));
     if (entry->type == FD_PIPE) kst->st_mode = S_IFIFO | 0600;
@@ -2389,8 +2440,12 @@ static int set_advisory_lock(fd_entry_t *entry, int lock_type, bool nonblocking,
 }
 
 static int do_truncate_path(const char *abs_path, uint64_t length) {
+#ifdef CONFIG_EXT4
     if (check_ext4_path(abs_path)) return -EROFS;
+#endif
+#ifdef CONFIG_ISO9660
     if (check_iso9660_path(abs_path)) return -EROFS;
+#endif
     // tmpfs
     if (is_tmpfs_dir(abs_path)) {
         tmpfs_file_t f = stat_tmpfs(abs_path);
@@ -2456,6 +2511,7 @@ static int change_working_directory(const char *abs_path) {
         return 0;
     }
 
+#ifdef CONFIG_EXT4
     if (check_ext4_path(resolved)) {
         struct stat st;
         int status = stat_ext4(resolved, &st, true);
@@ -2466,7 +2522,9 @@ static int change_working_directory(const char *abs_path) {
         current_task_ptr->cwd[255] = '\0';
         return 0;
     }
+#endif
 
+#ifdef CONFIG_ISO9660
     if (check_iso9660_path(resolved)) {
         struct stat st;
         int status = stat_iso9660(resolved, &st, true);
@@ -2477,7 +2535,9 @@ static int change_working_directory(const char *abs_path) {
         current_task_ptr->cwd[255] = '\0';
         return 0;
     }
+#endif
 
+#ifdef CONFIG_VFAT
     if (check_vfat_path(resolved)) {
         struct stat st;
         int status = stat_vfat(resolved, &st, true);
@@ -2488,6 +2548,7 @@ static int change_working_directory(const char *abs_path) {
         current_task_ptr->cwd[255] = '\0';
         return 0;
     }
+#endif
 
     initrd_file_t dir = read_initrd(resolved);
     if (!dir.data && !dir.mode) return -ENOENT;
@@ -2503,7 +2564,13 @@ static int check_path_access(const char *path, const char *abs_path, int mode, b
     int want_write = (mode & W_OK) != 0;
     int want_exec = (mode & X_OK) != 0;
 
+#if defined(CONFIG_EXT4) && defined(CONFIG_ISO9660)
     if (want_write && (check_ext4_path(abs_path) || check_iso9660_path(abs_path))) return -EROFS;
+#elif defined(CONFIG_EXT4)
+    if (want_write && check_ext4_path(abs_path)) return -EROFS;
+#elif defined(CONFIG_ISO9660)
+    if (want_write && check_iso9660_path(abs_path)) return -EROFS;
+#endif
 
     struct stat kst = {0};
     if (stat_virtual_device(abs_path, &kst) || stat_tmpfs_to_kst(abs_path, &kst, follow) || stat_ext4_to_kst(abs_path, &kst, follow) || stat_iso9660_to_kst(abs_path, &kst, follow) || stat_vfat_to_kst(abs_path, &kst, follow) || stat_proc(abs_path, path, &kst, follow)) {
@@ -2888,6 +2955,7 @@ void sys_fstat(syscall_frame_t *frame) {
             return;
         }
     }
+#ifdef CONFIG_EXT4
     if (entry->type == FD_EXT4) {
         struct stat kst = {0};
         int status = stat_ext4(entry->path, &kst, true);
@@ -2896,6 +2964,8 @@ void sys_fstat(syscall_frame_t *frame) {
         frame->rax = 0;
         return;
     }
+#endif
+#ifdef CONFIG_ISO9660
     if (entry->type == FD_ISO9660) {
         struct stat kst = {0};
         int status = stat_iso9660(entry->path, &kst, true);
@@ -2904,6 +2974,8 @@ void sys_fstat(syscall_frame_t *frame) {
         frame->rax = 0;
         return;
     }
+#endif
+#ifdef CONFIG_VFAT
     if (entry->type == FD_VFAT) {
         struct stat kst = {0};
         int status = stat_vfat(entry->path, &kst, true);
@@ -2912,6 +2984,7 @@ void sys_fstat(syscall_frame_t *frame) {
         frame->rax = 0;
         return;
     }
+#endif
     if (entry->type == FD_PROC) {
         struct stat kst = {0};
         if (stat_proc(entry->path, NULL, &kst, true)) {
@@ -3100,25 +3173,35 @@ void sys_lseek(syscall_frame_t *frame) {
         tmpfs_file_t file = read_tmpfs(entry->path);
         if (!file.mode) { frame->rax = -ENOENT; return; }
         file_size = (int64_t)file.size;
-    } else if (entry->type == FD_EXT4) {
+    }
+#ifdef CONFIG_EXT4
+    else if (entry->type == FD_EXT4) {
         struct stat st;
         int status = stat_ext4(entry->path, &st, true);
         if (status < 0) { frame->rax = status; return; }
         if (st.st_size < 0) { frame->rax = -EOVERFLOW; return; }
         file_size = st.st_size;
-    } else if (entry->type == FD_ISO9660) {
+    }
+#endif
+#ifdef CONFIG_ISO9660
+    else if (entry->type == FD_ISO9660) {
         struct stat st;
         int status = stat_iso9660(entry->path, &st, true);
         if (status < 0) { frame->rax = status; return; }
         if (st.st_size < 0) { frame->rax = -EOVERFLOW; return; }
         file_size = st.st_size;
-    } else if (entry->type == FD_VFAT) {
+    }
+#endif
+#ifdef CONFIG_VFAT
+    else if (entry->type == FD_VFAT) {
         struct stat st;
         int status = stat_vfat(entry->path, &st, true);
         if (status < 0) { frame->rax = status; return; }
         if (st.st_size < 0) { frame->rax = -EOVERFLOW; return; }
         file_size = st.st_size;
-    } else {
+    }
+#endif
+    else {
         initrd_file_t file = read_initrd(entry->path);
         if (!file.mode) { frame->rax = -ENOENT; return; }
         file_size = (int64_t)file.size;
@@ -3338,6 +3421,7 @@ void sys_mmap(syscall_frame_t *frame) {
         if (fb_mapped) { frame->rax = (uint64_t)ptr; return; }
         fd_entry_t *entry = mapping_entry;
 
+#ifdef CONFIG_EXT4
         if (entry->type == FD_EXT4) {
             uint8_t *chunk = malloc(65536);
             if (!chunk) { rollback_mmap(ptr, num_pages, retained_pages); frame->rax = (uint64_t)-ENOMEM; return; }
@@ -3354,7 +3438,10 @@ void sys_mmap(syscall_frame_t *frame) {
                 if ((uint64_t)got < amount) break;
             }
             free(chunk);
-        } else if (entry->type == FD_ISO9660) {
+        }
+#endif
+#ifdef CONFIG_ISO9660
+        if (entry->type == FD_ISO9660) {
             uint8_t *chunk = malloc(65536);
             if (!chunk) { rollback_mmap(ptr, num_pages, retained_pages); frame->rax = (uint64_t)-ENOMEM; return; }
             uint64_t copied = 0;
@@ -3370,7 +3457,10 @@ void sys_mmap(syscall_frame_t *frame) {
                 if ((uint64_t)got < amount) break;
             }
             free(chunk);
-        } else if (entry->type == FD_VFAT) {
+        }
+#endif
+#ifdef CONFIG_VFAT
+        if (entry->type == FD_VFAT) {
             uint8_t *chunk = malloc(65536);
             if (!chunk) { rollback_mmap(ptr, num_pages, retained_pages); frame->rax = (uint64_t)-ENOMEM; return; }
             uint64_t copied = 0;
@@ -3386,7 +3476,9 @@ void sys_mmap(syscall_frame_t *frame) {
                 if ((uint64_t)got < amount) break;
             }
             free(chunk);
-        } else if (entry->type == FD_TMPFS) {
+        }
+#endif
+        if (entry->type == FD_TMPFS) {
             tmpfs_file_t file = read_tmpfs(entry->path);
             uint64_t map_size = num_pages * PAGE_SIZE;
             uint64_t file_avail = file.size > offset ? file.size - offset : 0;
@@ -3611,8 +3703,8 @@ void sys_rt_sigreturn(syscall_frame_t *frame) {
         frame->rax = (uint64_t)-EFAULT;
         return;
     }
-    saved_frame.rflags &= ~USER_RFLAGS_FORBIDDEN;
-    saved_frame.rflags |= RFLAGS_FIXED;
+    saved_frame.rflags &= ~(SYSCALL_RFLAG_IOPL | SYSCALL_RFLAG_NT | SYSCALL_RFLAG_RF | SYSCALL_RFLAG_VM);
+    saved_frame.rflags |= SYSCALL_RFLAG_FIXED;
     current_task_ptr->blocked_signals = saved.blocked_signals & ~((1ULL << (SIGKILL - 1)) | (1ULL << (SIGSTOP - 1)));
     *frame = saved_frame;
 }
@@ -3820,15 +3912,21 @@ void sys_ioctl(syscall_frame_t *frame) {
             device_bus_t bus;
             int disk_index;
             if (get_block_device_bus(rel, &bus, &disk_index) < 0) { frame->rax = (uint64_t)-EINVAL; return; }
+#ifdef CONFIG_PATA
             if (bus == DEV_BUS_PATA) {
                 remove_gpt_partitions(disk_index, true);
                 remove_mbr_partitions(disk_index, true);
                 if (!probe_gpt_for_pata_disk(disk_index, rel, blk_size)) probe_mbr_for_pata_disk(disk_index, rel, blk_size);
-            } else if (bus == DEV_BUS_SATA) {
+            } else
+#endif
+#ifdef CONFIG_SATA
+            if (bus == DEV_BUS_SATA) {
                 remove_gpt_partitions(disk_index, false);
                 remove_mbr_partitions(disk_index, false);
                 if (!probe_gpt_for_sata_disk(disk_index, rel, blk_size)) probe_mbr_for_sata_disk(disk_index, rel, blk_size);
-            } else {
+            } else
+#endif
+            {
                 frame->rax = (uint64_t)-EINVAL;
                 return;
             }
@@ -4212,6 +4310,7 @@ void sys_pread64(syscall_frame_t *frame) {
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
     if (!fd_allows_read(entry)) { frame->rax = (uint64_t)-EBADF; return; }
+#ifdef CONFIG_EXT4
     if (entry->type == FD_EXT4) {
         if (count == 0) { frame->rax = 0; return; }
         if (count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
@@ -4223,6 +4322,8 @@ void sys_pread64(syscall_frame_t *frame) {
         frame->rax = (uint64_t)got;
         return;
     }
+#endif
+#ifdef CONFIG_ISO9660
     if (entry->type == FD_ISO9660) {
         if (count == 0) { frame->rax = 0; return; }
         if (count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
@@ -4234,6 +4335,8 @@ void sys_pread64(syscall_frame_t *frame) {
         frame->rax = (uint64_t)got;
         return;
     }
+#endif
+#ifdef CONFIG_VFAT
     if (entry->type == FD_VFAT) {
         if (count == 0) { frame->rax = 0; return; }
         if (count > MAX_IO_COUNT) { frame->rax = (uint64_t)-EINVAL; return; }
@@ -4245,6 +4348,7 @@ void sys_pread64(syscall_frame_t *frame) {
         frame->rax = (uint64_t)got;
         return;
     }
+#endif
     if (entry->type != FD_FILE) { frame->rax = (uint64_t)-ESPIPE; return; }
 
     initrd_file_t file = read_initrd(entry->path);
@@ -5731,6 +5835,7 @@ void sys_getdents(syscall_frame_t *frame) {
     char resolved_path[256];
     resolve_dir_for_readdir(entry->path, resolved_path, sizeof(resolved_path), NULL, 0);
 
+#ifdef CONFIG_EXT4
     if (entry->type == FD_EXT4 || check_ext4_path(resolved_path)) {
         struct stat st;
         int status = stat_ext4(resolved_path, &st, true);
@@ -5758,7 +5863,9 @@ void sys_getdents(syscall_frame_t *frame) {
         frame->rax = written;
         return;
     }
+#endif
 
+#ifdef CONFIG_ISO9660
     if (entry->type == FD_ISO9660 || check_iso9660_path(resolved_path)) {
         struct stat st;
         int status = stat_iso9660(resolved_path, &st, true);
@@ -5786,7 +5893,9 @@ void sys_getdents(syscall_frame_t *frame) {
         frame->rax = written;
         return;
     }
+#endif
 
+#ifdef CONFIG_VFAT
     if (entry->type == FD_VFAT || check_vfat_path(resolved_path)) {
         struct stat st;
         int status = stat_vfat(resolved_path, &st, true);
@@ -5814,6 +5923,7 @@ void sys_getdents(syscall_frame_t *frame) {
         frame->rax = written;
         return;
     }
+#endif
 
     // tmpfs directory enumeration (/tmp, /run, ...)  [getdents]
     // Path-based throughout, mirroring the plain initrd enumeration below
@@ -6273,6 +6383,7 @@ void sys_readlink(syscall_frame_t *frame) {
         return;
     }
 
+#ifdef CONFIG_EXT4
     if (check_ext4_path(abs_path)) {
         char target[256];
         int tlen = read_ext4_link(abs_path, target, sizeof(target));
@@ -6283,8 +6394,10 @@ void sys_readlink(syscall_frame_t *frame) {
         frame->rax = (uint64_t)ulen;
         return;
     }
+#endif
 
     // Rock ridge symlinks live in the record system use area.
+#ifdef CONFIG_ISO9660
     if (check_iso9660_path(abs_path)) {
         char target[256];
         int tlen = read_iso9660_link(abs_path, target, sizeof(target));
@@ -6295,6 +6408,7 @@ void sys_readlink(syscall_frame_t *frame) {
         frame->rax = (uint64_t)ulen;
         return;
     }
+#endif
 
     // Must inspect the symlink itself, not its target.
     initrd_file_t file = stat_initrd_nofollow(abs_path);
@@ -6320,8 +6434,12 @@ void sys_chmod(syscall_frame_t *frame) {
     char abs_path[256];
     get_absolute_path(path_buf, abs_path, sizeof(abs_path));
 
+#ifdef CONFIG_EXT4
     if (check_ext4_path(abs_path)) { frame->rax = (uint64_t)-EROFS; return; }
+#endif
+#ifdef CONFIG_ISO9660
     if (check_iso9660_path(abs_path)) { frame->rax = (uint64_t)-EROFS; return; }
+#endif
 
     if (is_tmpfs_dir(abs_path)) {
         struct stat tst;
@@ -7366,6 +7484,7 @@ void sys_readahead(syscall_frame_t *frame) {
         return;
     }
 
+#ifdef CONFIG_EXT4
     if (entry->type == FD_EXT4) {
         uint8_t *buffer = malloc(count);
         if (!buffer) { frame->rax = (uint64_t)-ENOMEM; return; }
@@ -7374,7 +7493,9 @@ void sys_readahead(syscall_frame_t *frame) {
         frame->rax = status < 0 ? (uint64_t)status : 0;
         return;
     }
+#endif
 
+#ifdef CONFIG_ISO9660
     if (entry->type == FD_ISO9660) {
         uint8_t *buffer = malloc(count);
         if (!buffer) { frame->rax = (uint64_t)-ENOMEM; return; }
@@ -7383,7 +7504,9 @@ void sys_readahead(syscall_frame_t *frame) {
         frame->rax = status < 0 ? (uint64_t)status : 0;
         return;
     }
+#endif
 
+#ifdef CONFIG_VFAT
     if (entry->type == FD_VFAT) {
         uint8_t *buffer = malloc(count);
         if (!buffer) { frame->rax = (uint64_t)-ENOMEM; return; }
@@ -7392,6 +7515,7 @@ void sys_readahead(syscall_frame_t *frame) {
         frame->rax = status < 0 ? (uint64_t)status : 0;
         return;
     }
+#endif
 
     // FD_FILE (initrd): data is already fully in memory.
     // Validate the requested range lies within the file.
@@ -7708,6 +7832,7 @@ void sys_getdents64(syscall_frame_t *frame) {
     char resolved_path[256];
     resolve_dir_for_readdir(entry->path, resolved_path, sizeof(resolved_path), NULL, 0);
 
+#ifdef CONFIG_EXT4
     if (entry->type == FD_EXT4 || check_ext4_path(resolved_path)) {
         struct stat st;
         int status = stat_ext4(resolved_path, &st, true);
@@ -7735,7 +7860,9 @@ void sys_getdents64(syscall_frame_t *frame) {
         frame->rax = written;
         return;
     }
+#endif
 
+#ifdef CONFIG_ISO9660
     if (entry->type == FD_ISO9660 || check_iso9660_path(resolved_path)) {
         struct stat st;
         int status = stat_iso9660(resolved_path, &st, true);
@@ -7763,7 +7890,9 @@ void sys_getdents64(syscall_frame_t *frame) {
         frame->rax = written;
         return;
     }
+#endif
 
+#ifdef CONFIG_VFAT
     if (entry->type == FD_VFAT || check_vfat_path(resolved_path)) {
         struct stat st;
         int status = stat_vfat(resolved_path, &st, true);
@@ -7791,6 +7920,7 @@ void sys_getdents64(syscall_frame_t *frame) {
         frame->rax = written;
         return;
     }
+#endif
 
     // tmpfs directory enumeration (/tmp, /run, ...)
     // Path-based throughout (next_tmpfs_child is the exact brother of
@@ -8534,6 +8664,7 @@ void sys_readlinkat(syscall_frame_t *frame) {
         return;
     }
 
+#ifdef CONFIG_EXT4
     if (check_ext4_path(abs_path)) {
         char target[256];
         int tlen = read_ext4_link(abs_path, target, sizeof(target));
@@ -8544,7 +8675,9 @@ void sys_readlinkat(syscall_frame_t *frame) {
         frame->rax = (uint64_t)ulen;
         return;
     }
+#endif
 
+#ifdef CONFIG_ISO9660
     if (check_iso9660_path(abs_path)) {
         char target[256];
         int tlen = read_iso9660_link(abs_path, target, sizeof(target));
@@ -8555,6 +8688,7 @@ void sys_readlinkat(syscall_frame_t *frame) {
         frame->rax = (uint64_t)ulen;
         return;
     }
+#endif
 
     initrd_file_t file = stat_initrd_nofollow(abs_path);
     if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
@@ -8584,8 +8718,12 @@ void sys_fchmodat(syscall_frame_t *frame) {
     int res = build_abs_path_at(dirfd, path_buf, abs_path, sizeof(abs_path));
     if (res < 0) { frame->rax = (uint64_t)res; return; }
 
+#ifdef CONFIG_EXT4
     if (check_ext4_path(abs_path)) { frame->rax = (uint64_t)-EROFS; return; }
+#endif
+#ifdef CONFIG_ISO9660
     if (check_iso9660_path(abs_path)) { frame->rax = (uint64_t)-EROFS; return; }
+#endif
 
     if (is_tmpfs_dir(abs_path)) {
         struct stat tst;

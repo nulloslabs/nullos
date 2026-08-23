@@ -162,12 +162,12 @@ initrd:
 		fi && \
 		rm -f main/linuxrc && \
 		printf "  %-7s %s\n" "CPIO" "$(SUBDIR)/$(OUTFILE)" && \
-		rm -f $(OUTFILE).cpio.part $(OUTFILE).part && \
-		(cd main && find . -print0 | $(CPIO) $(CPIOFLAGS) 2>/dev/null > ../$(OUTFILE).cpio.part) && \
-		gzip -9 < $(OUTFILE).cpio.part > $(OUTFILE).part && \
-		gzip -t $(OUTFILE).part && \
-		mv $(OUTFILE).part $(OUTFILE) && \
-		rm -f $(OUTFILE).cpio.part; \
+		rm -f $(OUTFILE).part && \
+		(cd main && find . -print0 | $(CPIO) $(CPIOFLAGS) 2>/dev/null > ../$(OUTFILE).part) && \
+		gzip -9 < $(OUTFILE).part > $(OUTFILE).part.gz && \
+		gzip -t $(OUTFILE).part.gz && \
+		mv $(OUTFILE).part.gz $(OUTFILE) && \
+		rm -f $(OUTFILE).part; \
 	else \
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/$(OUTFILE) is already up to date"; \
 	fi

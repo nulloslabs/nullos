@@ -12,11 +12,35 @@ all: iso
 kernel:
 	@$(MAKE) -C kernel
 
-initrd:
-	@$(MAKE) -C initrd
+menuconfig:
+	@$(MAKE) -C kernel menuconfig
+
+allyesconfig:
+	@$(MAKE) -C kernel allyesconfig
+
+allnoconfig:
+	@$(MAKE) -C kernel allnoconfig
+
+alldefconfig:
+	@$(MAKE) -C kernel alldefconfig
+
+defconfig:
+	@$(MAKE) -C kernel defconfig
+
+oldconfig:
+	@$(MAKE) -C kernel oldconfig
+
+olddefconfig:
+	@$(MAKE) -C kernel oldefconfig
+
+savedefconfig:
+	@$(MAKE) -C kernel savedefconfig
 
 tools:
 	@$(MAKE) -C tools
+
+initrd:
+	@$(MAKE) -C initrd
 
 iso:
 	@$(MAKE) -C iso
@@ -37,4 +61,4 @@ mrproper:
 	@$(MAKE) -C tools mrproper
 	@$(MAKE) -C iso mrproper
 
-.PHONY: all tools kernel initrd iso qemu clean mrproper
+.PHONY: all kernel menuconfig allyesconfig allnoconfig alldefconfig defconfig oldconfig olddefconfig savedefconfig tools initrd iso qemu clean mrproper

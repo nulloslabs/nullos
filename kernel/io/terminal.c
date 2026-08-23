@@ -9,7 +9,6 @@
 #include <main/spinlocks.h>
 #include <main/halt.h>
 #include <io/fb.h>
-#include <io/bga.h>
 #include <io/fonts.h>
 #include <io/serial.h>
 #include <io/terminal.h>
@@ -216,14 +215,11 @@ static void backbuffer_reload_from_fb(struct limine_framebuffer *fb) {
         uint64_t backbuffer_row_offset = y * back_buffer_width;
         for (uint64_t x = 0; x < back_buffer_width; x++) {
             uint64_t fb_offset = fb_row_offset + x * ((bpp + 7) / 8);
-            if (bpp == 8) {
-                back_buffer[backbuffer_row_offset + x] = bga_palette_color(fb_addr[fb_offset]);
-                continue;
-            }
 
             uint32_t pixel = 0;
             switch (bpp) {
-                case 15: case 16: pixel = *(uint16_t *)(fb_addr + fb_offset); break;
+                case 15:
+                case 16: pixel = *(uint16_t *)(fb_addr + fb_offset); break;
                 case 24:
                     pixel  = (uint32_t)fb_addr[fb_offset + 0];
                     pixel |= (uint32_t)fb_addr[fb_offset + 1] << 8;
@@ -306,7 +302,6 @@ static void flush_backbuffer(struct limine_framebuffer *fb) {
 
             uint64_t fb_offset = fb_row_offset + x * ((bpp + 7) / 8);
             switch (bpp) {
-                case 8: fb_addr[fb_offset] = bga_palette_index(color); break;
                 case 15:
                 case 16: *(uint16_t *)(fb_addr + fb_offset) = (uint16_t)pixel; break;
                 case 24:
@@ -376,7 +371,6 @@ static void flush_region_backbuffer(struct limine_framebuffer *fb, uint64_t x, u
 
             uint64_t fb_offset = fb_row_offset + (x + col) * ((bpp + 7) / 8);
             switch (bpp) {
-                case 8: fb_addr[fb_offset] = bga_palette_index(color); break;
                 case 15:
                 case 16: *(uint16_t *)(fb_addr + fb_offset) = (uint16_t)pixel; break;
                 case 24:
@@ -1698,19 +1692,17 @@ void show_cursor(bool visible) {
         uint8_t *fb_addr = (uint8_t *)fb->address;
         uint8_t bpp = fb->bpp;
         uint8_t bpp_bytes = (bpp + 7) / 8;
-        uint32_t cursor_color = 0x00AAAAAAu; // solid gray
+        uint32_t fill_color = visible ? 0x00AAAAAAu : bg_color;
 
         // Precompute cursor pixel in native fb format
         uint32_t cursor_pixel = 0;
-        if (fb->bpp != 8) {
-            uint8_t r = (cursor_color >> 16) & 0xFF;
-            uint8_t g = (cursor_color >> 8) & 0xFF;
-            uint8_t b = cursor_color & 0xFF;
+        {
+            uint8_t r = (fill_color >> 16) & 0xFF;
+            uint8_t g = (fill_color >> 8) & 0xFF;
+            uint8_t b = fill_color & 0xFF;
             cursor_pixel |= (uint32_t)((r * ((1 << fb->red_mask_size) - 1)) / 255) << fb->red_mask_shift;
             cursor_pixel |= (uint32_t)((g * ((1 << fb->green_mask_size) - 1)) / 255) << fb->green_mask_shift;
             cursor_pixel |= (uint32_t)((b * ((1 << fb->blue_mask_size) - 1)) / 255) << fb->blue_mask_shift;
-        } else {
-            cursor_pixel = bga_palette_index(cursor_color);
         }
 
         for (uint64_t row = 0; row < current_font_h; row++) {
@@ -1720,8 +1712,8 @@ void show_cursor(bool visible) {
                 uint32_t raw = cursor_pixel;
                 // Write solid cursor color
                 switch (bpp) {
-                    case 8: fb_addr[off] = (uint8_t)raw; break;
-                    case 15: case 16: *(uint16_t *)(fb_addr + off) = (uint16_t)raw; break;
+                    case 15:
+                    case 16: *(uint16_t *)(fb_addr + off) = (uint16_t)raw; break;
                     case 24: fb_addr[off] = raw; fb_addr[off + 1] = raw >> 8; fb_addr[off + 2] = raw >> 16; break;
                     case 32: *(uint32_t *)(fb_addr + off) = raw; break;
                 }

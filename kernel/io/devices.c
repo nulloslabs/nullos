@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <autoconf.h>
 #include <main/log.h>
 #include <main/string.h>
 #include <main/limine_req.h>
@@ -16,9 +17,15 @@
 #include <io/pty.h>
 #include <io/keyboard.h>
 #include <io/ide.h>
-#include <io/pata.h>
+#ifdef CONFIG_ATAPI
 #include <io/atapi.h>
+#endif
+#ifdef CONFIG_PATA
+#include <io/pata.h>
+#endif
+#ifdef CONFIG_SATA
 #include <io/sata.h>
+#endif
 #include <io/mbr.h>
 #include <io/gpt.h>
 #include <syscalls/syscall_impls.h>
@@ -409,22 +416,11 @@ void init_devices(void) {
     register_device("urandom", read_urandom, write_urandom);
 
     {
+#if defined(CONFIG_ATAPI) || defined(CONFIG_PATA) || defined(CONFIG_SATA)
         char name[24];
         uint64_t size;
-
-        if (is_pata_present) {
-            for (int i = 0; i < IDE_MAX_DEVICES; i++) {
-                if (!pata_device_size(i, &size)) continue;
-                if (!make_ide_disk_name(name, sizeof(name), "hd", i)) continue;
-                if (register_disk_device_idx(name, read_pata_device, write_pata_device, i, size, DEV_BUS_PATA) < 0) {
-                    log("devices: unable to register '%s'\n", name);
-                    continue;
-                }
-                // Probe for GPT/MBR partitions on PATA disks
-                if (!probe_gpt_for_pata_disk(i, name, size)) probe_mbr_for_pata_disk(i, name, size);
-            }
-        }
-
+#endif
+#ifdef CONFIG_ATAPI
         if (is_atapi_present) {
             for (int i = 0; i < IDE_MAX_DEVICES; i++) {
                 if (!atapi_device_size(i, &size)) continue;
@@ -434,7 +430,27 @@ void init_devices(void) {
                 }
             }
         }
-
+#endif
+#ifdef CONFIG_PATA
+        if (is_pata_present) {
+            for (int i = 0; i < IDE_MAX_DEVICES; i++) {
+                if (!pata_device_size(i, &size)) continue;
+                if (!make_ide_disk_name(name, sizeof(name), "hd", i)) continue;
+                if (register_disk_device_idx(name, read_pata_device, write_pata_device, i, size, DEV_BUS_PATA) < 0) {
+                    log("devices: unable to register '%s'\n", name);
+                    continue;
+                }
+#if defined(CONFIG_GPT) && defined(CONFIG_MBR)
+                if (!probe_gpt_for_pata_disk(i, name, size)) probe_mbr_for_pata_disk(i, name, size);
+#elif defined(CONFIG_GPT)
+                probe_gpt_for_pata_disk(i, name, size);
+#elif defined(CONFIG_MBR)
+                probe_mbr_for_pata_disk(i, name, size);
+#endif
+            }
+        }
+#endif
+#ifdef CONFIG_SATA
         if (is_sata_present) {
             for (int i = 0; i < sata_device_count(); i++) {
                 if (!sata_device_size(i, &size)) continue;
@@ -443,9 +459,16 @@ void init_devices(void) {
                     log("devices: unable to register '%s'\n", name);
                     continue;
                 }
+#if defined(CONFIG_GPT) && defined(CONFIG_MBR)
                 if (!probe_gpt_for_sata_disk(i, name, size)) probe_mbr_for_sata_disk(i, name, size);
+#elif defined(CONFIG_GPT)
+                probe_gpt_for_sata_disk(i, name, size);
+#elif defined(CONFIG_MBR)
+                probe_mbr_for_sata_disk(i, name, size);
+#endif
             }
         }
+#endif
     }
 
     log("devices: initialized devices\n");

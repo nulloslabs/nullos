@@ -13,7 +13,7 @@ else
 endif
 
 QEMU := qemu-system-x86_64
-QEMUFLAGS := -M pc,accel=$(ACCEL) -smp 1 -m 1024 -serial stdio -audiodev $(AUDIODEV),id=audio0 -device ac97,audiodev=audio0 -netdev user,id=net0 -device rtl8139,netdev=net0 -vga none -device VGA,edid=on,xres=800,yres=600
+QEMUFLAGS := -M q35,accel=$(ACCEL) -smp 1 -m 1024 -serial stdio -audiodev $(AUDIODEV),id=audio0 -device ac97,audiodev=audio0 -netdev user,id=net0 -device rtl8139,netdev=net0 -vga none -device VGA,edid=on,xres=800,yres=600
 
 ISOFILE = iso/nullos.iso
 

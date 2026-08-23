@@ -1,23 +1,50 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <autoconf.h>
 #include <main/log.h>
 #include <io/pci.h>
 #include <io/io.h>
+#ifdef CONFIG_AC97
 #include <io/ac97.h>
+#endif
+#ifdef CONFIG_BGA
 #include <io/bga.h>
+#endif
+#ifdef CONFIG_E1000
 #include <io/e1000.h>
-#include <io/svga_ii.h>
+#endif
+#ifdef CONFIG_RTL8139
 #include <io/rtl8139.h>
+#endif
+#ifdef CONFIG_SVGA_II
+#include <io/svga_ii.h>
+#endif
+#ifdef CONFIG_VIRTIO_GPU
 #include <io/virtio_gpu.h>
+#endif
+#ifdef CONFIG_IDE
 #include <io/ide.h>
-#include <io/pata.h>
+#endif
+#ifdef CONFIG_ATAPI
 #include <io/atapi.h>
+#endif
+#ifdef CONFIG_PATA
+#include <io/pata.h>
+#endif
+#ifdef CONFIG_AHCI
 #include <io/ahci.h>
+#endif
+#ifdef CONFIG_SATA
 #include <io/sata.h>
+#endif
 #include <io/usb.h>
+#ifdef CONFIG_UHCI
 #include <io/uhci.h>
+#endif
+#ifdef CONFIG_OHCI
 #include <io/ohci.h>
+#endif
 #include <io/time.h>
 
 static void (*msi_handlers[256])(void) = { 0 };
@@ -213,13 +240,25 @@ void init_pci_drivers(void) {
         uint16_t device;
         void (*init)(pci_device_t*);
     } known_pci_drivers[] = {
-        {"ac97",    AC97_VENDOR,    AC97_DEVICE,    init_ac97},
-        {"bga",     BGA_VENDOR,     BGA_DEVICE,     init_bga},
-        {"e1000",   E1000_VENDOR,   E1000_DEVICE,   init_e1000},
-        {"svga ii", SVGA_II_VENDOR, SVGA_II_DEVICE, init_svga_ii},
-        {"rtl8139", RTL8139_VENDOR, RTL8139_DEVICE, init_rtl8139},
-        {"virtio-gpu", VIRTIO_GPU_VENDOR, VIRTIO_GPU_DEVICE_MODERN, init_virtio_gpu},
+#ifdef CONFIG_AC97
+        {"ac97",       AC97_VENDOR,       AC97_DEVICE,                    init_ac97},
+#endif
+#ifdef CONFIG_BGA
+        {"bga",        BGA_VENDOR,        BGA_DEVICE,                     init_bga},
+#endif
+#ifdef CONFIG_E1000
+        {"e1000",      E1000_VENDOR,      E1000_DEVICE,                   init_e1000},
+#endif
+#ifdef CONFIG_RTL8139
+        {"rtl8139",    RTL8139_VENDOR,    RTL8139_DEVICE,                 init_rtl8139},
+#endif
+#ifdef CONFIG_SVGA_II
+        {"svga ii",    SVGA_II_VENDOR,    SVGA_II_DEVICE,                 init_svga_ii},
+#endif
+#ifdef CONFIG_VIRTIO_GPU
+        {"virtio-gpu", VIRTIO_GPU_VENDOR, VIRTIO_GPU_DEVICE_MODERN,       init_virtio_gpu},
         {"virtio-gpu", VIRTIO_GPU_VENDOR, VIRTIO_GPU_DEVICE_TRANSITIONAL, init_virtio_gpu},
+#endif
     };
 
     const struct {
@@ -230,8 +269,12 @@ void init_pci_drivers(void) {
         uint8_t progif_value;
         bool (*init)(pci_device_t*);
     } known_storage_controllers[] = {
-        {"ide", IDE_CLASS, IDE_SUBCLASS, IDE_PROGIF_MASK, IDE_PROGIF_VALUE, init_ide},
-        {"ahci", AHCI_CLASS, AHCI_SUBCLASS, 0xFF, AHCI_PROGIF, init_ahci},
+#ifdef CONFIG_IDE
+        {"ide",  IDE_CLASS,  IDE_SUBCLASS,  IDE_PROGIF_MASK,  IDE_PROGIF_VALUE,  init_ide},
+#endif
+#ifdef CONFIG_AHCI
+        {"ahci", AHCI_CLASS, AHCI_SUBCLASS, AHCI_PROGIF_MASK, AHCI_PROGIF_VALUE, init_ahci},
+#endif
     };
 
     const struct {
@@ -239,8 +282,12 @@ void init_pci_drivers(void) {
         uint8_t progif;
         void (*init)(pci_device_t*);
     } known_usb_drivers[] = {
+#ifdef CONFIG_UHCI
         {"uhci", USB_PROGIF_UHCI, init_uhci},
+#endif
+#ifdef CONFIG_OHCI
         {"ohci", USB_PROGIF_OHCI, init_ohci},
+#endif
     };
 
     for (int i = 0; i < (int)(sizeof(known_pci_drivers) / sizeof(known_pci_drivers[0])); i++) {
@@ -261,18 +308,30 @@ void init_pci_drivers(void) {
 
             log("pci: found controller for %s\n", known_storage_controllers[i].name);
             if (known_storage_controllers[i].init(dev)) {
-                if (dev->class == AHCI_CLASS && dev->subclass == AHCI_SUBCLASS && dev->progif == AHCI_PROGIF) {
+#ifdef CONFIG_AHCI
+                if (dev->class == AHCI_CLASS && dev->subclass == AHCI_SUBCLASS && dev->progif == AHCI_PROGIF_VALUE) {
+#else
+                if (0) {
+#endif
+#ifdef CONFIG_SATA
                     log("pci: found driver for sata\n");
                     init_sata();
+#endif
+#if defined(CONFIG_IDE) || defined(CONFIG_AHCI)
                 } else {
-                    if (is_pata_present) {
-                        log("pci: found driver for pata\n");
-                        init_pata();
-                    }
+#ifdef CONFIG_ATAPI
                     if (is_atapi_present) {
                         log("pci: found driver for atapi\n");
                         init_atapi();
                     }
+#endif
+#ifdef CONFIG_PATA
+                    if (is_pata_present) {
+                        log("pci: found driver for pata\n");
+                        init_pata();
+                    }
+#endif
+#endif
                 }
             }
             break;

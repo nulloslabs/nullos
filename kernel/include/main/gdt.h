@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <main/mp.h>
 
 #define GDT_SYSRET_BASE 0x10
 
@@ -9,8 +10,6 @@
 #define GDT_USER_DS 0x18
 #define GDT_USER_CS 0x20
 #define GDT_TSS 0x28
-
-#define MAX_CPUS 64
 
 struct tss {
     uint32_t reserved0;
@@ -43,7 +42,7 @@ typedef struct {
 
 extern cpu_gdt_t cpu_gdts[MAX_CPUS];
 
-void set_tss_kstack(void *stack);                 // BSP shorthand (cpu 0)
+void set_tss_kstack(void *stack);                        // BSP shorthand (cpu 0)
 void set_tss_kstack_for_cpu(int cpu_index, void *stack);
-void init_gdt(void);                              // BSP: calls init_gdt_for_cpu(0)
-void init_gdt_for_cpu(int cpu_index);             // APs: call this on each AP
+void init_gdt_for_cpu(int cpu_index);                    // APs: call this on each AP
+void init_gdt(void);                                     // BSP: calls init_gdt_for_cpu(0)

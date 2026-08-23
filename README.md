@@ -4,6 +4,13 @@ A secure, fast and privacy-focused hobby OS.
 
 [![Discord](https://img.shields.io/discord/1512751094583791726?color=5865F2&label=NullOS%20Labs&logo=discord&logoColor=white)](https://discord.gg/TMrw9rzfvx)
 
+## ❤️ Credits
+
+| Project | Purpose |
+| :--- | :--- |
+| [uACPI](https://github.com/uACPI/uACPI) | ACPI library for kernel |
+| [Kconfig](https://github.com/guillon/kconfig) | Configuration system for kernel |
+
 ## ✨ Features
 
 | Status | Feature |
@@ -13,18 +20,17 @@ A secure, fast and privacy-focused hobby OS.
 | Done | PCI support |
 | Done | Framebuffer, BGA, SVGA II, virtio-gpu support |
 | Done | IDE and AHCI support |
-| Done | PATA, ATAPI and SATA support |
-| Done | ext2, ext3, ext4, FAT16, FAT32 and ISO9660 support |
+| Done | ATAPI, PATA and SATA support |
+| Done | ext2/3/4, FAT16/32 and ISO9660 support |
 | Done | AC'97 support |
 | Done | Initrd support |
-| Done | Gzip decompression support |
-| Done | GDT, IDT and SSE support |
+| Done | gzip decompression support |
 | Done | Modular font system |
 | Done | Serial port support |
 | Done | Syscall support |
 | Done | ELF executable support |
 | Done | MP support |
-| Done | Networking stack and NIC support |
+| Done | E1000, RTL8139 and networking stack support |
 
 ## 🛠️ Build Requirements
 
@@ -58,14 +64,18 @@ cd nullos
 
 **2. Build the kernel and ISO:**
 
+> [!WARNING]
+> Use `make` if you are using Linux, else use `gmake`.
+
 ```bash
-make # Or 'gmake' if you aren't using Linux
+make menuconfig
+make
 ```
 
 **3. Run in QEMU:**
 
 ```bash
-make qemu # Or 'gmake qemu' if you aren't using Linux
+make qemu
 ```
 
 > [!NOTE]

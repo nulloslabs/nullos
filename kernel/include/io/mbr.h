@@ -27,7 +27,6 @@ typedef struct {
     bool active;
 } mbr_partition_t;
 
-bool probe_mbr_for_sata_disk(int disk_index, const char *disk_name, uint64_t disk_size);
 bool probe_mbr_for_pata_disk(int disk_index, const char *disk_name, uint64_t disk_size);
+bool probe_mbr_for_sata_disk(int disk_index, const char *disk_name, uint64_t disk_size);
 void remove_mbr_partitions(int disk_index, bool is_pata);
-

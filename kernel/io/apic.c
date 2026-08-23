@@ -9,6 +9,7 @@
 #include <io/io.h>
 #include <io/ioapic.h>
 #include <mm/vmm.h>
+
 enum apic_mode current_apic_mode = APIC_NONE;
 volatile uint8_t *lapic_base = NULL;
 static volatile uint32_t apic_timer_ticks;
@@ -81,7 +82,7 @@ uint32_t get_apic_id(void) {
 }
 
 // --- LAPIC Timer ---
-void init_apic_timer(uint32_t frequency_hz) {
+void init_apic_timer(uint32_t hz) {
     // Use divide-by-16
     uint32_t divide = 0x3; // divide by 16
 
@@ -111,7 +112,7 @@ void init_apic_timer(uint32_t frequency_hz) {
         // Read how many ticks elapsed
         uint32_t elapsed = 0xFFFFFFFF - (uint32_t)read_msr(X2APIC_MSR_TIMER_CCR);
         // Scale to desired frequency
-        uint32_t ticks_per_interval = (elapsed * 100) / (1000 / (1000 / frequency_hz));
+        uint32_t ticks_per_interval = (elapsed * 100) / (1000 / (1000 / hz));
         if (ticks_per_interval == 0) ticks_per_interval = elapsed * 100 / 10; // fallback for 100 Hz
         apic_timer_ticks = ticks_per_interval;
 
@@ -138,7 +139,7 @@ void init_apic_timer(uint32_t frequency_hz) {
         while (!(inb(0x61) & 0x20));
 
         uint32_t elapsed = 0xFFFFFFFF - lapic_read(LAPIC_TIMER_CCR);
-        uint32_t ticks_per_interval = (elapsed * 100) / (1000 / (1000 / frequency_hz));
+        uint32_t ticks_per_interval = (elapsed * 100) / (1000 / (1000 / hz));
         if (ticks_per_interval == 0) ticks_per_interval = elapsed * 100 / 10;
         apic_timer_ticks = ticks_per_interval;
 

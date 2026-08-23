@@ -8,7 +8,6 @@
 #include <syscalls/syscalls.h>
 #include <syscalls/syscall_impls.h>
 
-// I had to fix it manually since a refactor commit I did made this table one singular line for some reason
 const syscall_fn_t syscall_table[] = {
     [__NR_read]              = sys_read,
     [__NR_write]             = sys_write,
@@ -175,8 +174,6 @@ void dispatch_syscall(syscall_frame_t *frame) {
 
     if (frame->rip != saved_rip) return;
     if (frame->rax < (sizeof(syscall_table) / sizeof(syscall_table[0])) && syscall_table[frame->rax]) {
-        /*#include <io/serial.h>
-        serial_printf(COM1, "called %lld\n", frame->rax);*/
         syscall_table[frame->rax](frame);
     } else {
         frame->rax = (uint64_t)-ENOSYS;

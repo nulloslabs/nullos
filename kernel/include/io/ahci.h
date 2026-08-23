@@ -1,12 +1,13 @@
 #pragma once
 
-#include <stdbool.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <io/pci.h>
 
 #define AHCI_CLASS             0x01
 #define AHCI_SUBCLASS          0x06
-#define AHCI_PROGIF            0x01
+#define AHCI_PROGIF_MASK       0xFF
+#define AHCI_PROGIF_VALUE      0x01
 #define AHCI_SECTOR_SIZE       512
 #define AHCI_MAX_DEVICES       8
 #define AHCI_MAX_TRANSFER_SIZE (128 * 1024)

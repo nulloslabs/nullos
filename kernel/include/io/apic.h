@@ -49,7 +49,7 @@ extern volatile uint8_t *lapic_base;
 // Common API (dispatches based on current_apic_mode)
 void eoi_apic(void);
 uint32_t get_apic_id(void);
-void init_apic_timer(uint32_t frequency_hz);
+void init_apic_timer(uint32_t hz);
 void start_apic_timer_for_cpu(void);
 void send_apic_ipi(uint32_t apic_id, uint32_t vector);
 void send_init_apic(uint32_t apic_id);

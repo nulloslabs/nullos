@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <signal.h>
+#include <autoconf.h>
 #include <main/halt.h>
 #include <main/sched.h>
 #include <main/signal.h>
@@ -63,7 +64,9 @@ void handle_keyboard_lock_scancode(uint8_t sc) {
     }
 
     set_ps2_keyboard_leds(lock_leds);
+#ifdef CONFIG_USB_KEYBOARD
     set_usb_keyboard_leds(lock_leds);
+#endif
 }
 
 uint8_t get_scancode(void) {

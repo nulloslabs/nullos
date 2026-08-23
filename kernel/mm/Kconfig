@@ -1,0 +1,9 @@
+menu "Memory Management"
+config OOM_KILLER
+    bool "Out of memory killer"
+    default y
+    help
+		Enables the out of memory killer.
+		Used when the kernel runs out of memory, kills a process to free up memory.
+
+endmenu

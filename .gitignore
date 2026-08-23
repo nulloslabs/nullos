@@ -5,6 +5,9 @@
 *.tar*
 *.iso
 
+kernel/include/generated/
+**/.config*
+
 kernel/nullkrnl
 iso/main/
 initrd/main/

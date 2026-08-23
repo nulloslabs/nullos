@@ -68,10 +68,6 @@ static bool find_kernel_symbol_table(kernel_symbol_table_t *table_out) {
     return false;
 }
 
-bool are_kernel_symbols_available(void) {
-    return find_kernel_symbol_table(NULL);
-}
-
 static bool kernel_symbol_for_rip(uint64_t rip, const char **name_out, uint64_t *offset_out) {
     if (!name_out || !offset_out) return false;
 
@@ -130,6 +126,10 @@ static int exception_to_signal(int vector) {
         case 30: return SIGSEGV;  // Security exception
         default: return SIGSEGV;
     }
+}
+
+bool are_kernel_symbols_available(void) {
+    return find_kernel_symbol_table(NULL);
 }
 
 __attribute__((noreturn)) void dopanic(const char *func, const char *msg, ...) {

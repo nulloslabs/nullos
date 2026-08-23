@@ -5,6 +5,11 @@ set -euo pipefail
 temporary_directory=$(mktemp -d)
 trap 'rm -rf -- "$temporary_directory"' EXIT HUP INT TERM
 
+TAR="tar"
+TARFLAGS=""
+ZSTD="zstd"
+ZSTDFLAGS=""
+
 fetch_db() {
     local repo=$1
     local mirrors=(
@@ -14,7 +19,7 @@ fetch_db() {
         "https://geo.mirror.pkgbuild.com/$repo/os/x86_64/$repo.db"
     )
     for url in "${mirrors[@]}"; do
-        if curl --retry 3 --retry-delay 2 --retry-all-errors -fsSL "$url" 2>/dev/null | zstd -dc 2>/dev/null | tar -xf - -C "$temporary_directory/$repo" 2>/dev/null; then
+        if curl --retry 3 --retry-delay 2 --retry-all-errors -fsSL "$url" 2>/dev/null | $ZSTD $ZSTDFLAGS -dc 2>/dev/null | $TAR $TARFLAGS -xf - -C "$temporary_directory/$repo" 2>/dev/null; then
             return 0
         fi
     done

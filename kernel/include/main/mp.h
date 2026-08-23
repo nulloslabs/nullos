@@ -2,11 +2,16 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <main/gdt.h>
+#include <autoconf.h>
+#include <main/sched.h>
+
+#ifdef CONFIG_MAX_CPUS
+#define MAX_CPUS CONFIG_MAX_CPUS
+#else
+#define MAX_CPUS 64
+#endif
 
 #define CPU_INDEX_MAP_SIZE (MAX_CPUS * 2)
-
-struct task;
 
 typedef struct {
     uint32_t lapic_id;

@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <errno.h>
+#include <autoconf.h>
 #include <main/log.h>
 #include <main/limine_req.h>
 #include <io/io.h>
@@ -35,10 +36,8 @@ static uint32_t get_bga_vram_size(pci_device_t *dev, uint32_t bar0) {
     return mask ? (~mask + 1u) : 0;
 }
 
-static bool bpp_supported_by_bga(uint16_t bpp) {
+static bool is_bpp_supported_by_bga(uint16_t bpp) {
     switch (bpp) {
-        case 8:
-            return true;
         case 15:
         case 16:
         case 24:
@@ -49,27 +48,11 @@ static bool bpp_supported_by_bga(uint16_t bpp) {
     }
 }
 
-uint8_t bga_palette_index(uint32_t color) {
-    uint8_t red = (color >> 16) & 0xFF;
-    uint8_t green = (color >> 8) & 0xFF;
-    uint8_t blue = color & 0xFF;
-
-    return (uint8_t)((red & 0xE0) | ((green & 0xE0) >> 3) | (blue >> 6));
-}
-
-uint32_t bga_palette_color(uint8_t index) {
-    uint32_t red = ((index >> 5) & 0x07) * 255 / 7;
-    uint32_t green = ((index >> 2) & 0x07) * 255 / 7;
-    uint32_t blue = (index & 0x03) * 255 / 3;
-
-    return (red << 16) | (green << 8) | blue;
-}
-
 static void program_bga_palette(bool eight_bit_dac) {
     outb(BGA_DAC_WRITE_INDEX, 0);
 
     for (uint16_t i = 0; i < 256; i++) {
-        uint32_t color = bga_palette_color((uint8_t)i);
+        uint32_t color = palette_color_for_bga((uint8_t)i);
         uint8_t red = (color >> 16) & 0xFF;
         uint8_t green = (color >> 8) & 0xFF;
         uint8_t blue = color & 0xFF;
@@ -129,6 +112,14 @@ static void update_framebuffer_masks(void) {
     }
 }
 
+uint32_t palette_color_for_bga(uint8_t index) {
+    uint32_t red = ((index >> 5) & 0x07) * 255 / 7;
+    uint32_t green = ((index >> 2) & 0x07) * 255 / 7;
+    uint32_t blue = (index & 0x03) * 255 / 3;
+
+    return (red << 16) | (green << 8) | blue;
+}
+
 int set_bga_resolution(uint64_t xres, uint64_t yres, uint64_t xres_virtual, uint64_t yres_virtual, uint64_t xoffset, uint64_t yoffset, uint16_t bpp) {
     if (!fb_req.response || fb_req.response->framebuffer_count < 1) return -ENODEV;
     struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
@@ -148,7 +139,12 @@ int set_bga_resolution(uint64_t xres, uint64_t yres, uint64_t xres_virtual, uint
         return -EINVAL;
     }
 
-    if (!bpp_supported_by_bga(bpp)) {
+    if (bpp == 8) {
+        log("bga: bpp not allowed\n");
+        return -EOPNOTSUPP;
+    }
+
+    if (!is_bpp_supported_by_bga(bpp)) {
         log("bga: unsupported bpp\n");
         return -EINVAL;
     }
@@ -282,7 +278,7 @@ void init_bga(pci_device_t *dev) {
         return;
     }
 
-    if (!bpp_supported_by_bga(bpp)) {
+    if (!is_bpp_supported_by_bga(bpp)) {
         log("bga: unsupported bpp\n");
         return;
     }
