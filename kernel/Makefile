@@ -10,8 +10,10 @@ include config.mk
 SRC := $(wildcard io/*.c) $(wildcard io/*.S) $(wildcard main/*.c) $(wildcard main/*.S) $(wildcard mm/*.c) $(wildcard mm/*.S) $(wildcard syscalls/*.c) $(wildcard syscalls/*.S)
 UACPI_SRC = $(wildcard uacpi/source/*.c)
 
-include Kconfig.mk
+$(shell test -f include/generated/auto.conf || [ -n "$$KCONFIG_GEN" ] || KCONFIG_GEN=1 $(MAKE) defconfig > /dev/null 2>&1)
 -include include/generated/auto.conf
+
+include Kconfig.mk
 
 OBJ := $(SRC:.c=.o)
 OBJ := $(OBJ:.S=.o)
@@ -147,11 +149,6 @@ $(SUBDIRS): config.mk Makefile
 	@$(MAKE) -C $@
 
 kernel: config.mk Makefile linker.ld
-	@if [ ! -f include/generated/auto.conf ]; then \
-		$(MAKE) defconfig > /dev/null 2>&1 && \
-		$(MAKE) kernel; \
-		exit $$?; \
-	fi
 	@$(MAKE) limine_header
 	@$(MAKE) uacpi
 	@$(MAKE) $(SUBDIRS)
