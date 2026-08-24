@@ -19,6 +19,6 @@
 
 extern volatile uint32_t *ioapic_base;
 
+uint32_t max_ioapic_redirects(void);
+void route_ioapic_irq(uint8_t irq, uint8_t vector, uint32_t lapic_id, uint32_t flags);
 void init_ioapic(void *base_addr);
-void ioapic_route_irq(uint8_t irq, uint8_t vector, uint32_t lapic_id, uint32_t flags);
-uint32_t ioapic_max_redirects(void);

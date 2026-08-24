@@ -5,6 +5,8 @@ ifeq ($(filter --silent,$(MAKEFLAGS)),)
 MAKEFLAGS += --silent
 endif
 
+INCLUDE_DIR := ../
+
 include ../config.mk
 
 SRC = $(wildcard *.c) $(wildcard *.S)
@@ -36,12 +38,10 @@ undefine GIT_HEAD
 	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/main/$@"
 	@$(AS) $(AFLAGS) -c $< -o $@
 
-FORCE:
-
 clean:
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/main/*.o $(SUBDIR)/main/*.d"
 	@rm -rf *.o *.d
 
 mrproper: clean
 
-.PHONY: all FORCE clean mrproper
+.PHONY: all clean mrproper

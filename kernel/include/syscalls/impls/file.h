@@ -1,0 +1,54 @@
+#pragma once
+
+#include <syscalls/syscalls.h>
+
+void sys_open(syscall_frame_t *frame);
+void sys_close(syscall_frame_t *frame);
+void sys_stat(syscall_frame_t *frame);
+void sys_fstat(syscall_frame_t *frame);
+void sys_lstat(syscall_frame_t *frame);
+void sys_lseek(syscall_frame_t *frame);
+void sys_pread64(syscall_frame_t *frame);
+void sys_readv(syscall_frame_t *frame);
+void sys_writev(syscall_frame_t *frame);
+void sys_access(syscall_frame_t *frame);
+void sys_faccessat(syscall_frame_t *frame);
+void sys_faccessat2(syscall_frame_t *frame);
+void sys_sendfile(syscall_frame_t *frame);
+void sys_fcntl(syscall_frame_t *frame);
+void sys_flock(syscall_frame_t *frame);
+void sys_fsync(syscall_frame_t *frame);
+void sys_fdatasync(syscall_frame_t *frame);
+void sys_truncate(syscall_frame_t *frame);
+void sys_ftruncate(syscall_frame_t *frame);
+void sys_getdents(syscall_frame_t *frame);
+void sys_getcwd(syscall_frame_t *frame);
+void sys_chdir(syscall_frame_t *frame);
+void sys_fchdir(syscall_frame_t *frame);
+void sys_rename(syscall_frame_t *frame);
+void sys_mkdir(syscall_frame_t *frame);
+void sys_rmdir(syscall_frame_t *frame);
+void sys_link(syscall_frame_t *frame);
+void sys_unlink(syscall_frame_t *frame);
+void sys_symlink(syscall_frame_t *frame);
+void sys_readlink(syscall_frame_t *frame);
+void sys_chmod(syscall_frame_t *frame);
+void sys_fchmod(syscall_frame_t *frame);
+void sys_chown(syscall_frame_t *frame);
+void sys_fchown(syscall_frame_t *frame);
+void sys_lchown(syscall_frame_t *frame);
+void sys_umask(syscall_frame_t *frame);
+void sys_utime(syscall_frame_t *frame);
+void sys_mount(syscall_frame_t *frame);
+void sys_umount2(syscall_frame_t *frame);
+void sys_readahead(syscall_frame_t *frame);
+void sys_getdents64(syscall_frame_t *frame);
+void sys_openat(syscall_frame_t *frame);
+void sys_fchownat(syscall_frame_t *frame);
+void sys_fstatat(syscall_frame_t *frame);
+void sys_unlinkat(syscall_frame_t *frame);
+void sys_symlinkat(syscall_frame_t *frame);
+void sys_readlinkat(syscall_frame_t *frame);
+void sys_fchmodat(syscall_frame_t *frame);
+void sys_utimensat(syscall_frame_t *frame);
+void sys_statx(syscall_frame_t *frame);

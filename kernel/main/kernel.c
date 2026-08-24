@@ -78,9 +78,9 @@ __attribute__((noreturn)) void kmain(void) {
     init_sched();
     init_pci();
     init_acpi_namespace();
-    flush_ps2_keyboard_controller();
     cache_machine_info();
     cache_utsname();
+    init_ps2_keyboard();
     init_pci_drivers();
     configure_dhcp();
     init_devices();

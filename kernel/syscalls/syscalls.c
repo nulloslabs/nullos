@@ -6,7 +6,14 @@
 #include <main/log.h>
 #include <io/tty.h>
 #include <syscalls/syscalls.h>
-#include <syscalls/syscall_impls.h>
+#include <syscalls/impls/file.h>
+#include <syscalls/impls/helpers.h>
+#include <syscalls/impls/io.h>
+#include <syscalls/impls/ipc.h>
+#include <syscalls/impls/mm.h>
+#include <syscalls/impls/sched.h>
+#include <syscalls/impls/sys.h>
+#include <syscalls/impls/time.h>
 
 const syscall_fn_t syscall_table[] = {
     [__NR_read]              = sys_read,

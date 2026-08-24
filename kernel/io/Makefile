@@ -5,6 +5,8 @@ ifeq ($(filter --silent,$(MAKEFLAGS)),)
 MAKEFLAGS += --silent
 endif
 
+INCLUDE_DIR := ../
+
 include ../config.mk
 
 SRC = $(wildcard *.c) $(wildcard *.S)
@@ -24,12 +26,10 @@ all: $(OBJ)
 	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/io/$@"
 	@$(AS) $(AFLAGS) -c $< -o $@
 
-FORCE:
-
 clean:
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/io/*.o $(SUBDIR)/io/*.d"
 	@rm -rf *.o *.d
 
 mrproper: clean
 
-.PHONY: all FORCE clean mrproper
+.PHONY: all clean mrproper

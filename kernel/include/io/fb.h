@@ -3,10 +3,11 @@
 #include <stdint.h>
 
 typedef enum {
-    FB_NONE,    // No framebuffer driver
-    FB_LIMINE,  // Framebuffer provided by Limine, VESA/GOP
-    FB_BGA,     // Bochs Graphics Adapter
-    FB_SVGA_II, // VMware SVGA II
+    FB_NONE,       // No framebuffer driver
+    FB_LIMINE,     // Framebuffer provided by Limine, VESA/GOP
+    FB_BGA,        // Bochs Graphics Adapter
+    FB_QXL,        // Red Hat QXL
+    FB_SVGA_II,    // VMware SVGA II
     FB_VIRTIO_GPU, // Red Hat virtio-gpu
 } fb_driver_t;
 

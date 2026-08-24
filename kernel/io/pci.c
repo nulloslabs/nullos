@@ -271,4 +271,6 @@ void init_pci_drivers(void) {
             if (pci_devices[j].class == USB_PCI_CLASS && pci_devices[j].subclass == USB_PCI_SUBCLASS && pci_devices[j].progif == known_usb_drivers[i].progif) { log("pci: found %s usb controller\n", known_usb_drivers[i].name); known_usb_drivers[i].init(&pci_devices[j]); }
         }
     }
+
+    log("pci: initialized pci drivers\n");
 }

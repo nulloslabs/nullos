@@ -7,7 +7,7 @@ endif
 
 include config.mk
 
-SRC := $(wildcard io/*.c) $(wildcard io/*.S) $(wildcard main/*.c) $(wildcard main/*.S) $(wildcard mm/*.c) $(wildcard mm/*.S) $(wildcard syscalls/*.c) $(wildcard syscalls/*.S)
+SRC := $(wildcard io/*.c) $(wildcard io/*.S) $(wildcard main/*.c) $(wildcard main/*.S) $(wildcard mm/*.c) $(wildcard mm/*.S) $(wildcard syscalls/*.c) $(wildcard syscalls/*.S) $(wildcard syscalls/impls/*.c) $(wildcard syscalls/impls/*.S)
 
 OBJ := $(SRC:.c=.o)
 OBJ := $(OBJ:.S=.o)

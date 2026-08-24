@@ -1,0 +1,50 @@
+#pragma once
+
+#include <syscalls/syscalls.h>
+
+void sys_rt_sigaction(syscall_frame_t *frame);
+void sys_rt_sigprocmask(syscall_frame_t *frame);
+void sys_rt_sigreturn(syscall_frame_t *frame);
+void sys_sched_yield(syscall_frame_t *frame);
+void sys_getpid(syscall_frame_t *frame);
+void sys_getpriority(syscall_frame_t *frame);
+void sys_setpriority(syscall_frame_t *frame);
+void sys_clone(syscall_frame_t *frame);
+void sys_fork(syscall_frame_t *frame);
+void sys_vfork(syscall_frame_t *frame);
+void sys_execve(syscall_frame_t *frame);
+void sys_exit(syscall_frame_t *frame);
+void sys_wait4(syscall_frame_t *frame);
+void sys_kill(syscall_frame_t *frame);
+void sys_getuid(syscall_frame_t *frame);
+void sys_getgid(syscall_frame_t *frame);
+void sys_setuid(syscall_frame_t *frame);
+void sys_setgid(syscall_frame_t *frame);
+void sys_geteuid(syscall_frame_t *frame);
+void sys_getegid(syscall_frame_t *frame);
+void sys_setpgid(syscall_frame_t *frame);
+void sys_getppid(syscall_frame_t *frame);
+void sys_getpgrp(syscall_frame_t *frame);
+void sys_setsid(syscall_frame_t *frame);
+void sys_seteuid(syscall_frame_t *frame);
+void sys_setegid(syscall_frame_t *frame);
+void sys_setresuid(syscall_frame_t *frame);
+void sys_getresuid(syscall_frame_t *frame);
+void sys_setresgid(syscall_frame_t *frame);
+void sys_getresgid(syscall_frame_t *frame);
+void sys_setfsuid(syscall_frame_t *frame);
+void sys_setfsgid(syscall_frame_t *frame);
+void sys_getpgid(syscall_frame_t *frame);
+void sys_getsid(syscall_frame_t *frame);
+void sys_rt_sigtimedwait(syscall_frame_t *frame);
+void sys_prctl(syscall_frame_t *frame);
+void sys_arch_prctl(syscall_frame_t *frame);
+void sys_gettid(syscall_frame_t *frame);
+void sys_tkill(syscall_frame_t *frame);
+void sys_sched_getaffinity(syscall_frame_t *frame);
+void sys_set_tid_address(syscall_frame_t *frame);
+void sys_exit_group(syscall_frame_t *frame);
+void sys_tgkill(syscall_frame_t *frame);
+void sys_set_robust_list(syscall_frame_t *frame);
+void sys_get_robust_list(syscall_frame_t *frame);
+void sys_rseq(syscall_frame_t *frame);

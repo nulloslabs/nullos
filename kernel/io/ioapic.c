@@ -13,11 +13,11 @@ static void write_ioapic(uint32_t reg, uint32_t val) {
      ioapic_base[IOAPIC_WIN / 4] = val;
 }
 
-uint32_t ioapic_max_redirects(void) {
+uint32_t max_ioapic_redirects(void) {
     return ((read_ioapic(IOAPIC_VER) >> 16) & 0xFF) + 1;
 }
 
-void ioapic_route_irq(uint8_t irq, uint8_t vector, uint32_t lapic_id, uint32_t flags) {
+void route_ioapic_irq(uint8_t irq, uint8_t vector, uint32_t lapic_id, uint32_t flags) {
     uint32_t reg_lo = IOAPIC_REDTBL + (irq * 2);
     uint32_t reg_hi = IOAPIC_REDTBL + (irq * 2) + 1;
 

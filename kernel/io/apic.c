@@ -213,9 +213,9 @@ void init_apic(void) {
 
     if (ioapic_phys_addr) {
         init_ioapic(vmap_mmio((uint64_t)ioapic_phys_addr, 1));
-        ioapic_route_irq(1, 33, 0, 0);
+        route_ioapic_irq(1, 33, 0, 0);
         for (int i = 0; i < 4; i++) {
-            ioapic_route_irq(10 + i, 43, 0, IOAPIC_ACTIVE_LOW | IOAPIC_TRIGGER_LEVEL);
+            route_ioapic_irq(10 + i, 43, 0, IOAPIC_ACTIVE_LOW | IOAPIC_TRIGGER_LEVEL);
         }
     }
 

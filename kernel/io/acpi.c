@@ -332,7 +332,7 @@ uacpi_status uacpi_kernel_install_interrupt_handler(uacpi_u32 irq, uacpi_interru
     acpi_irq = record;
     idt_set_descriptor((uint8_t)(32 + irq), acpi_isr, 0x8E);
     if (current_apic_mode == APIC_NONE) unmask_pic_irq((uint8_t)irq);
-    else if (ioapic_base) ioapic_route_irq((uint8_t)irq, (uint8_t)(32 + irq), 0, IOAPIC_ACTIVE_LOW | IOAPIC_TRIGGER_LEVEL);
+    else if (ioapic_base) route_ioapic_irq((uint8_t)irq, (uint8_t)(32 + irq), 0, IOAPIC_ACTIVE_LOW | IOAPIC_TRIGGER_LEVEL);
     *out_irq_handle = record;
     return UACPI_STATUS_OK;
 }
@@ -341,7 +341,7 @@ uacpi_status uacpi_kernel_uninstall_interrupt_handler(uacpi_interrupt_handler ha
     uacpi_irq_t *record = irq_handle;
     if (!record || record != acpi_irq || record->handler != handler) return UACPI_STATUS_INVALID_ARGUMENT;
     if (current_apic_mode == APIC_NONE) mask_pic_irq((uint8_t)record->irq);
-    else if (ioapic_base) ioapic_route_irq((uint8_t)record->irq, (uint8_t)(32 + record->irq), 0, IOAPIC_INT_MASKED);
+    else if (ioapic_base) route_ioapic_irq((uint8_t)record->irq, (uint8_t)(32 + record->irq), 0, IOAPIC_INT_MASKED);
     acpi_irq = NULL;
     free(record);
     return UACPI_STATUS_OK;

@@ -3,6 +3,8 @@
 #include <main/string.h>
 #include <main/gzip.h>
 
+static const uint8_t CLCL_ORDER[19] = { 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 };
+
 static uint32_t tgz_get_bits(tgz_stream *s, int bits) {
     while (s->bit_cnt < bits) { s->bit_buf |= ((uint32_t)(*s->in++)) << s->bit_cnt; s->bit_cnt += 8; }
     uint32_t val = s->bit_buf & ((1 << bits) - 1);
@@ -35,9 +37,6 @@ static int tgz_decode_symbol(tgz_stream *s, tgz_huffman *tree) {
     return -1;
 }
 
-static const uint8_t CLCL_ORDER[19] = { 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 };
-
-// --- Inflate ---
 static int tgz_inflate(tgz_stream *s) {
     int final = 0;
     while (!final) {

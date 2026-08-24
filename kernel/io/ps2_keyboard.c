@@ -5,6 +5,7 @@
 #include <io/keyboard.h>
 #include <io/io.h>
 #include <io/tty.h>
+
 static uint8_t ps2_repeat_key = 0;
 static int ps2_repeat_timer = 0;
 static bool ps2_key_held[128] = { false };
@@ -85,7 +86,7 @@ void handle_ps2_scancode(uint8_t sc) {
     set_ps2_keyboard_leds(get_keyboard_led_state());
 }
 
-void flush_ps2_keyboard_controller(void) {
+void init_ps2_keyboard(void) {
     uint8_t status = inb(0x64);
     if (status == 0xFF) {
         ps2_controller_present = false;
@@ -95,5 +96,5 @@ void flush_ps2_keyboard_controller(void) {
 
     for (int i = 0; i < 256 && (inb(0x64) & 1); i++) inb(0x60);
     set_ps2_keyboard_leds(get_keyboard_led_state());
-    log("ps2 keyboard: flushed ps2 keyboard controller\n");
+    log("ps2 keyboard: initialized ps2 keyboard\n");
 }

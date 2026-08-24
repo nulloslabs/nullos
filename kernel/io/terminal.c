@@ -1834,11 +1834,6 @@ uint64_t write_terminal_tty(int tty_idx, const char *buf, uint64_t count, bool o
 
 void switch_terminal_tty(int tty_idx) {
     select_terminal_vt(tty_idx, true);
-    // Replay the new VT's screen to serial AFTER the spinlock is released.
-    // Called here (not inside select_terminal_vt) so that:
-    //   1. We don't hold the IRQ-disabled spinlock while doing slow UART I/O.
-    //   2. This only fires on user-initiated switches, not on the internal
-    //      select_terminal_vt(prev, true) restore call inside write_terminal_tty.
     serial_replay_screen();
 }
 
@@ -1850,12 +1845,9 @@ int puts(const char *s) {
     begin_fb_batch();
 
     while (*s) { 
-        if (*s == '\n') putchar_unlocked('\r');
         putchar_unlocked(*s); 
         s++; 
     }
-    putchar_unlocked('\r');
-    putchar_unlocked('\n');
 
     end_fb_batch();
     spin_unlock_irqrestore(&term_lock, rflags);

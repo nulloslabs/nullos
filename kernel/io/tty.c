@@ -215,8 +215,8 @@ void tty_process_scancode(uint8_t sc) {
     spin_unlock_irqrestore(&tty_lock, irq);
 
     if (echo) {
-        if (sig == SIGINT) printf("^C");
-        else if (sig == SIGTSTP) printf("^Z");
+        if (sig == SIGINT) puts("^C");
+        else if (sig == SIGTSTP) puts("^Z");
     }
 }
 

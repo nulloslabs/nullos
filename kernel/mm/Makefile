@@ -5,6 +5,8 @@ ifeq ($(filter -s,$(MAKEFLAGS)),)
 MAKEFLAGS += -s
 endif
 
+INCLUDE_DIR := ../
+
 include ../config.mk
 
 SRC = $(wildcard *.c) $(wildcard *.S)
@@ -16,8 +18,6 @@ all: $(OBJ)
 
 -include $(DEP)
 
-vmm.o: mm.o
-
 %.o: %.c Makefile ../Makefile ../config.mk $(FORCE_REBUILD) ../include/limine/limine.h
 	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/mm/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
@@ -26,12 +26,10 @@ vmm.o: mm.o
 	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/mm/$@"
 	@$(AS) $(AFLAGS) -c $< -o $@
 
-FORCE:
-
 clean:
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/mm/*.o $(SUBDIR)/mm/*.d"
 	@rm -rf *.o *.d
 
 mrproper: clean
 
-.PHONY: all FORCE clean mrproper
+.PHONY: all clean mrproper
