@@ -252,7 +252,6 @@ int strncmp(const char *s1, const char *s2, size_t n) {
     return 0;
 }
 
-
 char* strstr(const char* haystack, const char* needle) {
     if (!*needle) return (char*)haystack;
 

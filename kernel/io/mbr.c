@@ -1,7 +1,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <errno.h>
-#include <autoconf.h>
 #include <main/string.h>
 #include <io/devices.h>
 #include <io/mbr.h>
@@ -42,17 +41,9 @@ static uint64_t read_mbr_partition(void *data, uint64_t count, uint64_t offset, 
     if (offset >= partition->size) return 0;
     if (count > partition->size - offset) count = partition->size - offset;
     if (partition->is_pata) {
-#ifdef CONFIG_PATA
         return read_pata_device(data, count, partition->offset + offset, partition->disk_index);
-#else
-        return (uint64_t)-ENODEV;
-#endif
     } else {
-#ifdef CONFIG_SATA
         return read_sata_device(data, count, partition->offset + offset, partition->disk_index);
-#else
-        return (uint64_t)-ENODEV;
-#endif
     }
 }
 
@@ -62,17 +53,9 @@ static uint64_t write_mbr_partition(const void *data, uint64_t count, uint64_t o
     if (offset >= partition->size) return (uint64_t)-ENOSPC;
     if (count > partition->size - offset) count = partition->size - offset;
     if (partition->is_pata) {
-#ifdef CONFIG_PATA
         return write_pata_device(data, count, partition->offset + offset, partition->disk_index);
-#else
-        return (uint64_t)-ENOSPC;
-#endif
     } else {
-#ifdef CONFIG_SATA
         return write_sata_device(data, count, partition->offset + offset, partition->disk_index);
-#else
-        return (uint64_t)-ENOSPC;
-#endif
     }
 }
 
@@ -113,15 +96,7 @@ static bool scan_mbr_extended(int disk_index, const char *disk_name, uint64_t ba
         if (duplicate || ebr_lba >= disk_size / sector_size) return found;
         visited[visited_count++] = ebr_lba;
         uint8_t sector[sector_size];
-#if defined(CONFIG_PATA) && defined(CONFIG_SATA)
         uint64_t result = is_pata ? read_pata_device(sector, sizeof(sector), ebr_lba * sector_size, disk_index) : read_sata_device(sector, sizeof(sector), ebr_lba * sector_size, disk_index);
-#elif defined(CONFIG_PATA)
-        uint64_t result = read_pata_device(sector, sizeof(sector), ebr_lba * sector_size, disk_index);
-#elif defined(CONFIG_SATA)
-        uint64_t result = read_sata_device(sector, sizeof(sector), ebr_lba * sector_size, disk_index);
-#else
-        uint64_t result = (uint64_t)-ENODEV;
-#endif
         if (result != sizeof(sector) || *(uint16_t *)(sector + 510) != MBR_SIGNATURE) return found;
         mbr_entry_t *entries = (mbr_entry_t *)(sector + MBR_PARTITION_OFFSET);
         if (entries[0].type && !is_mbr_extended(entries[0].type)) {
@@ -137,7 +112,6 @@ static bool scan_mbr_extended(int disk_index, const char *disk_name, uint64_t ba
     return found;
 }
 
-#if defined(CONFIG_PATA) && defined(CONFIG_MBR)
 bool probe_mbr_for_pata_disk(int disk_index, const char *disk_name, uint64_t disk_size) {
     if (!disk_name || disk_size < PATA_SECTOR_SIZE) return false;
     uint8_t sector[PATA_SECTOR_SIZE];
@@ -161,9 +135,7 @@ bool probe_mbr_for_pata_disk(int disk_index, const char *disk_name, uint64_t dis
     }
     return found;
 }
-#endif
 
-#if defined(CONFIG_SATA) && defined(CONFIG_MBR)
 bool probe_mbr_for_sata_disk(int disk_index, const char *disk_name, uint64_t disk_size) {
     if (!disk_name || disk_size < SATA_SECTOR_SIZE) return false;
     uint8_t sector[SATA_SECTOR_SIZE];
@@ -187,7 +159,6 @@ bool probe_mbr_for_sata_disk(int disk_index, const char *disk_name, uint64_t dis
     }
     return found;
 }
-#endif
 
 void remove_mbr_partitions(int disk_index, bool is_pata) {
     for (int i = 0; i < mbr_partition_count; i++) {

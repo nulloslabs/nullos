@@ -3,8 +3,3 @@
 	url = https://github.com/uACPI/uACPI.git
 	branch = master
 	ignore = untracked
-[submodule "scripts/kconfig/main"]
-	path = scripts/kconfig/main
-	url = https://github.com/guillon/kconfig.git
-	branch = master
-	ignore = untracked

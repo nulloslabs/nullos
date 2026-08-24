@@ -5,9 +5,7 @@
 #include <main/spinlocks.h>
 #include <main/sched.h>
 #include <mm/pmm.h>
-#ifdef CONFIG_OOM_KILLER
 #include <mm/oom.h>
-#endif
 
 static uint32_t *ref_counts = NULL;
 static int8_t *page_orders = NULL;
@@ -104,14 +102,10 @@ static void *allocate_pages(uint64_t count, bool dma32, bool oom) {
     spin_unlock_irqrestore(&pmm_lock, flags);
     if (page == PMM_INVALID_PAGE) {
         if (!oom) return NULL;
-#ifdef CONFIG_OOM_KILLER
         if (!is_sched_ready()) panic("out of memory");
         spin_unlock(&sched_lock);
         kill_oom();
         spin_lock(&sched_lock);
-#else
-        panic("out of memory");
-#endif
         return NULL;
     }
     uint64_t phys = page * PAGE_SIZE;

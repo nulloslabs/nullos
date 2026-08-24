@@ -248,7 +248,6 @@ static int walk_rel(int start_dir, const char *rel, bool follow_final) {
     return cur;
 }
 
-
 // Internal: assume tmpfs_lock already held.  Returns parent inode index and
 // copies the final component name into `last_buf`.
 static int resolve_parent_locked(const char *abs_path, char *last_buf, size_t last_size) {

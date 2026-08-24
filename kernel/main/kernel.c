@@ -1,6 +1,5 @@
 // Look at this #include mess...
 #include <stdbool.h>
-#include <autoconf.h>
 #include <main/panic.h>
 #include <main/gdt.h>
 #include <main/idt.h>
@@ -73,11 +72,7 @@ __attribute__((noreturn)) void kmain(void) {
     init_apic();
     init_hpet();
     init_rtc();
-#ifdef CONFIG_HZ
-    init_pit(CONFIG_HZ);
-#else
     init_pit(250);
-#endif
     init_rng();
     init_stack_protector();
     init_sched();
@@ -96,11 +91,7 @@ __attribute__((noreturn)) void kmain(void) {
     set_tss_kstack(kstack_top(current_task_ptr->kstack));
 
     if (current_apic_mode != APIC_NONE) {
-#ifdef CONFIG_HZ
-        init_apic_timer(CONFIG_HZ);
-#else
         init_apic_timer(250);
-#endif
         init_mp();
     }
 

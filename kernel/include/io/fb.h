@@ -1,20 +1,13 @@
 #pragma once
 
 #include <stdint.h>
-#include <autoconf.h>
 
 typedef enum {
     FB_NONE,    // No framebuffer driver
     FB_LIMINE,  // Framebuffer provided by Limine, VESA/GOP
-#ifdef CONFIG_BGA
     FB_BGA,     // Bochs Graphics Adapter
-#endif
-#ifdef CONFIG_SVGA_II
     FB_SVGA_II, // VMware SVGA II
-#endif
-#ifdef CONFIG_VIRTIO_GPU
     FB_VIRTIO_GPU, // Red Hat virtio-gpu
-#endif
 } fb_driver_t;
 
 extern fb_driver_t current_fb_driver;

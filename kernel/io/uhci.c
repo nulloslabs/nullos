@@ -1,7 +1,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <autoconf.h>
 #include <main/log.h>
 #include <main/string.h>
 #include <io/uhci.h>

@@ -9,11 +9,6 @@ include config.mk
 
 SRC := $(wildcard io/*.c) $(wildcard io/*.S) $(wildcard main/*.c) $(wildcard main/*.S) $(wildcard mm/*.c) $(wildcard mm/*.S) $(wildcard syscalls/*.c) $(wildcard syscalls/*.S)
 
-$(shell test -f include/generated/auto.conf || [ -n "$$KCONFIG_GEN" ] || KCONFIG_GEN=1 $(MAKE) defconfig 2>&1 | grep -v '^#' >&2)
--include include/generated/auto.conf
-
-include Kconfig.mk
-
 OBJ := $(SRC:.c=.o)
 OBJ := $(OBJ:.S=.o)
 DEP := $(OBJ:.o=.d)
@@ -30,70 +25,6 @@ SUBDIRS = main io mm syscalls
 .DEFAULT_GOAL := all
 
 all: kernel
-
-menuconfig:
-	@$(MAKE) -C ../scripts/kconfig
-	@oldsum=$$(md5sum .config 2>/dev/null | cut -d' ' -f1); \
-	KCONFIG_CONFIG=.config ../scripts/kconfig/main/mconf Kconfig; \
-	ret=$$?; \
-	newsum=$$(md5sum .config 2>/dev/null | cut -d' ' -f1); \
-	if [ $$ret -ne 0 ]; then exit $$ret; fi; \
-	if [ -f .config ] && { [ "$$oldsum" != "$$newsum" ] || [ ! -f include/generated/autoconf.h ]; }; then \
-		rm -rf include/generated && mkdir -p include/generated && \
-		KCONFIG_CONFIG=.config KCONFIG_AUTOHEADER=include/generated/autoconf.h KCONFIG_AUTOCONFIG=include/generated/auto.conf KCONFIG_TRISTATE=include/generated/tristate.conf ../scripts/kconfig/main/conf --silentoldconfig Kconfig && \
-		find include/generated -mindepth 1 ! -name 'autoconf.h' ! -name 'auto.conf' -delete; \
-	fi
-
-allyesconfig:
-	@$(MAKE) -C ../scripts/kconfig
-	@KCONFIG_CONFIG=.config ../scripts/kconfig/main/conf --allyesconfig Kconfig && \
-	if [ -f .config ]; then \
-		rm -rf include/generated && mkdir -p include/generated && \
-		KCONFIG_CONFIG=.config KCONFIG_AUTOHEADER=include/generated/autoconf.h KCONFIG_AUTOCONFIG=include/generated/auto.conf KCONFIG_TRISTATE=include/generated/tristate.conf ../scripts/kconfig/main/conf --silentoldconfig Kconfig && \
-		find include/generated -mindepth 1 ! -name 'autoconf.h' ! -name 'auto.conf' -delete; \
-	fi
-
-allnoconfig:
-	@$(MAKE) -C ../scripts/kconfig
-	@KCONFIG_CONFIG=.config ../scripts/kconfig/main/conf --allnoconfig Kconfig && \
-	if [ -f .config ]; then \
-		rm -rf include/generated && mkdir -p include/generated && \
-		KCONFIG_CONFIG=.config KCONFIG_AUTOHEADER=include/generated/autoconf.h KCONFIG_AUTOCONFIG=include/generated/auto.conf KCONFIG_TRISTATE=include/generated/tristate.conf ../scripts/kconfig/main/conf --silentoldconfig Kconfig && \
-		find include/generated -mindepth 1 ! -name 'autoconf.h' ! -name 'auto.conf' -delete; \
-	fi
-
-alldefconfig:
-	@$(MAKE) -C ../scripts/kconfig
-	@KCONFIG_CONFIG=.config ../scripts/kconfig/main/conf --alldefconfig Kconfig && \
-	if [ -f .config ]; then \
-		rm -rf include/generated && mkdir -p include/generated && \
-		KCONFIG_CONFIG=.config KCONFIG_AUTOHEADER=include/generated/autoconf.h KCONFIG_AUTOCONFIG=include/generated/auto.conf KCONFIG_TRISTATE=include/generated/tristate.conf ../scripts/kconfig/main/conf --silentoldconfig Kconfig && \
-		find include/generated -mindepth 1 ! -name 'autoconf.h' ! -name 'auto.conf' -delete; \
-	fi
-
-defconfig: alldefconfig
-
-oldconfig:
-	@$(MAKE) -C ../scripts/kconfig
-	@KCONFIG_CONFIG=.config ../scripts/kconfig/main/conf --oldconfig Kconfig && \
-	if [ -f .config ]; then \
-		rm -rf include/generated && mkdir -p include/generated && \
-		KCONFIG_CONFIG=.config KCONFIG_AUTOHEADER=include/generated/autoconf.h KCONFIG_AUTOCONFIG=include/generated/auto.conf KCONFIG_TRISTATE=include/generated/tristate.conf ../scripts/kconfig/main/conf --silentoldconfig Kconfig && \
-		find include/generated -mindepth 1 ! -name 'autoconf.h' ! -name 'auto.conf' -delete; \
-	fi
-
-olddefconfig:
-	@$(MAKE) -C ../scripts/kconfig
-	@KCONFIG_CONFIG=.config ../scripts/kconfig/main/conf --olddefconfig Kconfig && \
-	if [ -f .config ]; then \
-		rm -rf include/generated && mkdir -p include/generated && \
-		KCONFIG_CONFIG=.config KCONFIG_AUTOHEADER=include/generated/autoconf.h KCONFIG_AUTOCONFIG=include/generated/auto.conf KCONFIG_TRISTATE=include/generated/tristate.conf ../scripts/kconfig/main/conf --silentoldconfig Kconfig && \
-		find include/generated -mindepth 1 ! -name 'autoconf.h' ! -name 'auto.conf' -delete; \
-	fi
-
-savedefconfig:
-	@$(MAKE) -C ../scripts/kconfig
-	@../scripts/kconfig/main/conf --savedefconfig=defconfig Kconfig
 
 limine_header: config.mk Makefile
 	@if [ ! -f include/limine/limine.h ]; then \
@@ -118,7 +49,7 @@ $(UACPI_OUTFILE): $(UACPI_OBJ) FORCE
 	if [ -f "$(UACPI_OUTFILE)" ] && $(OBJDUMP) -h "$(UACPI_OUTFILE)" 2>/dev/null | grep -q '\.debug'; then \
 		has_debug="y"; \
 	fi; \
-	has_debug_cfg="n"; if [ "$(CONFIG_DEBUG)" = "y" ]; then has_debug_cfg="y"; fi; \
+	has_debug_cfg="n"; \
 	if [ ! -f "$(UACPI_OUTFILE)" ] || [ "$$has_debug_cfg" != "$$has_debug" ]; then \
 		needs_archive=1; \
 	else \
@@ -132,7 +63,7 @@ $(UACPI_OUTFILE): $(UACPI_OBJ) FORCE
 	if [ $$needs_archive -eq 1 ]; then \
 		printf "  %-7s %s\n" "AR" "$(SUBDIR)/$(UACPI_OUTFILE)" && \
 		$(AR) rcs $(UACPI_OUTFILE) $(UACPI_OBJ) && \
-		if [ "$(CONFIG_DEBUG)" != "y" ]; then \
+		if true; then \
 			printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/$(UACPI_OUTFILE)" && \
 			$(STRIP) $(UACPI_STRIPFLAGS) $(UACPI_OUTFILE); \
 		fi; \
@@ -158,7 +89,7 @@ kernel: config.mk Makefile linker.ld
 	if [ -f "$(OUTFILE)" ] && $(OBJDUMP) -h "$(OUTFILE)" 2>/dev/null | grep -q '\.debug'; then \
 		has_debug=1; \
 	fi; \
-	has_debug_cfg=0; if [ "$(CONFIG_DEBUG)" = "y" ]; then has_debug_cfg=1; fi; \
+	has_debug_cfg=0; \
 	if [ ! -f "$(OUTFILE)" ] || [ "$$has_debug_cfg" != "$$has_debug" ]; then \
 		needs_link=1; \
 	else \
@@ -172,7 +103,7 @@ kernel: config.mk Makefile linker.ld
 	if [ $$needs_link -eq 1 ]; then \
 		printf "  %-7s %s\n" "LD" "$(SUBDIR)/$(OUTFILE)" && \
 		$(LD) $(LDFLAGS) -o $(OUTFILE) $(OBJ) $(LIBS) && \
-		if [ "$(CONFIG_DEBUG)" != "y" ]; then \
+		if true; then \
 			printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/$(OUTFILE)" && \
 			$(STRIP) $(STRIPFLAGS) $(OUTFILE); \
 		fi; \
@@ -191,11 +122,9 @@ clean:
 	@rm -rf uacpi/build
 
 mrproper: clean
-	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/include/generated/ $(SUBDIR)/.config $(SUBDIR)/.config.old $(SUBDIR)/.config.cmd"
-	@rm -rf include/generated .config .config.old .config.cmd
 	@printf "  %-7s %s\n" "CLEAN" "include/limine/"
 	@rm -rf include/limine
 
 FORCE:
 
-.PHONY: all menuconfig allyesconfig allnoconfig alldefconfig defconfig oldconfig olddefconfig savedefconfig limine_header uacpi $(SUBDIRS) kernel clean mrproper FORCE
+.PHONY: all limine_header uacpi $(SUBDIRS) kernel clean mrproper FORCE

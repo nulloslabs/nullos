@@ -161,7 +161,6 @@ static bool alloc_task_slot(int i) {
     return true;
 }
 
-
 static unsigned long calc_load(unsigned long load, unsigned long exp, unsigned long active) {
     return (load * exp + active * (LOAD_FIXED_1 - exp)) >> 11;
 }
@@ -563,7 +562,6 @@ pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *ctx, uint64_t flag
         strcpy(tasks[i]->cwd, current_task_ptr->cwd);
         strcpy(tasks[i]->exe, current_task_ptr->exe);
         strcpy(tasks[i]->name, current_task_ptr->name);
-
 
         // CLONE_PARENT and CLONE_THREAD both make the new task's parent the
         // same as the caller's parent (i.e. the sibling/leader relationship);
@@ -970,7 +968,6 @@ void prepare_scheduler_cpu(int cpu_index) {
     cpus[cpu_index].rq_head = NULL;
     cpus[cpu_index].rq_count = 0;
 }
-
 
 void init_sched(void) {
     dead_task = malloc(sizeof(*dead_task));

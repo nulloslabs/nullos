@@ -279,8 +279,6 @@ bool vmm_user_range_valid(vmm_context_t *ctx, uint64_t addr, size_t size, bool w
     return true;
 }
 
-
-
 int read_vmm(vmm_context_t* ctx, void* dest, uint64_t virt_src, size_t size) {
     uint8_t* d = (uint8_t*)dest;
     size_t remaining = size;

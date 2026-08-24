@@ -1,6 +1,5 @@
 #include <stdint.h>
 #include <stddef.h>
-#include <autoconf.h>
 #include <main/halt.h>
 #include <main/mp.h>
 #include <main/string.h>
@@ -64,13 +63,7 @@ void poll_usb_hcds(void) {
     uint64_t now = get_monotonic_time_us();
     if (now && last_poll_us && now - last_poll_us < 4000) return;
     last_poll_us = now;
-#ifdef CONFIG_UHCI
     poll_uhci_ports();
-#endif
-#ifdef CONFIG_OHCI
     poll_ohci_ports();
-#endif
-#ifdef CONFIG_USB_KEYBOARD
     poll_usb_keyboard();
-#endif
 }

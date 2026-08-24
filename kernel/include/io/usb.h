@@ -125,7 +125,6 @@ typedef struct usb_device {
     struct usb_device *next;
 } usb_device_t;
 
-
 typedef struct usb_hcd {
     const char *name;
     int (*control_transfer)(struct usb_hcd *hcd, usb_device_t *dev, usb_setup_packet_t *setup, void *data, uint16_t length);

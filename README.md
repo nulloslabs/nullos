@@ -9,7 +9,6 @@ A secure, fast and privacy-focused hobby OS.
 | Project | Purpose |
 | :--- | :--- |
 | [uACPI](https://github.com/uACPI/uACPI) | ACPI library for kernel |
-| [Kconfig](https://github.com/guillon/kconfig) | Configuration system for kernel |
 
 ## ✨ Features
 
@@ -68,7 +67,6 @@ cd nullos
 > Use `make` if you are using Linux, else use `gmake`.
 
 ```bash
-make menuconfig
 make
 ```
 

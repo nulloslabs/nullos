@@ -1,7 +1,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <errno.h>
-#include <autoconf.h>
 #include <main/log.h>
 #include <main/limine_req.h>
 #include <io/io.h>

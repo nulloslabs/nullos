@@ -712,7 +712,6 @@ int mkdir_initrd(const char *path, mode_t mode, uid_t uid, gid_t gid) {
     return 0;
 }
 
-
 int delete_initrd(const char *path) {
     // Don't follow the final component: unlink must remove the entry itself
     // (including a symlink), not its target. Intermediate directory symlinks

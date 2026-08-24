@@ -7,10 +7,7 @@ endif
 
 include ../config.mk
 
-SRC := $(wildcard *.c) $(wildcard *.S)
-
-include ../Kconfig.mk
-
+SRC = $(wildcard *.c) $(wildcard *.S)
 OBJ := $(SRC:.c=.o)
 OBJ := $(OBJ:.S=.o)
 DEP := $(OBJ:.o=.d)

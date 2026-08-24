@@ -77,7 +77,6 @@ bool is_ac97_playing(void) {
     return !(sr & (1 << 0)); // DCH (DMA Controller Halted) bit
 }
 
-
 void play_ac97(void *buf, size_t size) {
     if (!ac97_ready || !buf || !size) return;
 

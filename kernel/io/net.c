@@ -38,7 +38,6 @@ static uint16_t calculate_transport_checksum(uint32_t src_ip, uint32_t dst_ip, u
     return cksum;
 }
 
-
 static spinlock_t net_lock = SPINLOCK_INIT;
 static uint16_t ip_id_counter = 1;
 
@@ -119,7 +118,6 @@ static bool send_ip_packet(uint32_t dest_ip, uint8_t proto, const void *payload,
     return net_current_device->send(frame, total);
 }
 
-
 static uint32_t arp_cached_ip  = 0;
 static uint8_t  arp_cached_mac[6] = { 0 };
 static bool     arp_cache_valid   = false;
@@ -180,7 +178,6 @@ bool resolve_arp(uint32_t ip, uint8_t mac_out[6]) {
     return false;
 }
 
-
 static volatile bool icmp_got_reply = false;
 static uint16_t      icmp_ping_id   = 0x4E4F;
 static uint16_t      icmp_ping_seq  = 0;
@@ -227,7 +224,6 @@ bool ping_icmp(uint32_t dest_ip) {
     return false;
 }
 
-
 typedef void (*udp_rx_callback_t)(uint32_t src_ip, uint16_t src_port,
                                    uint16_t dst_port, const uint8_t *data, uint16_t len);
 static udp_rx_callback_t udp_callback = NULL;
@@ -271,7 +267,6 @@ void handle_udp_packet(const uint8_t *frame, uint16_t len) {
     handle_dhcp_packet(ntohs(udp->src_port), ntohs(udp->dst_port), payload, data_len);
     if (cb) cb(ip->src, ntohs(udp->src_port), ntohs(udp->dst_port), payload, data_len);
 }
-
 
 #define DNS_PORT     53
 #define DNS_SRC_PORT 1053
@@ -385,7 +380,6 @@ uint32_t resolve_dns(const char *hostname) {
     udp_callback = NULL;
     return 0;
 }
-
 
 // Max TCP payload per segment (MSS)
 #define TCP_MSS       1460
@@ -660,7 +654,6 @@ void free_tcp(tcp_socket_t *sock) {
 void poll_tcp(tcp_socket_t *sock) { (void)sock; poll_net_device(); }
 
 bool check_tcp_connected(tcp_socket_t *sock) { return sock && sock->state == TCP_ESTABLISHED; }
-
 
 void handle_net_packet(net_device_t *dev, const uint8_t *frame, uint16_t len) {
     if (!dev || !frame || len < 14 || len > NET_MAX_FRAME_SIZE) return;

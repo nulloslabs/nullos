@@ -2,7 +2,6 @@
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <time.h>
-#include <autoconf.h>
 #include <main/sched.h>
 #include <main/spinlocks.h>
 #include <main/string.h>
@@ -13,15 +12,9 @@
 #include <io/vfs.h>
 #include <mm/mm.h>
 
-#ifdef CONFIG_EXT4
 #include <io/ext4.h>
-#endif
-#ifdef CONFIG_VFAT
 #include <io/vfat.h>
-#endif
-#ifdef CONFIG_ISO9660
 #include <io/iso9660.h>
-#endif
 
 static vfs_mount_t mounts[VFS_MAX_MOUNTS];
 static uint64_t next_mount_id = 2;
@@ -32,17 +25,11 @@ static const vfs_backend_t backends[] = {
     { "devpts",   NULL,          NULL            },
     { "proc",     NULL,          NULL            },
     { "tmpfs",    mount_tmpfs,   unmount_tmpfs   },
-#ifdef CONFIG_EXT4
     { "ext2",     mount_ext4,    unmount_ext4    },
     { "ext3",     mount_ext4,    unmount_ext4    },
     { "ext4",     mount_ext4,    unmount_ext4    },
-#endif
-#ifdef CONFIG_ISO9660
     { "iso9660",  mount_iso9660, unmount_iso9660 },
-#endif
-#ifdef CONFIG_VFAT
     { "vfat",     mount_vfat,    unmount_vfat    },
-#endif
 };
 
 static const vfs_backend_t *find_backend(const char *fs_type) {
@@ -179,13 +166,9 @@ int64_t read_vfs(const char *path, void *buf, uint64_t count, uint64_t offset) {
         return (int64_t)bytes;
     }
 
-#ifdef CONFIG_EXT4
     if (check_ext4_path(path)) return read_ext4(path, buf, count, offset);
-#endif
 
-#ifdef CONFIG_ISO9660
     if (check_iso9660_path(path)) return read_iso9660(path, buf, count, offset);
-#endif
 
     initrd_file_t file = read_initrd(path);
     if (!file.mode) return -ENOENT;
@@ -233,7 +216,6 @@ static int load_internal(const char *path, void **data, uint64_t *size, uint64_t
         if (S_ISDIR(file.mode)) return -EISDIR;
         file_size = file.size;
     }
-#ifdef CONFIG_EXT4
     else if (check_ext4_path(path)) {
         struct stat st;
         int status = stat_ext4(path, &st, true);
@@ -242,8 +224,6 @@ static int load_internal(const char *path, void **data, uint64_t *size, uint64_t
         if (st.st_size < 0) return -EIO;
         file_size = (uint64_t)st.st_size;
     }
-#endif
-#ifdef CONFIG_ISO9660
     else if (check_iso9660_path(path)) {
         struct stat st;
         int status = stat_iso9660(path, &st, true);
@@ -252,7 +232,6 @@ static int load_internal(const char *path, void **data, uint64_t *size, uint64_t
         if (st.st_size < 0) return -EIO;
         file_size = (uint64_t)st.st_size;
     }
-#endif
     else {
         initrd_file_t file = read_initrd(path);
         if (!file.mode) return -ENOENT;
