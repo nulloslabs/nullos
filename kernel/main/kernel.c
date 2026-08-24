@@ -27,11 +27,11 @@
 #include <io/dhcp.h>
 #include <io/hpet.h>
 #include <io/rtc.h>
-// Almost...there...
 #include <io/fonts.h>
 #include <io/pci.h>
 #include <io/pic.h>
 #include <io/pit.h>
+// Almost...there...
 #include <io/power_button.h>
 #include <io/apic.h>
 #include <io/tty.h>

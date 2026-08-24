@@ -1,5 +1,6 @@
 #include <main/log.h>
 #include <main/panic.h>
+#include <main/rng.h>
 #include <main/string.h>
 #include <main/limine_req.h>
 #include <main/spinlocks.h>
@@ -76,7 +77,18 @@ static uint64_t allocate_from_zone(pmm_zone_t zone, uint64_t count) {
     while (order <= PMM_MAX_ORDER && free_heads[zone][order] == PMM_INVALID_PAGE) order++;
     if (order > PMM_MAX_ORDER) return PMM_INVALID_PAGE;
 
+    /* Randomize allocation: take a random free block instead of always the
+     * list head, so physical page assignment is not predictable. */
     uint64_t page = free_heads[zone][order];
+    if (is_rng_seeded()) {
+        uint64_t steps;
+        get_random_bytes(&steps, sizeof(steps));
+        for (uint64_t i = steps % PMM_RANDOMIZE_STEPS; i > 0; i--) {
+            uint64_t next = buddy_links(page)->next;
+            if (next == PMM_INVALID_PAGE) break;
+            page = next;
+        }
+    }
     remove_free_block(page, order, zone);
     while (order > wanted_order) {
         order--;

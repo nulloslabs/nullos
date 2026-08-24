@@ -9,11 +9,11 @@ include config.mk
 
 all: iso
 
-kernel:
-	@$(MAKE) -C kernel
-
 tools:
 	@$(MAKE) -C tools
+
+kernel:
+	@$(MAKE) -C kernel
 
 initrd:
 	@$(MAKE) -C initrd
@@ -26,15 +26,15 @@ qemu:
 	@$(QEMU) $(QEMUFLAGS) -cdrom $(ISOFILE)
 
 clean:
+	@$(MAKE) -C tools clean
 	@$(MAKE) -C kernel clean
 	@$(MAKE) -C initrd clean
-	@$(MAKE) -C tools clean
 	@$(MAKE) -C iso clean
 
 mrproper:
+	@$(MAKE) -C tools mrproper
 	@$(MAKE) -C kernel mrproper
 	@$(MAKE) -C initrd mrproper
-	@$(MAKE) -C tools mrproper
 	@$(MAKE) -C iso mrproper
 
-.PHONY: all kernel tools initrd iso qemu clean mrproper
+.PHONY: all tools kernel initrd iso qemu clean mrproper

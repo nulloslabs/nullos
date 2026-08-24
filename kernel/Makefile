@@ -49,7 +49,7 @@ $(UACPI_OUTFILE): $(UACPI_OBJ) FORCE
 	if [ -f "$(UACPI_OUTFILE)" ] && $(OBJDUMP) -h "$(UACPI_OUTFILE)" 2>/dev/null | grep -q '\.debug'; then \
 		has_debug="y"; \
 	fi; \
-	has_debug_cfg="n"; \
+	has_debug_cfg="n"; if [ "$(DEBUG)" = "1" ]; then has_debug_cfg="y"; fi; \
 	if [ ! -f "$(UACPI_OUTFILE)" ] || [ "$$has_debug_cfg" != "$$has_debug" ]; then \
 		needs_archive=1; \
 	else \
@@ -63,7 +63,7 @@ $(UACPI_OUTFILE): $(UACPI_OBJ) FORCE
 	if [ $$needs_archive -eq 1 ]; then \
 		printf "  %-7s %s\n" "AR" "$(SUBDIR)/$(UACPI_OUTFILE)" && \
 		$(AR) rcs $(UACPI_OUTFILE) $(UACPI_OBJ) && \
-		if true; then \
+		if [ "$(DEBUG)" -eq 0 ]; then \
 			printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/$(UACPI_OUTFILE)" && \
 			$(STRIP) $(UACPI_STRIPFLAGS) $(UACPI_OUTFILE); \
 		fi; \
@@ -89,8 +89,7 @@ kernel: config.mk Makefile linker.ld
 	if [ -f "$(OUTFILE)" ] && $(OBJDUMP) -h "$(OUTFILE)" 2>/dev/null | grep -q '\.debug'; then \
 		has_debug=1; \
 	fi; \
-	has_debug_cfg=0; \
-	if [ ! -f "$(OUTFILE)" ] || [ "$$has_debug_cfg" != "$$has_debug" ]; then \
+	if [ ! -f "$(OUTFILE)" ] || [ "$(DEBUG)" != "$$has_debug" ]; then \
 		needs_link=1; \
 	else \
 		for obj in $(OBJ); do \
@@ -103,7 +102,7 @@ kernel: config.mk Makefile linker.ld
 	if [ $$needs_link -eq 1 ]; then \
 		printf "  %-7s %s\n" "LD" "$(SUBDIR)/$(OUTFILE)" && \
 		$(LD) $(LDFLAGS) -o $(OUTFILE) $(OBJ) $(LIBS) && \
-		if true; then \
+		if [ "$(DEBUG)" -eq 0 ]; then \
 			printf "  %-7s %s\n" "STRIP" "$(SUBDIR)/$(OUTFILE)" && \
 			$(STRIP) $(STRIPFLAGS) $(OUTFILE); \
 		fi; \
