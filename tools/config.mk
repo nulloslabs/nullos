@@ -1,5 +1,10 @@
+DEBUG ?= 0
+
 CC = cc
 CFLAGS = -MMD -MP
+ifeq ($(DEBUG),1)
+	CFLAGS := -g $(CFLAGS)
+endif
 LD = $(CC)
 LDFLAGS = 
 LIBS = 
