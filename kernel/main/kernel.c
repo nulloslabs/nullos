@@ -64,8 +64,6 @@ __attribute__((noreturn)) void kmain(void) {
     init_gdt();
     init_idt();
     remap_pic();
-    init_tty();
-    init_pty();
     init_acpi_tables();
     parse_madt();
     detect_apic();
@@ -75,25 +73,27 @@ __attribute__((noreturn)) void kmain(void) {
     init_pit(250);
     init_rng();
     init_stack_protector();
-    init_sched();
     init_pci();
+    init_pci_drivers();
+    init_sched();
     init_acpi_namespace();
     cache_machine_info();
     cache_utsname();
     init_ps2_keyboard();
-    init_pci_drivers();
     configure_dhcp();
+    init_tty();
+    init_pty();
     init_devices();
     init_tmpfs();
     init_syscalls();
-
-    if (!current_task_ptr || !current_task_ptr->kstack) panic("bsp kernel stack is unavailable");
-    set_tss_kstack(kstack_top(current_task_ptr->kstack));
 
     if (current_apic_mode != APIC_NONE) {
         init_apic_timer(250);
         init_mp();
     }
+
+    if (!current_task_ptr || !current_task_ptr->kstack) panic("bsp kernel stack is unavailable");
+    set_tss_kstack(kstack_top(current_task_ptr->kstack));
 
     init_initrd();
 

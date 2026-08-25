@@ -11,6 +11,7 @@
 #include <linux/types.h>
 #include <net/if.h>
 #include <sys/ioctl.h>
+#include <sys/kd.h>
 #include <sys/time.h>
 #include <sys/mount.h>
 #include <sys/fb.h>
@@ -419,6 +420,23 @@ void sys_ioctl(syscall_frame_t *frame) {
             if (!current_task_ptr || current_task_ptr->euid != 0) { frame->rax = (uint64_t)-EPERM; return; }
             if (copy_from_user(&entry_map, (const void *)argp, sizeof(entry_map)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
             if (set_tty_keymap(entry_map.kb_table, entry_map.kb_index, entry_map.kb_value) < 0) { frame->rax = (uint64_t)-EINVAL; return; }
+            frame->rax = 0;
+            return;
+        }
+
+        case KDSKBMODE: {
+            int idx = ioctl_tty_idx(entry);
+            if (!is_tty || idx < 0 || idx >= NUM_TTYS) { frame->rax = (uint64_t)-ENOTTY; return; }
+            if (argp > K_OFF) { frame->rax = (uint64_t)-EINVAL; return; }
+            ttys[idx].kb_mode = (int)argp;
+            frame->rax = 0;
+            return;
+        }
+
+        case KDGKBMODE: {
+            int idx = ioctl_tty_idx(entry);
+            if (!is_tty || idx < 0 || idx >= NUM_TTYS) { frame->rax = (uint64_t)-ENOTTY; return; }
+            if (copy_to_user((void *)argp, &ttys[idx].kb_mode, sizeof(int)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
             frame->rax = 0;
             return;
         }

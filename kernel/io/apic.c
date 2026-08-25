@@ -146,6 +146,7 @@ void init_apic_timer(uint32_t hz) {
         lapic_write(LAPIC_TIMER_LVT, LAPIC_TIMER_PERIODIC | 32);
         lapic_write(LAPIC_TIMER_ICR, ticks_per_interval);
     }
+    log("apic: initialized apic timer\n");
 }
 
 void start_apic_timer_for_cpu(void) {

@@ -6,14 +6,14 @@
 #include <main/spinlocks.h>
 #include <termios.h>
 
-#define NUM_TTYS     8
-#define TTY_BUF_SIZE 4096
-#define TTY_ACTIVE_INDEX -1
-#define TTY_CTTY_INDEX -2
+#define NUM_TTYS          8
+#define TTY_BUF_SIZE      4096
+#define TTY_ACTIVE_INDEX  -1
+#define TTY_CTTY_INDEX    -2
 #define TTY_KEYMAP_TABLES 16
-#define TTY_KEYMAP_KEYS 128
-#define KBD_KEY_HOLE 0xF200
-#define KBD_KEY_CONSOLE 0xF500
+#define TTY_KEYMAP_KEYS   128
+#define KBD_KEY_HOLE      0xF200
+#define KBD_KEY_CONSOLE   0xF500
 
 typedef struct {
     char     buf[TTY_BUF_SIZE];
@@ -22,9 +22,10 @@ typedef struct {
 
 typedef struct {
     tty_ring_t input;
-    bool active;
+    pid_t fg_pgrp;
+    int kb_mode;
     struct termios termios;
-    pid_t fg_pgrp;  // foreground process group for this tty (0 = none)
+    bool active;
 } tty_t;
 
 extern tty_t ttys[NUM_TTYS];

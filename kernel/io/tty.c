@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <signal.h>
+#include <sys/kd.h>
 #include <main/log.h>
 #include <main/string.h>
 #include <main/spinlocks.h>
@@ -70,6 +71,16 @@ int set_tty_keymap(int table, int key, uint16_t value) {
 
 void tty_process_scancode(uint8_t sc) {
     handle_keyboard_cad_scancode(sc);
+
+    tty_t *t = &ttys[keyboard_tty];
+    if (t->kb_mode == K_RAW || t->kb_mode == K_MEDIUMRAW) {
+        uint64_t irq;
+        spin_lock_irqsave(&tty_lock, &irq);
+        write_tty_ring(&t->input, (const char *)&sc, 1);
+        spin_unlock_irqrestore(&tty_lock, irq);
+        return;
+    }
+
     // --- Alt key tracking ---
     if (sc == 0x38 || sc == 0xB8) { (void)scancode_to_ascii(sc); return; }
 
@@ -172,7 +183,7 @@ void tty_process_scancode(uint8_t sc) {
     // keyboard.c tracks alt_pressed; we read it via extern below.
     uint64_t irq;
     spin_lock_irqsave(&tty_lock, &irq);
-    tty_t *t = &ttys[keyboard_tty];
+    t = &ttys[keyboard_tty];
     tcflag_t lflags = t->termios.c_lflag;
     cc_t vintr = t->termios.c_cc[VINTR];
     cc_t vsusp = t->termios.c_cc[VSUSP];
@@ -266,6 +277,7 @@ void init_tty(void) {
     for (int i = 0; i < NUM_TTYS; i++) {
         ttys[i].input.head = ttys[i].input.tail = 0;
         ttys[i].active = true;
+        ttys[i].kb_mode = K_XLATE;
         ttys[i].fg_pgrp = 0;
         ttys[i].termios.c_iflag = 0x0500;
         ttys[i].termios.c_oflag = 0x0005;

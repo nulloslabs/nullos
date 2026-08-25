@@ -1,12 +1,9 @@
 #pragma once
 
-#define BLKRRPART    0x125f
+#define BLKRRPART    0x125F
 #define BLKGETSIZE   0x1260
 #define BLKFLSBUF    0x1261
 #define BLKSSZGET    0x1268
-#define KDGKBENT     0x4B46
-#define KDSKBENT     0x4B47
-#define KDFONTOP     0x4B72
 #define TCGETS       0x5401
 #define TCSETS       0x5402
 #define TCSETSW      0x5403
@@ -32,21 +29,3 @@
 #define TIOCGPTN     0x80045430
 #define BLKGETSIZE64 0x80081272
 #define TCGETS2      0x802C542A
-
-#define KD_FONT_OP_SET           0
-#define KD_FONT_FLAG_DONT_RECALC 1
-
-struct console_font_op {
-    unsigned int op;
-    unsigned int flags;
-    unsigned int width;
-    unsigned int height;
-    unsigned int charcount;
-    unsigned char *data;
-};
-
-struct kbentry {
-    unsigned char kb_table;
-    unsigned char kb_index;
-    unsigned short kb_value;
-};

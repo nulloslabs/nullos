@@ -23,7 +23,6 @@
 #include <io/pata.h>
 #include <io/sata.h>
 
-
 devtmpfs_device_t devtmpfs_devices[MAX_DEVTMPFS_DEVICES];
 spinlock_t devtmpfs_lock = SPINLOCK_INIT;
 

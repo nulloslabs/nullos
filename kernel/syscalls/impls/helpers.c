@@ -1012,15 +1012,11 @@ int ioctl_tty_idx(fd_entry_t *entry) {
     if (entry && (entry->type == FD_DEV || entry->type == FD_STREAM)) {
         char rel[256];
         if (entry->type == FD_STREAM) {
-            return 0;
+            return 1;
         }
         if (is_devtmpfs_path(entry->path, rel)) {
             int idx = tty_rel_to_idx(rel);
             if (idx >= 0) return idx;
-            if (strncmp(rel, "pts/", 4) == 0) {
-                idx = pty_rel_to_idx(rel + 4);
-                if (idx >= 0) return 100 + idx;
-            }
         } else if (is_devpts_path(entry->path, rel)) {
             int idx = pty_rel_to_idx(rel);
             if (idx >= 0) return 100 + idx;
@@ -1053,9 +1049,12 @@ static int64_t read_dev_tty(char *kbuf, uint64_t count, int tty_idx) {
             if (got > 0) {
                 total += (uint64_t)got;
                 // In raw mode, a single read() should not block once it has
-                // at least one byte — return what we have (VMIN=1, VTIME=0
-                // semantics by default).
+                // at least one byte — return what we have.
                 break;
+            }
+
+            if (t->termios.c_cc[VMIN] == 0) {
+                return (int64_t)total;
             }
 
             if (signal_pending()) return (int64_t)-EINTR;
@@ -1814,17 +1813,19 @@ int do_clock_nanosleep(int clock_id, int flags, const struct timespec *req, stru
     ktime_t request_ns = sleep_timespec_to_ns(&request);
     ktime_t deadline = absolute ? request_ns : sleep_ns_add(sleep_clock_now_ns(wait_clock), request_ns);
 
-    while (sleep_clock_now_ns(wait_clock) < deadline) {
+    while (1) {
+        ktime_t now_ns = sleep_clock_now_ns(wait_clock);
+        if (now_ns >= deadline) break;
+
         if (signal_pending()) {
             if (!absolute && rem) {
-                ktime_t now = sleep_clock_now_ns(wait_clock);
-                struct timespec remaining = sleep_ns_to_timespec(now < deadline ? deadline - now : 0);
+                struct timespec remaining = sleep_ns_to_timespec(deadline - now_ns);
                 if (copy_to_user(rem, &remaining, sizeof(remaining)) < 0) return -EFAULT;
             }
             return -EINTR;
         }
 
-        ktime_t remaining_ns = deadline - sleep_clock_now_ns(wait_clock);
+        ktime_t remaining_ns = deadline - now_ns;
         uint64_t remaining_us = ((uint64_t)remaining_ns + 999) / 1000;
         uint64_t now_us = get_monotonic_time_us();
         current_task_ptr->sleep_deadline_us = remaining_us > UINT64_MAX - now_us ? UINT64_MAX : now_us + remaining_us;
