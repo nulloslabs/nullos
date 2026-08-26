@@ -109,7 +109,7 @@ void init_sata(void) {
         sata_sizes[index] = info.sectors * SATA_SECTOR_SIZE;
     }
     is_sata_present = sata_devices_found > 0;
-    if (is_sata_present) log("sata: initialized sata with %d device(s)\n", sata_devices_found);
+    if (is_sata_present) log("sata: initialized sata\n");
     else log("sata: no sata drive found\n");
 }
 

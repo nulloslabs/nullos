@@ -10,6 +10,8 @@
 #include <io/rtl8139.h>
 #include <io/svga_ii.h>
 #include <io/virtio_gpu.h>
+#include <io/ide.h>
+#include <io/ahci.h>
 #include <io/atapi.h>
 #include <io/pata.h>
 #include <io/sata.h>
@@ -228,6 +230,8 @@ void init_pci_drivers(void) {
         uint8_t progif_value;
         bool (*init)(pci_device_t*);
     } known_storage_controllers[] = {
+        {"ide",  IDE_CLASS,  IDE_SUBCLASS,  IDE_PROGIF_MASK,  IDE_PROGIF_VALUE,  init_ide},
+        {"ahci", AHCI_CLASS, AHCI_SUBCLASS, AHCI_PROGIF_MASK, AHCI_PROGIF_VALUE, init_ahci},
     };
 
     const struct {
@@ -257,9 +261,18 @@ void init_pci_drivers(void) {
 
             log("pci: found controller for %s\n", known_storage_controllers[i].name);
             if (known_storage_controllers[i].init(dev)) {
-                if (0) {
+                if (dev->class == AHCI_CLASS && dev->subclass == AHCI_SUBCLASS && dev->progif == AHCI_PROGIF_VALUE) {
                     log("pci: found driver for sata\n");
                     init_sata();
+                } else {
+                    if (is_atapi_present) {
+                        log("pci: found driver for atapi\n");
+                        init_atapi();
+                    }
+                    if (is_pata_present) {
+                        log("pci: found driver for pata\n");
+                        init_pata();
+                    }
                 }
             }
             break;

@@ -851,7 +851,15 @@ void sys_ftruncate(syscall_frame_t *frame) {
 
     if (entry->type == FD_EXT4) { frame->rax = (uint64_t)-EROFS; return; }
     if (entry->type == FD_ISO9660) { frame->rax = (uint64_t)-EROFS; return; }
-    if (entry->type == FD_VFAT) { frame->rax = (uint64_t)-EROFS; return; }
+    if (entry->type == FD_VFAT) {
+        struct stat st;
+        if (stat_vfat(entry->path, &st, true) < 0) { frame->rax = (uint64_t)-ENOENT; return; }
+        if (!can_access_stat_mode(&st, 0, 1, 0)) { frame->rax = (uint64_t)-EACCES; return; }
+        int r = truncate_vfat(entry->path, length);
+        if (r == 0 && entry->offset > length) entry->offset = length;
+        frame->rax = (uint64_t)r;
+        return;
+    }
 
     // tmpfs: path-based, like initrd below.
     if (entry->type == FD_TMPFS) {
@@ -1247,6 +1255,11 @@ void sys_mkdir(syscall_frame_t *frame) {
         return;
     }
 
+    if (check_vfat_path(abs_path)) {
+        frame->rax = (uint64_t)mkdir_vfat(abs_path, apply_current_umask(mode));
+        return;
+    }
+
     // Check if path already exists (POSIX: mkdir must fail with EEXIST)
     initrd_file_t existing = read_initrd(abs_path);
     if (existing.data || existing.mode) { frame->rax = (uint64_t)-EEXIST; return; }
@@ -1273,6 +1286,11 @@ void sys_rmdir(syscall_frame_t *frame) {
 
     if (is_tmpfs_dir(abs_path)) {
         frame->rax = (uint64_t)rmdir_tmpfs(abs_path);
+        return;
+    }
+
+    if (check_vfat_path(abs_path)) {
+        frame->rax = (uint64_t)rmdir_vfat(abs_path);
         return;
     }
 
@@ -1343,6 +1361,11 @@ void sys_unlink(syscall_frame_t *frame) {
     // tmpfs entries live in RAM, not the initrd overlay.
     if (is_tmpfs_dir(abs_path)) {
         frame->rax = (uint64_t)delete_tmpfs(abs_path);
+        return;
+    }
+
+    if (check_vfat_path(abs_path)) {
+        frame->rax = (uint64_t)unlink_vfat(abs_path);
         return;
     }
 
@@ -1487,6 +1510,7 @@ void sys_chmod(syscall_frame_t *frame) {
 
     if (check_ext4_path(abs_path)) { frame->rax = (uint64_t)-EROFS; return; }
     if (check_iso9660_path(abs_path)) { frame->rax = (uint64_t)-EROFS; return; }
+    if (check_vfat_path(abs_path)) { frame->rax = 0; return; }
 
     if (is_tmpfs_dir(abs_path)) {
         struct stat tst;
@@ -1514,7 +1538,7 @@ void sys_fchmod(syscall_frame_t *frame) {
 
     if (entry->type == FD_EXT4) { frame->rax = (uint64_t)-EROFS; return; }
     if (entry->type == FD_ISO9660) { frame->rax = (uint64_t)-EROFS; return; }
-    if (entry->type == FD_VFAT) { frame->rax = (uint64_t)-EROFS; return; }
+    if (entry->type == FD_VFAT) { frame->rax = 0; return; }
 
     // tmpfs file: stat the inode to check ownership, then chmod by path.
     if (entry->type == FD_TMPFS) {

@@ -210,6 +210,6 @@ bool init_ide(pci_device_t *dev) {
     ide_func = dev->func;
     ide_ready = true;
     detect_ide_devices();
-    log("ide: initialized ide controller\n");
+    log("ide: initialized ide\n");
     return true;
 }

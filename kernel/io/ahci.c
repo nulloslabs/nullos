@@ -268,7 +268,6 @@ static bool ahci_prepare_device(ahci_hba_regs_t *hba, int port_index, bool dma64
     }
     device->ready = true;
     ahci_devices_found++;
-    log("ahci: sata port %d, %s, %llu sectors\n", port_index, device->model, device->sectors);
     return true;
 }
 
@@ -337,6 +336,6 @@ bool init_ahci(pci_device_t *dev) {
     }
     if (!ahci_devices_found) return false;
     is_sata_present = true;
-    log("ahci: initialized ahci with %d sata device(s)\n", ahci_devices_found);
+    log("ahci: initialized ahci\n");
     return true;
 }

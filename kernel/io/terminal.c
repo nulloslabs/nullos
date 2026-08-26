@@ -1660,7 +1660,6 @@ void show_cursor(bool visible) {
         if (cursor_y + ch > back_buffer_height) ch = back_buffer_height - cursor_y;
 
         if (visible) {
-            // Save the backbuffer pixels under the cursor so we can restore later
             cursor_saved_x = cursor_x;
             cursor_saved_y = cursor_y;
             cursor_saved_w = cw;
@@ -1673,9 +1672,8 @@ void show_cursor(bool visible) {
             for (uint64_t row = 0; row < ch; row++) {
                 uint64_t off = (cursor_y + row) * back_buffer_width + cursor_x;
                 for (uint64_t col = 0; col < cw; col++)
-                    back_buffer[off + col] = 0x00AAAAAAu;
+                    back_buffer[off + col] ^= 0x00AAAAAAu;
             }
-            // Flush just the cursor cell to the live FB
             flush_region_backbuffer(fb, cursor_x, cursor_y, cw, ch);
         } else {
             // Restore the saved pixels into the backbuffer
@@ -1692,30 +1690,15 @@ void show_cursor(bool visible) {
         uint8_t *fb_addr = (uint8_t *)fb->address;
         uint8_t bpp = fb->bpp;
         uint8_t bpp_bytes = (bpp + 7) / 8;
-        uint32_t fill_color = visible ? 0x00AAAAAAu : bg_color;
-
-        // Precompute cursor pixel in native fb format
-        uint32_t cursor_pixel = 0;
-        {
-            uint8_t r = (fill_color >> 16) & 0xFF;
-            uint8_t g = (fill_color >> 8) & 0xFF;
-            uint8_t b = fill_color & 0xFF;
-            cursor_pixel |= (uint32_t)((r * ((1 << fb->red_mask_size) - 1)) / 255) << fb->red_mask_shift;
-            cursor_pixel |= (uint32_t)((g * ((1 << fb->green_mask_size) - 1)) / 255) << fb->green_mask_shift;
-            cursor_pixel |= (uint32_t)((b * ((1 << fb->blue_mask_size) - 1)) / 255) << fb->blue_mask_shift;
-        }
-
         for (uint64_t row = 0; row < current_font_h; row++) {
             uint64_t fb_row = (cursor_y + row) * fb->pitch + cursor_x * bpp_bytes;
             for (uint64_t col = 0; col < current_font_w; col++) {
                 uint64_t off = fb_row + col * bpp_bytes;
-                uint32_t raw = cursor_pixel;
-                // Write solid cursor color
                 switch (bpp) {
                     case 15:
-                    case 16: *(uint16_t *)(fb_addr + off) = (uint16_t)raw; break;
-                    case 24: fb_addr[off] = raw; fb_addr[off + 1] = raw >> 8; fb_addr[off + 2] = raw >> 16; break;
-                    case 32: *(uint32_t *)(fb_addr + off) = raw; break;
+                    case 16: *(uint16_t *)(fb_addr + off) ^= 0xAD55u; break;
+                    case 24: fb_addr[off] ^= 0xAA; fb_addr[off + 1] ^= 0xAA; fb_addr[off + 2] ^= 0xAA; break;
+                    case 32: *(uint32_t *)(fb_addr + off) ^= 0x00AAAAAAu; break;
                 }
             }
         }

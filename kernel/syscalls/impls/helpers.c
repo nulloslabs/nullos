@@ -546,7 +546,6 @@ static int check_directory_access(const char *path, bool write) {
         if (write) return -EROFS;
     } else if (check_vfat_path(path)) {
         if (!stat_vfat_to_kst(path, &st, true)) return -ENOENT;
-        if (write) return -EROFS;
     } else if (is_tmpfs_dir(path)) {
         if (!stat_tmpfs_to_kst(path, &st, true)) return -ENOENT;
     } else {
@@ -746,13 +745,35 @@ int open_iso9660_common(const char *abs_path, uint32_t flags) {
 
 int open_fat32_common(const char *abs_path, uint32_t flags) {
     if (!check_vfat_path(abs_path)) return 1;
-    int want_write = (flags & O_WRONLY) || (flags & O_RDWR);
-    if (want_write || (flags & (O_CREAT | O_TRUNC))) return -EROFS;
+    int parent_access = check_parent_access(abs_path, false);
+    if (parent_access < 0) return parent_access;
     struct stat st;
     int status = stat_vfat(abs_path, &st, true);
-    if (status < 0) return status;
-    if ((flags & O_DIRECTORY) && !S_ISDIR(st.st_mode)) return -ENOTDIR;
-    if (!can_access_stat_mode(&st, 1, 0, S_ISDIR(st.st_mode))) return -EACCES;
+    int want_write = (flags & O_WRONLY) || (flags & O_RDWR);
+    int want_read = !want_write || (flags & O_RDWR);
+    if (status < 0) {
+        if (!(flags & O_CREAT)) return status;
+        int access = check_parent_access(abs_path, true);
+        if (access < 0) return access;
+        int r = create_vfat(abs_path, 0644);
+        if (r < 0) return r;
+        status = stat_vfat(abs_path, &st, true);
+        if (status < 0) return status;
+    } else {
+        if ((flags & O_CREAT) && (flags & O_EXCL)) return -EEXIST;
+        if ((flags & O_DIRECTORY) && !S_ISDIR(st.st_mode)) return -ENOTDIR;
+        if (S_ISDIR(st.st_mode)) {
+            if (!can_access_stat_mode(&st, 1, 0, 1)) return -EACCES;
+            return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_VFAT, flags);
+        }
+        if (!can_access_stat_mode(&st, want_read, want_write, 0)) return -EACCES;
+        if ((flags & O_TRUNC) && !want_write) return -EACCES;
+        if ((flags & O_TRUNC) && S_ISREG(st.st_mode)) {
+            int t = truncate_vfat(abs_path, 0);
+            if (t < 0) return t;
+        }
+    }
+    if (!can_access_stat_mode(&st, want_read, want_write, 0)) return -EACCES;
     return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_VFAT, flags);
 }
 
@@ -1319,6 +1340,7 @@ int change_path_ownership(const char *path, uid_t uid, gid_t gid, bool follow) {
     if (current_task_ptr->euid != 0) return -EPERM;
     if (check_ext4_path(path)) return -EROFS;
     if (check_iso9660_path(path)) return -EROFS;
+    if (check_vfat_path(path)) return 0;
     if (is_devtmpfs_path(path, NULL) || is_devpts_path(path, NULL) || is_procfs_path(path)) return -EPERM;
     if (is_tmpfs_dir(path)) return chown_tmpfs(path, uid, gid, follow);
     return chown_initrd(path, uid, gid, follow);
@@ -1330,14 +1352,16 @@ int set_path_times(const char *path, struct timespec atime, bool set_atime, stru
     bool is_tmpfs = !is_virtual && stat_tmpfs_to_kst(path, &st, follow);
     bool is_ext4 = !is_virtual && !is_tmpfs && stat_ext4_to_kst(path, &st, follow);
     bool is_iso9660 = !is_virtual && !is_tmpfs && !is_ext4 && stat_iso9660_to_kst(path, &st, follow);
-    bool is_proc = !is_virtual && !is_tmpfs && !is_ext4 && !is_iso9660 && stat_proc(path, path, &st, follow);
-    bool is_initrd = !is_virtual && !is_tmpfs && !is_ext4 && !is_iso9660 && !is_proc && stat_initrd_to_kst(path, &st, follow);
-    if (!is_virtual && !is_tmpfs && !is_ext4 && !is_iso9660 && !is_proc && !is_initrd) return -ENOENT;
+    bool is_vfat = !is_virtual && !is_tmpfs && !is_ext4 && !is_iso9660 && stat_vfat_to_kst(path, &st, follow);
+    bool is_proc = !is_virtual && !is_tmpfs && !is_ext4 && !is_iso9660 && !is_vfat && stat_proc(path, path, &st, follow);
+    bool is_initrd = !is_virtual && !is_tmpfs && !is_ext4 && !is_iso9660 && !is_vfat && !is_proc && stat_initrd_to_kst(path, &st, follow);
+    if (!is_virtual && !is_tmpfs && !is_ext4 && !is_iso9660 && !is_vfat && !is_proc && !is_initrd) return -ENOENT;
     if (!set_atime && !set_mtime) return 0;
 
     bool owner = current_task_ptr->fsuid == 0 || current_task_ptr->fsuid == st.st_uid;
     if (!owner && !can_access_stat_mode(&st, 0, 1, 0)) return -EACCES;
     if (is_ext4 || is_iso9660 || is_virtual || is_proc) return -EROFS;
+    if (is_vfat) return 0;
     if (is_tmpfs) return set_tmpfs_times(path, atime, set_atime, mtime, set_mtime, follow);
     return set_initrd_times(path, atime, set_atime, mtime, set_mtime, follow);
 }
@@ -1654,7 +1678,21 @@ uint64_t do_read(int fd, void *buf, size_t count) {
         return (uint64_t)got;
     }
 
-    if (entry->type == FD_PROC || entry->type == FD_TMPFS || entry->type == FD_EXT4 || entry->type == FD_ISO9660 || entry->type == FD_VFAT || entry->type == FD_FILE) {
+    if (entry->type == FD_VFAT) {
+        if (count == 0) { return 0; }
+        if (count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
+        char local_buf[4096];
+        uint8_t *kbuf = count <= sizeof(local_buf) ? (uint8_t *)local_buf : malloc(count);
+        if (!kbuf) { return (uint64_t)-ENOMEM; }
+        int64_t got = read_vfat(entry->path, kbuf, count, entry->offset);
+        if (got >= 0) {
+            if (write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, (uint64_t)got) < 0) got = -EFAULT;
+            else entry->offset += (uint64_t)got;
+        }
+        if (kbuf != (uint8_t *)local_buf) free(kbuf);
+        return (uint64_t)got;
+    }
+    if (entry->type == FD_PROC || entry->type == FD_TMPFS || entry->type == FD_EXT4 || entry->type == FD_ISO9660 || entry->type == FD_FILE) {
         if (count == 0) { return 0; }
         if (count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
         char local_buf[4096];
@@ -1683,11 +1721,26 @@ uint64_t do_write(int fd, const void *buf, size_t count) {
     if (!entry) { return (uint64_t)-EBADF; }
     if (!fd_allows_write(entry)) { return (uint64_t)-EBADF; }
 
+    uint8_t local_buf[4096];
+
     if (entry->type == FD_EXT4) { return (uint64_t)-EROFS; }
     if (entry->type == FD_ISO9660) { return (uint64_t)-EROFS; }
-    if (entry->type == FD_VFAT) { return (uint64_t)-EROFS; }
 
-    uint8_t local_buf[4096];
+    if (entry->type == FD_VFAT) {
+        if (entry->flags & O_APPEND) {
+            struct stat st;
+            if (stat_vfat(entry->path, &st, true) == 0) entry->offset = st.st_size;
+        }
+        uint8_t *kbuf = count <= sizeof(local_buf) ? local_buf : malloc(count);
+        if (!kbuf) { return (uint64_t)-ENOMEM; }
+        if (read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count) < 0) { if (kbuf != local_buf) free(kbuf); return (uint64_t)-EFAULT; }
+        int64_t w = write_vfat(entry->path, kbuf, count, entry->offset);
+        if (kbuf != local_buf) free(kbuf);
+        if (w >= 0) entry->offset += w;
+        return (uint64_t)w;
+    }
+
+
 
     if (entry->type == FD_STREAM) {
         tty_idx = current_task_ptr->ctty_idx >= 0 && current_task_ptr->ctty_idx < NUM_TTYS ? current_task_ptr->ctty_idx : keyboard_tty;
@@ -2346,6 +2399,14 @@ int set_advisory_lock(fd_entry_t *entry, int lock_type, bool nonblocking, bool p
 int do_truncate_path(const char *abs_path, uint64_t length) {
     if (check_ext4_path(abs_path)) return -EROFS;
     if (check_iso9660_path(abs_path)) return -EROFS;
+    if (check_vfat_path(abs_path)) {
+        struct stat st;
+        int status = stat_vfat(abs_path, &st, true);
+        if (status < 0) return status;
+        if (S_ISDIR(st.st_mode)) return -EISDIR;
+        if (!can_access_stat_mode(&st, 0, 1, 0)) return -EACCES;
+        return truncate_vfat(abs_path, length);
+    }
     // tmpfs
     if (is_tmpfs_dir(abs_path)) {
         tmpfs_file_t f = stat_tmpfs(abs_path);

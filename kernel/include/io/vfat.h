@@ -63,7 +63,14 @@ extern const uint8_t vfat_gpt_guid[16];
 #define FAT32_DE_NAME 0
 #define FAT32_DE_EXT 8
 #define FAT32_DE_ATTR 11
+#define FAT32_DE_NTRES 12
+#define FAT32_DE_CRT_TENTH 13
+#define FAT32_DE_CRT_TIME 14
+#define FAT32_DE_CRT_DATE 16
+#define FAT32_DE_LST_ACC_DATE 18
 #define FAT32_DE_FSTCLUS_HI 20
+#define FAT32_DE_WRT_TIME 22
+#define FAT32_DE_WRT_DATE 24
 #define FAT32_DE_FSTCLUS_LO 26
 #define FAT32_DE_FILESIZE 28
 #define FAT32_DE_SIZE 32
@@ -141,3 +148,9 @@ bool check_vfat_path(const char *path);
 int stat_vfat(const char *path, struct stat *st, bool follow);
 int64_t read_vfat(const char *path, void *buffer, uint64_t count, uint64_t offset);
 int get_next_vfat_child(int *index, const char *path, char *name, size_t name_size, uint8_t *type, ino_t *ino);
+int64_t write_vfat(const char *path, const void *buffer, uint64_t count, uint64_t offset);
+int truncate_vfat(const char *path, uint64_t length);
+int create_vfat(const char *path, mode_t mode);
+int mkdir_vfat(const char *path, mode_t mode);
+int unlink_vfat(const char *path);
+int rmdir_vfat(const char *path);
