@@ -5,7 +5,7 @@ ifeq ($(filter -s,$(MAKEFLAGS)),)
 MAKEFLAGS += -s
 endif
 
-INCLUDE_DIR := ../
+INCLUDE_DIR := ..
 
 include ../config.mk
 

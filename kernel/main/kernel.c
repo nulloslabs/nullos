@@ -1,5 +1,6 @@
 // Look at this #include mess...
 #include <stdbool.h>
+#include <main/kernel.h>
 #include <main/panic.h>
 #include <main/gdt.h>
 #include <main/idt.h>

@@ -5,7 +5,7 @@ ifeq ($(filter --silent,$(MAKEFLAGS)),)
 MAKEFLAGS += --silent
 endif
 
-INCLUDE_DIR := ../
+INCLUDE_DIR := ..
 
 include ../config.mk
 
@@ -18,14 +18,15 @@ all: $(OBJ)
 
 -include $(DEP)
 
-# kernel.h is special since it holds our kernel version.
 GIT_HEAD := $(shell git rev-parse --git-path HEAD)
 GIT_REF := $(shell git symbolic-ref -q HEAD)
 GIT_REF_FILE := $(if $(GIT_REF),$(shell git rev-parse --git-path $(GIT_REF)))
+GIT_PACKED := $(shell git rev-parse --git-path packed-refs)
 
-../include/main/kernel.h: $(GIT_HEAD) $(GIT_REF_FILE)
+../include/main/kernel.h: $(GIT_HEAD) $(GIT_REF_FILE) $(GIT_PACKED)
 	@touch $@
 
+undefine GIT_PACKED
 undefine GIT_REF_FILE
 undefine GIT_REF
 undefine GIT_HEAD
