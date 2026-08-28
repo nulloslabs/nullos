@@ -89,7 +89,7 @@ extern uint64_t line_start_y;
 void sync_terminal(void);
 void show_cursor(bool visible);
 void scroll(void);
-void clrscr(void);
+void clear_screen(void);
 int putchar(int c);
 int puts(const char *s);
 uint64_t write_terminal(const char *buf, uint64_t count, bool onlcr);

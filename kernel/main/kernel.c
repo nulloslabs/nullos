@@ -50,9 +50,9 @@
 
 __attribute__((noreturn)) void kmain(void) {
     cli();
-    clrscr();
     // Check if we have a framebuffer given by Limine
     if (fb_req.response && fb_req.response->framebuffer_count >= 1) current_fb_driver = FB_LIMINE;
+    clear_screen();
     init_serial_ports();
     init_default_font();
     show_cursor(true); // Show cursor as soon as possible
@@ -109,4 +109,5 @@ __attribute__((noreturn)) void kmain(void) {
     start_kernel_workqueue();
 
     idle();
+    __builtin_unreachable();
 }

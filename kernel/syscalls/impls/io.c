@@ -351,6 +351,23 @@ void sys_ioctl(syscall_frame_t *frame) {
     }
 
     switch (req) {
+        case HDIO_GETGEO: {
+            if (!entry || entry->type != FD_DEV) { frame->rax = (uint64_t)-ENOTTY; return; }
+            uint64_t size;
+            if (get_block_device_size(entry->path, &size) < 0) { frame->rax = (uint64_t)-EINVAL; return; }
+            struct hd_geometry geo;
+            geo.heads = 255;
+            geo.sectors = 63;
+            uint64_t sectors = size / 512;
+            uint64_t cyl = sectors / (255 * 63);
+            if (cyl > 65535) cyl = 65535;
+            geo.cylinders = (unsigned short)cyl;
+            geo.start = 0;
+            if (copy_to_user((void *)argp, &geo, sizeof(geo)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+            frame->rax = 0;
+            return;
+        }
+
         case BLKRRPART: {
             if (!current_task_ptr || current_task_ptr->euid != 0) { frame->rax = (uint64_t)-EPERM; return; }
             if (!entry || entry->type != FD_DEV) { frame->rax = (uint64_t)-ENOTTY; return; }
@@ -358,20 +375,22 @@ void sys_ioctl(syscall_frame_t *frame) {
             if (!is_devtmpfs_path(entry->path, rel)) { frame->rax = (uint64_t)-ENOTTY; return; }
             uint64_t blk_size;
             if (get_block_device_size(rel, &blk_size) < 0) { frame->rax = (uint64_t)-EINVAL; return; }
-            device_bus_t bus;
+            disk_device_bus_t bus;
             int disk_index;
             if (get_block_device_bus(rel, &bus, &disk_index) < 0) { frame->rax = (uint64_t)-EINVAL; return; }
-            if (bus == DEV_BUS_PATA) {
-                remove_gpt_partitions(disk_index, true);
-                remove_mbr_partitions(disk_index, true);
+            if (bus == DISK_BUS_PATA) {
+                remove_mbr_partitions(disk_index, DISK_BUS_PATA);
+                remove_gpt_partitions(disk_index, DISK_BUS_PATA);
                 if (!probe_gpt_for_pata_disk(disk_index, rel, blk_size)) probe_mbr_for_pata_disk(disk_index, rel, blk_size);
-            } else
-            if (bus == DEV_BUS_SATA) {
-                remove_gpt_partitions(disk_index, false);
-                remove_mbr_partitions(disk_index, false);
+            } else if (bus == DISK_BUS_SATA) {
+                remove_mbr_partitions(disk_index, DISK_BUS_SATA);
+                remove_gpt_partitions(disk_index, DISK_BUS_SATA);
                 if (!probe_gpt_for_sata_disk(disk_index, rel, blk_size)) probe_mbr_for_sata_disk(disk_index, rel, blk_size);
-            } else
-            {
+            } else if (bus == DISK_BUS_NVME) {
+                remove_mbr_partitions(disk_index, DISK_BUS_NVME);
+                remove_gpt_partitions(disk_index, DISK_BUS_NVME);
+                if (!probe_gpt_for_nvme_disk(disk_index, rel, blk_size)) probe_mbr_for_nvme_disk(disk_index, rel, blk_size);
+            } else {
                 frame->rax = (uint64_t)-EINVAL;
                 return;
             }
@@ -381,10 +400,8 @@ void sys_ioctl(syscall_frame_t *frame) {
 
         case BLKGETSIZE: {
             if (!entry || entry->type != FD_DEV) { frame->rax = (uint64_t)-ENOTTY; return; }
-            char rel[256];
-            if (!is_devtmpfs_path(entry->path, rel)) { frame->rax = (uint64_t)-ENOTTY; return; }
             uint64_t size;
-            if (get_block_device_size(rel, &size) < 0) { frame->rax = (uint64_t)-EINVAL; return; }
+            if (get_block_device_size(entry->path, &size) < 0) { frame->rax = (uint64_t)-EINVAL; return; }
             unsigned long sectors = (unsigned long)(size / 512);
             if (copy_to_user((void *)argp, &sectors, sizeof(sectors)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
             frame->rax = 0;
@@ -719,10 +736,8 @@ void sys_ioctl(syscall_frame_t *frame) {
 
         case BLKGETSIZE64: {
             if (!entry || entry->type != FD_DEV) { frame->rax = (uint64_t)-ENOTTY; return; }
-            char rel[256];
-            if (!is_devtmpfs_path(entry->path, rel)) { frame->rax = (uint64_t)-ENOTTY; return; }
             uint64_t size;
-            if (get_block_device_size(rel, &size) < 0) { frame->rax = (uint64_t)-EINVAL; return; }
+            if (get_block_device_size(entry->path, &size) < 0) { frame->rax = (uint64_t)-EINVAL; return; }
             if (copy_to_user((void *)argp, &size, sizeof(size)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
             frame->rax = 0;
             return;

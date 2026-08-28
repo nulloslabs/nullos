@@ -156,6 +156,15 @@ bool pata_device_size(int index, uint64_t *size) {
     return true;
 }
 
+bool make_pata_disk_name(char *name, size_t name_size, int index) {
+    if (!name || name_size < 4 || index < 0 || index >= 26) return false;
+    name[0] = 's';
+    name[1] = 'd';
+    name[2] = 'a' + index;
+    name[3] = '\0';
+    return true;
+}
+
 void init_pata(void) {
     int found = 0;
     for (uint8_t i = 0; i < IDE_MAX_DEVICES; i++) {

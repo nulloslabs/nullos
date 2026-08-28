@@ -23,7 +23,7 @@ iso:
 
 qemu:
 	@printf "  %-7s %s\n" "QEMU" "$(ISOFILE)"
-	@$(QEMU) $(QEMUFLAGS) -cdrom $(ISOFILE)
+	@$(QEMU) $(QEMUFLAGS) -cdrom $(ISOFILE) -boot d
 
 clean:
 	@$(MAKE) -C tools clean

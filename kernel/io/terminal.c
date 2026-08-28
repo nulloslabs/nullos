@@ -1730,7 +1730,7 @@ void scroll(void) {
     cursor_y = fb->height - line_height;
 }
 
-void clrscr(void) {
+void clear_screen(void) {
     uint64_t rflags;
     spin_lock_irqsave(&term_lock, &rflags);
     if (!fb_req.response || fb_req.response->framebuffer_count < 1) {

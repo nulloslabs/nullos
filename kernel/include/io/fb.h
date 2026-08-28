@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 typedef enum {
-    FB_NONE,       // No framebuffer driver
+    FB_NONE = 0,   // No framebuffer driver
     FB_LIMINE,     // Framebuffer provided by Limine, VESA/GOP
     FB_BGA,        // Bochs Graphics Adapter
     FB_QXL,        // Red Hat QXL

@@ -4,14 +4,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <main/spinlocks.h>
+#include <io/devices.h>
 
 #define MAX_DEVTMPFS_DEVICES 64
-
-typedef enum {
-    DEV_BUS_NONE = 0,
-    DEV_BUS_PATA,
-    DEV_BUS_SATA,
-} device_bus_t;
 
 typedef struct {
     char name[65];
@@ -21,7 +16,7 @@ typedef struct {
     bool active;
     bool block;
     int index; // Device-specific index (e.g., TTY number)
-    device_bus_t bus; // Backing bus of a whole-disk block device
+    disk_device_bus_t bus; // Backing bus of a whole-disk block device
 } devtmpfs_device_t;
 
 extern devtmpfs_device_t devtmpfs_devices[MAX_DEVTMPFS_DEVICES];

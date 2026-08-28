@@ -12,13 +12,18 @@ include config.mk
 all: initrd
 
 initrd:
-	resolved_packages="$$(../scripts/resolve_packages.sh $(PACKAGE_NAMES))" || exit $$?; \
-	resolved_packages="$$(printf '%s\n' "$$resolved_packages" | sed '/^core\/filesystem$$/d; /^core\/linux-api-headers$$/d')"; \
+	# cheap up-to-date check first, no resolve yet
+	if [ ! -f $(OUTFILE) ] || ! gzip -t $(OUTFILE) 2>/dev/null || [ ! -d main ] || [ Makefile -nt $(OUTFILE) ] || [ config.mk -nt $(OUTFILE) ] || [ -n "$$(find main -newer $(OUTFILE) 2>/dev/null | head -1)" ]; then \
+		need_rebuild=1; \
+	else \
+		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/$(OUTFILE) is already up to date"; exit 0; \
+	fi; \
+	resolved_packages="$$(../scripts/resolve_packages.sh $(PACKAGE_NAMES) | sed '/^core\/filesystem$$/d; /^core\/linux-api-headers$$/d')" || exit $$?; \
 	current_names="$$(for p in $$resolved_packages; do basename $$p; done)"; \
 	cached_names="$$(ls packages/*.pkg.tar.zst 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.pkg\.tar\.zst$$//')"; \
 	missing="$$(for n in $$current_names; do echo "$$cached_names" | grep -qxF "$$n" || echo missing_$$n; done)"; \
 	extra="$$(for n in $$cached_names; do echo "$$current_names" | grep -qxF "$$n" || echo extra_$$n; done)"; \
-	invalid="$$(for f in packages/*.pkg.tar.zst; do [ ! -f $$f ] || zstd -tq $$f || echo invalid_$$f; done)"; \
+	invalid=""; \
 	if [ -n "$$extra" ]; then \
 		for n in $$cached_names; do \
 			echo "$$current_names" | grep -qxF "$$n" || { \

@@ -17,4 +17,5 @@ int write_pata(const void *data, uint64_t count, uint64_t offset);
 uint64_t read_pata_device(void *data, uint64_t count, uint64_t offset, int index);
 uint64_t write_pata_device(const void *data, uint64_t count, uint64_t offset, int index);
 bool pata_device_size(int index, uint64_t *size);
+bool make_pata_disk_name(char *name, size_t name_size, int index);
 void init_pata(void);

@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <io/devices.h>
 
 #define MBR_SIGNATURE         0xAA55
 #define MBR_PARTITION_OFFSET  446
@@ -23,10 +24,11 @@ typedef struct {
     int disk_index;
     uint64_t offset;
     uint64_t size;
-    bool is_pata;
+    disk_device_bus_t bus;
     bool active;
 } mbr_partition_t;
 
 bool probe_mbr_for_pata_disk(int disk_index, const char *disk_name, uint64_t disk_size);
 bool probe_mbr_for_sata_disk(int disk_index, const char *disk_name, uint64_t disk_size);
-void remove_mbr_partitions(int disk_index, bool is_pata);
+bool probe_mbr_for_nvme_disk(int disk_index, const char *disk_name, uint64_t disk_size);
+void remove_mbr_partitions(int disk_index, disk_device_bus_t bus);

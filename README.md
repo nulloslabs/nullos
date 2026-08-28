@@ -14,22 +14,22 @@ A secure, fast and privacy-focused hobby OS.
 
 | Status | Feature |
 | :--- | :--- |
-| Done | OHCI and UHCI USB support |
-| Done | ACPI support |
-| Done | PCI support |
-| Done | Framebuffer, BGA, SVGA II, virtio-gpu support |
-| Done | IDE and AHCI support |
-| Done | ATAPI, PATA and SATA support |
-| Done | ext2/3/4, FAT16/32 and ISO9660 support |
 | Done | AC'97 support |
-| Done | Initrd support |
+| Done | ACPI support |
+| Done | ATAPI, PATA, SATA and NVMe support |
+| Done | ext2/3/4, FAT16/32 and ISO9660 support |
+| Done | E1000, RTL8139 and networking stack support |
+| Done | ELF executable support |
+| Done | Framebuffer, BGA, SVGA II, virtio-gpu support |
 | Done | gzip decompression support |
+| Done | IDE and AHCI support |
+| Done | Initrd support |
 | Done | Modular font system |
+| Done | MP support |
+| Done | OHCI and UHCI USB support |
+| Done | PCI(e) support |
 | Done | Serial port support |
 | Done | Syscall support |
-| Done | ELF executable support |
-| Done | MP support |
-| Done | E1000, RTL8139 and networking stack support |
 
 ## 🛠️ Build Requirements
 

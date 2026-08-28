@@ -1,5 +1,6 @@
 #pragma once
 
+#define HDIO_GETGEO  0x0301
 #define BLKRRPART    0x125F
 #define BLKGETSIZE   0x1260
 #define BLKFLSBUF    0x1261
@@ -8,17 +9,16 @@
 #define TCSETS       0x5402
 #define TCSETSW      0x5403
 #define TCSETSF      0x5404
-#define TIOCGWINSZ   0x5413
-#define TIOCSWINSZ   0x5414
 #define TCSBRK       0x5409
 #define TCXONC       0x540A
 #define TCFLSH       0x540B
-#define TIOCGPGRP    0x540F
 #define TIOCEXCL     0x540C
 #define TIOCNXCL     0x540D
 #define TIOCSCTTY    0x540E
 #define TIOCGPGRP    0x540F
 #define TIOCSPGRP    0x5410
+#define TIOCGWINSZ   0x5413
+#define TIOCSWINSZ   0x5414
 #define FIONREAD     0x541B
 #define TIOCNOTTY    0x5422
 #define TIOCGSID     0x5429
@@ -29,3 +29,10 @@
 #define TIOCGPTN     0x80045430
 #define BLKGETSIZE64 0x80081272
 #define TCGETS2      0x802C542A
+
+struct hd_geometry {
+    unsigned char heads;
+    unsigned char sectors;
+    unsigned short cylinders;
+    unsigned long start;
+};
