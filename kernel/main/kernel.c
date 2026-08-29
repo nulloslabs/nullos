@@ -93,10 +93,10 @@ __attribute__((noreturn)) void kmain(void) {
         init_mp();
     }
 
+    init_initrd();
+
     if (!current_task_ptr || !current_task_ptr->kstack) panic("bsp kernel stack is unavailable");
     set_tss_kstack(kstack_top(current_task_ptr->kstack));
-
-    init_initrd();
 
     sti();
 

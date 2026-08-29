@@ -28,7 +28,7 @@ initrd:
 		for n in $$cached_names; do \
 			echo "$$current_names" | grep -qxF "$$n" || { \
 				if [ -f packages/$$n.pkg.tar.zst ] && [ -d main ]; then \
-					tar --zstd -tf packages/$$n.pkg.tar.zst 2>/dev/null | while IFS= read -r f; do \
+					$(ZSTD) $(ZSTDFLAGS) -dc packages/$$n.pkg.tar.zst | $(TAR) $(TARFLAGS) -tf - | while IFS= read -r f; do \
 						case "$$f" in .*) continue ;; */) continue ;; esac; \
 						if [ -f "main/$$f" ] || [ -L "main/$$f" ]; then rm -f -- "main/$$f"; fi; \
 					done; \
@@ -148,15 +148,15 @@ initrd:
 			name=$$(basename $$p) && \
 			package_file=packages/$$name.pkg.tar.zst && \
 			package_tmp=packages/$$name.pkg.tar.zst.part && \
-			{ [ ! -f $$package_file ] || zstd -tq $$package_file || rm -f $$package_file; } && \
+			{ [ ! -f $$package_file ] || $(ZSTD) -tq $$package_file || rm -f $$package_file; } && \
 			{ [ -f $$package_file ] || { rm -f $$package_tmp && \
 			(attempt=0; while [ $$attempt -lt 3 ]; do \
-				curl --retry 3 --retry-delay 2 --retry-all-errors -fsSL -o $$package_tmp https://archlinux.org/packages/$$repo/x86_64/$$name/download/ 2>/dev/null && break; \
-				curl --retry 3 --retry-delay 2 --retry-all-errors -fsSL -o $$package_tmp https://archlinux.org/packages/$$repo/any/$$name/download/ 2>/dev/null && break; \
+				$(CURL) $(CURLFLAGS) -fsSL -o $$package_tmp https://archlinux.org/packages/$$repo/x86_64/$$name/download/ 2>/dev/null && break; \
+				$(CURL) $(CURLFLAGS) -fsSL -o $$package_tmp https://archlinux.org/packages/$$repo/any/$$name/download/ 2>/dev/null && break; \
 				attempt=$$((attempt + 1)); sleep $$((attempt * 2)); \
 		done) && \
-			zstd -tq $$package_tmp && mv $$package_tmp $$package_file; }; } && \
-			tar --zstd -xf $$package_file -C main || exit 1; \
+			$(ZSTD) $(ZSTDFLAGS) -tq $$package_tmp && mv $$package_tmp $$package_file; }; } && \
+			$(ZSTD) $(ZSTDFLAGS) -dc $$package_file | $(TAR) $(TARFLAGS) -xf - -C main || exit 1; \
 		done && \
 		find main -maxdepth 1 -type f -regextype posix-extended -regex 'main/\.[A-Z]+' -delete && \
 		(cd main && ln -sf /bin/busybox sbin/init && ln -sf sbin/init init) && \
@@ -169,8 +169,8 @@ initrd:
 		printf "  %-7s %s\n" "CPIO" "$(SUBDIR)/$(OUTFILE)" && \
 		rm -f $(OUTFILE).part && \
 		(cd main && find . -print0 | $(CPIO) $(CPIOFLAGS) 2>/dev/null > ../$(OUTFILE).part) && \
-		gzip -9 < $(OUTFILE).part > $(OUTFILE).part.gz && \
-		gzip -t $(OUTFILE).part.gz && \
+		$(GZIP) $(GZIPFLAGS) -9 < $(OUTFILE).part > $(OUTFILE).part.gz && \
+		$(GZIP) $(GZIPFLAGS) -t $(OUTFILE).part.gz && \
 		mv $(OUTFILE).part.gz $(OUTFILE) && \
 		rm -f $(OUTFILE).part; \
 	else \

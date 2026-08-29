@@ -115,7 +115,6 @@ typedef struct task {
     int sas_ss_flags;
     bool on_altstack;
     void *robust_list_head;
-    size_t robust_list_len;
 } task_t;
 
 extern task_t *tasks[MAX_TASKS];
