@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <sys/types.h>
 
-#define FD_MAX 32
+#define FD_MAX 1024
 #define AT_FDCWD -100
 
 // File descriptor types
@@ -44,7 +44,7 @@ typedef struct {
 } fd_entry_t;
 
 typedef struct {
-    fd_entry_t entries[FD_MAX];
+    fd_entry_t *entries[FD_MAX];
 } fd_table_t;
 
 void init_fd_table(fd_table_t *table);

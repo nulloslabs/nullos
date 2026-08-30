@@ -750,8 +750,25 @@ tmpfs_file_t stat_tmpfs_nofollow(const char *path) {
 
 int write_tmpfs(const char *path, const void *data, uint64_t size, uint32_t mode, uid_t uid, gid_t gid) {
     if (size > 0 && !data) return -EINVAL;
+    bool is_tmp = is_tmpfs_dir(path);
     uint64_t irq;
     spin_lock_irqsave(&tmpfs_lock, &irq);
+    // TOCTOU fix: re-validate parent under lock after check_parent_access
+    if (is_tmp) {
+        char parent[256];
+        strncpy(parent, path, sizeof(parent)-1); parent[255]='\0';
+        char *slash = strrchr(parent, '/');
+        if (slash) {
+            if (slash == parent) strcpy(parent, "/");
+            else *slash = '\0';
+            // if parent is now a symlink outside tmpfs, resolve will fail -> prevent /etc escape
+            int pino = resolve_locked(parent, true);
+            if (pino < 0 || !tmpfs_inodes[pino] || tmpfs_inodes[pino]->type != TMPFS_DIR) {
+                spin_unlock_irqrestore(&tmpfs_lock, irq);
+                return -ENOENT;
+            }
+        }
+    }
     int inode = resolve_locked(path, true);
     if (inode < 0) {
         mode_t type_bits = mode & S_IFMT;

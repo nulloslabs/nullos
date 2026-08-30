@@ -336,6 +336,8 @@ pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_
             tasks[i]->sgid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->sgid;
             tasks[i]->fsgid = (i == 0 || !current_task_ptr) ? 0 : current_task_ptr->fsgid;
             tasks[i]->umask = current_task_ptr ? current_task_ptr->umask : 0022;
+            tasks[i]->rlimit_nofile.rlim_cur = current_task_ptr ? current_task_ptr->rlimit_nofile.rlim_cur : FD_MAX;
+            tasks[i]->rlimit_nofile.rlim_max = current_task_ptr ? current_task_ptr->rlimit_nofile.rlim_max : FD_MAX;
             tasks[i]->fs_base = 0;
             tasks[i]->gs_base = 0;
             tasks[i]->ctty_idx = current_task_ptr ? current_task_ptr->ctty_idx : 1;
@@ -442,6 +444,7 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
             tasks[i]->egid = current_task_ptr->egid;
             tasks[i]->fsgid = current_task_ptr->fsgid;
             tasks[i]->umask = current_task_ptr->umask;
+            tasks[i]->rlimit_nofile = current_task_ptr->rlimit_nofile;
             tasks[i]->fs_base = current_task_ptr->fs_base;
             tasks[i]->gs_base = current_task_ptr->gs_base;
             tasks[i]->ctty_idx = current_task_ptr->ctty_idx;
@@ -493,9 +496,21 @@ pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx) {
             }
             tasks[i]->kstack = kstack;
 
-            memcpy(&tasks[i]->fd_table, &current_task_ptr->fd_table, sizeof(fd_table_t));
+            for (int fd = 0; fd < FD_MAX; fd++) tasks[i]->fd_table.entries[fd] = NULL;
             for (int fd = 0; fd < FD_MAX; fd++) {
-                if (tasks[i]->fd_table.entries[fd].open) retain_fd_entry(&tasks[i]->fd_table.entries[fd]);
+                fd_entry_t *src = current_task_ptr->fd_table.entries[fd];
+                if (src && src->open) {
+                    fd_entry_t *dst = malloc(sizeof(*dst));
+                    if (!dst) {
+                        for (int j = 0; j < fd; j++) if (tasks[i]->fd_table.entries[j]) { free(tasks[i]->fd_table.entries[j]); tasks[i]->fd_table.entries[j]=NULL; }
+                        release_task_slot(i);
+                        spin_unlock_irqrestore(&task_lock, flags);
+                        return -ENOMEM;
+                    }
+                    *dst = *src;
+                    tasks[i]->fd_table.entries[fd] = dst;
+                    retain_fd_entry(dst);
+                }
             }
 
             uint64_t v_rsp = (uint64_t)kstack_top(kstack);
@@ -578,6 +593,7 @@ pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *ctx, uint64_t flag
         tasks[i]->sgid     = current_task_ptr->sgid;
         tasks[i]->fsgid    = current_task_ptr->fsgid;
         tasks[i]->umask    = current_task_ptr->umask;
+        tasks[i]->rlimit_nofile = current_task_ptr->rlimit_nofile;
         tasks[i]->ctty_idx = current_task_ptr->ctty_idx;
         tasks[i]->sid      = current_task_ptr->sid;
         // CLONE_SETTLS installs the requested TLS pointer for the child;
@@ -630,10 +646,21 @@ pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *ctx, uint64_t flag
         // CLONE_FILES shares the file descriptor table.  We do not implement
         // reference-counted shared tables, so we always copy.  This is
         // behaviourally identical to the historical fork() here.
-        memcpy(&tasks[i]->fd_table, &current_task_ptr->fd_table, sizeof(fd_table_t));
+        for (int fd = 0; fd < FD_MAX; fd++) tasks[i]->fd_table.entries[fd] = NULL;
         for (int fd = 0; fd < FD_MAX; fd++) {
-            if (tasks[i]->fd_table.entries[fd].open)
-                retain_fd_entry(&tasks[i]->fd_table.entries[fd]);
+            fd_entry_t *src = current_task_ptr->fd_table.entries[fd];
+            if (src && src->open) {
+                fd_entry_t *dst = malloc(sizeof(*dst));
+                if (!dst) {
+                    for (int j = 0; j < fd; j++) if (tasks[i]->fd_table.entries[j]) { free(tasks[i]->fd_table.entries[j]); tasks[i]->fd_table.entries[j]=NULL; }
+                    release_task_slot(i);
+                    spin_unlock_irqrestore(&task_lock, iflags);
+                    return -ENOMEM;
+                }
+                *dst = *src;
+                tasks[i]->fd_table.entries[fd] = dst;
+                retain_fd_entry(dst);
+            }
         }
 
         // Write the child's pid into the parent's tidptr now (parent can read
@@ -894,7 +921,8 @@ void exit_task(int status) {
     }
 
     for (int i = 0; i < FD_MAX; i++) {
-        if (current_task_ptr->fd_table.entries[i].open) {
+        fd_entry_t *e = current_task_ptr->fd_table.entries[i];
+        if (e && e->open) {
             free_fd(&current_task_ptr->fd_table, i);
         }
     }

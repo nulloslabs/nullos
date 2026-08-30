@@ -31,6 +31,14 @@ A secure, fast and privacy-focused hobby OS.
 | Done | Serial port support |
 | Done | Syscall support |
 
+## 🖥️ System Requirements
+
+| Category | Minimum | Recommended |
+| :--- | :--- | :--- |
+| CPU | Any x86_64-v1 CPU | Any x86_64-v2 CPU |
+| RAM | 256MiB | 1024MiB |
+| Display | 640x480x15 | 800x600x32 |
+
 ## 🛠️ Build Requirements
 
 | Linux (x86_64) | macOS (any) | Other (any) | Notes |
@@ -63,12 +71,12 @@ cd nullos
 
 **2. Build the kernel and ISO**
 
-> [!WARNING]
-> Use `make` if you are using Linux, else use `gmake`.
-
 ```bash
 make
 ```
+
+> [!WARNING]
+> Use `make` if you are using Linux, else use `gmake`.
 
 **3. Run in QEMU**
 

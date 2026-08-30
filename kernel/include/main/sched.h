@@ -9,6 +9,7 @@
 #include <ucontext.h>
 #include <linux/rseq.h>
 #include <sys/types.h>
+#include <sys/resource.h>
 #include <main/fd.h>
 #include <main/spinlocks.h>
 #include <main/mp.h>
@@ -17,7 +18,7 @@
 #include <syscalls/syscalls.h>
 #endif
 
-#define MAX_TASKS 1024
+#define MAX_TASKS 4096
 #define PID_MAX 32768
 #define USER_STACK_SIZE (1 * 1024 * 1024)
 #define TASK_STDIN_BUF_SIZE 256
@@ -73,6 +74,7 @@ typedef struct task {
     gid_t sgid;
     gid_t fsgid;
     mode_t umask;
+    rlimit_t rlimit_nofile;
     fd_table_t fd_table;
     pid_t waiting_for;
     char cwd[256];

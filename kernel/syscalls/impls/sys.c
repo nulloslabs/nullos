@@ -181,6 +181,15 @@ void sys_setrlimit(syscall_frame_t *frame) {
 
     rlimit_t requested;
     if (copy_from_user(&requested, rlim, sizeof(requested)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+    if (resource == RLIMIT_NOFILE) {
+        if (requested.rlim_cur > requested.rlim_max) { frame->rax = (uint64_t)-EINVAL; return; }
+        if (requested.rlim_max > FD_MAX) { frame->rax = (uint64_t)-EPERM; return; }
+        if (requested.rlim_max > current.rlim_max && current_task_ptr->euid != 0) { frame->rax = (uint64_t)-EPERM; return; }
+        if (requested.rlim_cur > requested.rlim_max) { frame->rax = (uint64_t)-EINVAL; return; }
+        current_task_ptr->rlimit_nofile = requested;
+        frame->rax = 0;
+        return;
+    }
     if (requested.rlim_cur != current.rlim_cur || requested.rlim_max != current.rlim_max) { frame->rax = (uint64_t)-EPERM; return; }
 
     frame->rax = 0;
@@ -295,9 +304,16 @@ void sys_prlimit64(syscall_frame_t *frame) {
         if (copy_from_user(&requested, new_rlim, sizeof(requested)) < 0) {
             frame->rax = (uint64_t)-EFAULT; return;
         }
-        if (requested.rlim_cur != current.rlim_cur || requested.rlim_max != current.rlim_max) {
-            frame->rax = (uint64_t)-EPERM;
-            return;
+        if (resource == RLIMIT_NOFILE) {
+            if (requested.rlim_cur > requested.rlim_max) { frame->rax = (uint64_t)-EINVAL; return; }
+            if (requested.rlim_max > FD_MAX) { frame->rax = (uint64_t)-EPERM; return; }
+            if (requested.rlim_max > current.rlim_max && current_task_ptr->euid != 0) { frame->rax = (uint64_t)-EPERM; return; }
+            current_task_ptr->rlimit_nofile = requested;
+        } else {
+            if (requested.rlim_cur != current.rlim_cur || requested.rlim_max != current.rlim_max) {
+                frame->rax = (uint64_t)-EPERM;
+                return;
+            }
         }
     }
 

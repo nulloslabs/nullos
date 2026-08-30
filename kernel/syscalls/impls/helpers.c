@@ -905,8 +905,12 @@ int wake_futex(uint64_t phys, uint32_t max_wake, uint32_t bitset) {
 int fill_rlimit(int resource, rlimit_t *lim) {
     switch (resource) {
         case RLIMIT_NOFILE:
-            lim->rlim_cur = FD_MAX;
-            lim->rlim_max = FD_MAX;
+            if (current_task_ptr) {
+                *lim = current_task_ptr->rlimit_nofile;
+            } else {
+                lim->rlim_cur = FD_MAX;
+                lim->rlim_max = FD_MAX;
+            }
             return 0;
         case RLIMIT_CPU:
         case RLIMIT_FSIZE:

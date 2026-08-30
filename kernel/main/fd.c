@@ -45,15 +45,22 @@ void release_flock_obj(flock_obj_t *obj) {
 }
 
 int alloc_fd_handle(fd_table_t *table, const char *path, fd_type_t type, uint32_t flags, void *handle) {
-    for (int i = 0; i < FD_MAX; i++) {
-        if (!table->entries[i].open) {
-            table->entries[i].open   = true;
-            table->entries[i].type   = type;
-            table->entries[i].offset = 0;
-            table->entries[i].flags  = flags;
-            table->entries[i].handle = handle;
-            strncpy(table->entries[i].path, path, 255);
-            table->entries[i].path[255] = '\0';
+    // respect RLIMIT_NOFILE soft limit (configurable via setrlimit/prlimit)
+    uint64_t limit = FD_MAX;
+    if (current_task_ptr) limit = current_task_ptr->rlimit_nofile.rlim_cur;
+    if (limit > FD_MAX) limit = FD_MAX;
+    for (int i = 0; i < (int)limit; i++) {
+        if (!table->entries[i]) {
+            fd_entry_t *e = malloc(sizeof(fd_entry_t));
+            if (!e) return -ENOMEM;
+            e->open   = true;
+            e->type   = type;
+            e->offset = 0;
+            e->flags  = flags;
+            e->handle = handle;
+            strncpy(e->path, path, 255);
+            e->path[255] = '\0';
+            table->entries[i] = e;
             return i;
         }
     }
@@ -64,47 +71,46 @@ int alloc_fd(fd_table_t *table, const char *path, fd_type_t type, uint32_t flags
 
 int free_fd(fd_table_t *table, int fd) {
     if (fd < 0 || fd >= FD_MAX) { return -EBADF; }
-    if (!table->entries[fd].open) { return -EBADF; }
-    if (table->entries[fd].type == FD_PTY_MASTER) {
+    fd_entry_t *e = table->entries[fd];
+    if (!e || !e->open) { return -EBADF; }
+    if (e->type == FD_PTY_MASTER) {
         int idx = -1;
-        if (strncmp(table->entries[fd].path, "ptm:", 4) == 0) {
-            const char *p = table->entries[fd].path + 4;
+        if (strncmp(e->path, "ptm:", 4) == 0) {
+            const char *p = e->path + 4;
             idx = 0;
             while (*p >= '0' && *p <= '9') { idx = idx * 10 + (*p - '0'); p++; }
         }
         release_pty_master(idx);
-    } else if (table->entries[fd].type == FD_DEV) {
-        int idx = pty_slave_path_idx(table->entries[fd].path);
+    } else if (e->type == FD_DEV) {
+        int idx = pty_slave_path_idx(e->path);
         if (idx >= 0)
             release_pty_slave(idx);
-    } else if (table->entries[fd].type == FD_PIPE) {
-        release_unix_handle((unix_handle_t *)table->entries[fd].handle);
-    } else if (table->entries[fd].type == FD_SOCKET) {
-        release_socket((socket_t *)table->entries[fd].handle);
-    } else if ((table->entries[fd].type == FD_FILE || table->entries[fd].type == FD_TMPFS) && table->entries[fd].handle != NULL) {
-        release_flock_obj((flock_obj_t *)table->entries[fd].handle);
-    } else if (table->entries[fd].type == FD_EPOLL) {
-        epoll_instance_t *epi = (epoll_instance_t *)table->entries[fd].handle;
+    } else if (e->type == FD_PIPE) {
+        release_unix_handle((unix_handle_t *)e->handle);
+    } else if (e->type == FD_SOCKET) {
+        release_socket((socket_t *)e->handle);
+    } else if ((e->type == FD_FILE || e->type == FD_TMPFS) && e->handle != NULL) {
+        release_flock_obj((flock_obj_t *)e->handle);
+    } else if (e->type == FD_EPOLL) {
+        epoll_instance_t *epi = (epoll_instance_t *)e->handle;
         if (epi && --epi->refcount == 0) free(epi);
     }
-    table->entries[fd].open   = false;
-    table->entries[fd].type   = FD_NONE;
-    table->entries[fd].offset = 0;
-    table->entries[fd].handle = NULL;
-    table->entries[fd].path[0] = '\0';
+    free(e);
+    table->entries[fd] = NULL;
     return 0;
 }
 
 fd_entry_t *get_fd(fd_table_t *table, int fd) {
     if (fd < 0 || fd >= FD_MAX) return NULL;
-    if (!table->entries[fd].open) return NULL;
-    return &table->entries[fd];
+    fd_entry_t *e = table->entries[fd];
+    if (!e || !e->open) return NULL;
+    return e;
 }
 
 fd_entry_t *get_current_fd(int fd) {
     if (fd < 0 || fd >= FD_MAX) return NULL;
-    fd_entry_t* entry = &current_task_ptr->fd_table.entries[fd];
-    return entry->open ? entry : NULL;
+    fd_entry_t* entry = current_task_ptr->fd_table.entries[fd];
+    return (entry && entry->open) ? entry : NULL;
 }
 
 void retain_fd_entry(fd_entry_t *entry) {
@@ -133,13 +139,7 @@ void retain_fd_entry(fd_entry_t *entry) {
 
 void init_fd_table(fd_table_t *table) {
     for (int i = 0; i < FD_MAX; i++) {
-        // Clear EVERYTHING first
-        table->entries[i].open = false;
-        table->entries[i].type = FD_NONE;
-        table->entries[i].offset = 0;
-        table->entries[i].flags = 0;
-        table->entries[i].handle = NULL;
-        table->entries[i].path[0] = '\0';
+        table->entries[i] = NULL;
     }
 
     alloc_fd(table, "stdin",  FD_STREAM, O_RDONLY); // Becomes FD 0

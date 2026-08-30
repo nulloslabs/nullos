@@ -783,7 +783,7 @@ void sys_select(syscall_frame_t *frame) {
     uint64_t *exceptfds = (uint64_t *)frame->r10;
     struct timeval *timeout_ptr = (struct timeval *)frame->r8;
 
-    if (nfds < 0 || nfds > FD_SETSIZE) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (nfds < 0 || nfds > FD_MAX) { frame->rax = (uint64_t)-EINVAL; return; }
 
     if (timeout_ptr) {
         if (!user_range_ok(current_task_ptr->ctx, (uint64_t)timeout_ptr, sizeof(struct timeval))) { frame->rax = (uint64_t)-EFAULT; return; }
@@ -858,10 +858,13 @@ void sys_dup(syscall_frame_t *frame) {
     // Find the lowest free fd
     fd_table_t *table = &current_task_ptr->fd_table;
     for (int i = 0; i < FD_MAX; i++) {
-        if (!table->entries[i].open) {
-            table->entries[i] = *src;   // copy full entry
-            table->entries[i].open = true;
-            retain_fd_entry(&table->entries[i]);
+        if (!table->entries[i]) {
+            fd_entry_t *e = malloc(sizeof(*e));
+            if (!e) { frame->rax = (uint64_t)-ENOMEM; return; }
+            *e = *src;
+            e->open = true;
+            table->entries[i] = e;
+            retain_fd_entry(e);
             frame->rax = (uint64_t)i;
             return;
         }
@@ -883,11 +886,14 @@ void sys_dup2(syscall_frame_t *frame) {
     fd_table_t *table = &current_task_ptr->fd_table;
 
     // Close newfd if it's already open
-    if (table->entries[newfd].open) free_fd(table, newfd);
+    if (table->entries[newfd]) free_fd(table, newfd);
 
-    table->entries[newfd] = *src;
-    table->entries[newfd].open = true;
-    retain_fd_entry(&table->entries[newfd]);
+    fd_entry_t *e = malloc(sizeof(*e));
+    if (!e) { frame->rax = (uint64_t)-ENOMEM; return; }
+    *e = *src;
+    e->open = true;
+    table->entries[newfd] = e;
+    retain_fd_entry(e);
     frame->rax = (uint64_t)newfd;
 }
 
@@ -900,7 +906,7 @@ void sys_pselect6(syscall_frame_t *frame) {
     // r9 points to {sigset_t *ss, size_t ss_len} — two pointers packed
     uint64_t sigmask_arg = frame->r9;
 
-    if (nfds < 0 || nfds > FD_SETSIZE) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (nfds < 0 || nfds > FD_MAX) { frame->rax = (uint64_t)-EINVAL; return; }
 
     if (timeout_ptr) {
         if (!user_range_ok(current_task_ptr->ctx, (uint64_t)timeout_ptr, sizeof(struct timespec))) { frame->rax = (uint64_t)-EFAULT; return; }

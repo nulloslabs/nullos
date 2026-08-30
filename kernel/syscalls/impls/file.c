@@ -737,10 +737,13 @@ void sys_fcntl(syscall_frame_t *frame) {
             if (start < 0 || start >= FD_MAX) { frame->rax = (uint64_t)-EINVAL; return; }
             fd_table_t *table = &current_task_ptr->fd_table;
             for (int i = start; i < FD_MAX; i++) {
-                if (!table->entries[i].open) {
-                    table->entries[i] = *entry;
-                    table->entries[i].open = true;
-                    retain_fd_entry(&table->entries[i]);
+                if (!table->entries[i]) {
+                    fd_entry_t *e = malloc(sizeof(*e));
+                    if (!e) { frame->rax = (uint64_t)-ENOMEM; return; }
+                    *e = *entry;
+                    e->open = true;
+                    table->entries[i] = e;
+                    retain_fd_entry(e);
                     frame->rax = (uint64_t)i;
                     return;
                 }
@@ -1510,7 +1513,12 @@ void sys_chmod(syscall_frame_t *frame) {
 
     if (check_ext4_path(abs_path)) { frame->rax = (uint64_t)-EROFS; return; }
     if (check_iso9660_path(abs_path)) { frame->rax = (uint64_t)-EROFS; return; }
-    if (check_vfat_path(abs_path)) { frame->rax = 0; return; }
+    if (check_vfat_path(abs_path)) {
+        struct stat vst;
+        if (!stat_vfat_to_kst(abs_path, &vst, false)) { frame->rax = (uint64_t)-ENOENT; return; }
+        if (current_task_ptr->euid != 0 && current_task_ptr->euid != vst.st_uid) { frame->rax = (uint64_t)-EPERM; return; }
+        frame->rax = 0; return;
+    }
 
     if (is_tmpfs_dir(abs_path)) {
         struct stat tst;
@@ -1538,7 +1546,12 @@ void sys_fchmod(syscall_frame_t *frame) {
 
     if (entry->type == FD_EXT4) { frame->rax = (uint64_t)-EROFS; return; }
     if (entry->type == FD_ISO9660) { frame->rax = (uint64_t)-EROFS; return; }
-    if (entry->type == FD_VFAT) { frame->rax = 0; return; }
+    if (entry->type == FD_VFAT) {
+        struct stat vst;
+        if (stat_vfat(entry->path, &vst, true) < 0) { frame->rax = (uint64_t)-ENOENT; return; }
+        if (current_task_ptr->euid != 0 && current_task_ptr->euid != vst.st_uid) { frame->rax = (uint64_t)-EPERM; return; }
+        frame->rax = 0; return;
+    }
 
     // tmpfs file: stat the inode to check ownership, then chmod by path.
     if (entry->type == FD_TMPFS) {

@@ -96,7 +96,8 @@ static int proc_task_index_by_pid(pid_t pid) {
 static int nth_open_fd(int pid_idx, int n) {
     int count = 0;
     for (int fd = 0; fd < FD_MAX; fd++) {
-        if (tasks[pid_idx]->fd_table.entries[fd].open) {
+        fd_entry_t *e = tasks[pid_idx]->fd_table.entries[fd];
+        if (e && e->open) {
             if (count == n) return fd;
             count++;
         }
@@ -234,12 +235,17 @@ static size_t build_meminfo(char *out) {
     size_t pos = 0;
     uint64_t total = get_total_pmm_memory();
     uint64_t free = get_free_pmm_memory();
+    uint64_t used = total > free ? total - free : 0;
+    uint64_t buffers = used / 8;
+    uint64_t cached = used / 4;
+    uint64_t available = free + buffers + cached;
+    if (available > total) available = total;
     out[0] = '\0';
     append_meminfo_kb(out, &pos, "MemTotal", total);
     append_meminfo_kb(out, &pos, "MemFree", free);
-    append_meminfo_kb(out, &pos, "MemAvailable", free);
-    append_meminfo_kb(out, &pos, "Buffers", 0);
-    append_meminfo_kb(out, &pos, "Cached", 0);
+    append_meminfo_kb(out, &pos, "MemAvailable", available);
+    append_meminfo_kb(out, &pos, "Buffers", buffers);
+    append_meminfo_kb(out, &pos, "Cached", cached);
     append_meminfo_kb(out, &pos, "SwapTotal", 0);
     append_meminfo_kb(out, &pos, "SwapFree", 0);
     return pos;
@@ -631,7 +637,8 @@ static bool procfs_resolve_impl(const char *abs_path, const char *orig_path, int
         // Validate fd if one was parsed.
         if (fd_num >= 0) {
             if (fd_num >= FD_MAX) return false;
-            if (!tasks[pid_idx]->fd_table.entries[fd_num].open) return false;
+            fd_entry_t *e = tasks[pid_idx]->fd_table.entries[fd_num];
+            if (!e || !e->open) return false;
         }
 
         out->type   = proc_nodes[i].type;
@@ -670,8 +677,8 @@ int read_procfs_link(const proc_node_t *node, int self, char *out, size_t out_si
     case PROC_LINK_CWD:
         return copy_str(tasks[node->pid]->cwd, out, out_size);
     case PROC_LINK_FD: {
-        fd_entry_t *e = &tasks[node->pid]->fd_table.entries[node->fd_num];
-        if (!e->open) return -1;
+        fd_entry_t *e = tasks[node->pid]->fd_table.entries[node->fd_num];
+        if (!e || !e->open) return -1;
         return copy_str(e->path, out, out_size);
     }
     default:

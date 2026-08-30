@@ -252,21 +252,22 @@ void sys_execve(syscall_frame_t *frame) {
     // Check for shebang
     initrd_file_t probe = read_initrd(path_buf);
     if (probe.data && probe.size >= 2 && ((char *)probe.data)[0] == '#' && ((char *)probe.data)[1] == '!') {
-        // Parse interpreter from shebang line
+        // Parse interpreter from shebang line - bounded by probe.size (no NUL guarantee)
         char *p = (char *)probe.data + 2;
-        while (*p == ' ' || *p == '\t') p++;
+        char *end = (char *)probe.data + probe.size;
+        while (p < end && (*p == ' ' || *p == '\t')) p++;
 
         char interp[256] = {0};
         int interp_len = 0;
-        while (*p && *p != '\n' && *p != '\r' && *p != ' ' && *p != '\t' && interp_len < 255)
+        while (p < end && *p && *p != '\n' && *p != '\r' && *p != ' ' && *p != '\t' && interp_len < 255)
             interp[interp_len++] = *p++;
         interp[interp_len] = '\0';
 
-        while (*p == ' ' || *p == '\t') p++;
+        while (p < end && (*p == ' ' || *p == '\t')) p++;
 
         char interp_arg[256] = {0};
         int interp_arg_len = 0;
-        while (*p && *p != '\n' && *p != '\r' && interp_arg_len < 255)
+        while (p < end && *p && *p != '\n' && *p != '\r' && interp_arg_len < 255)
             interp_arg[interp_arg_len++] = *p++;
         interp_arg[interp_arg_len] = '\0';
 
@@ -1197,8 +1198,8 @@ void sys_set_robust_list(syscall_frame_t *frame) {
 
     // Linux documents the only supported struct size as 24 bytes
     // (sizeof(struct robust_list_head) on x86-64).
+    // Like Linux, don't validate head here - validation happens at use time (exit)
     if (len != 24) { frame->rax = (uint64_t)-EINVAL; return; }
-    if (head && !user_range_ok(current_task_ptr->ctx, (uint64_t)head, len)) { frame->rax = (uint64_t)-EINVAL; return; }
 
     current_task_ptr->robust_list_head = head;
     frame->rax = 0;
