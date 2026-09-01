@@ -12,16 +12,6 @@
 #include <mm/pmm.h>
 #include <mm/vmm.h>
 
-#define OHCI_MAX_CONTROL_DATA 512
-#define OHCI_CONTROL_SETUP_OFFSET 0
-#define OHCI_CONTROL_DATA_OFFSET 16
-#define OHCI_CONTROL_ED_OFFSET 544
-#define OHCI_CONTROL_TD_OFFSET 576
-#define OHCI_INTERRUPT_ED_OFFSET 0
-#define OHCI_INTERRUPT_TD_OFFSET 32
-#define OHCI_INTERRUPT_DUMMY_TD_OFFSET 64
-#define OHCI_INTERRUPT_DATA_OFFSET 96
-
 _Static_assert(sizeof(ohci_hcca_t) == 256, "OHCI HCCA must be 256 bytes");
 _Static_assert(sizeof(ohci_ed_t) == 16, "OHCI ED must be 16 bytes");
 _Static_assert(sizeof(ohci_td_t) == 16, "OHCI TD must be 16 bytes");
@@ -514,18 +504,21 @@ void init_ohci(pci_device_t *dev) {
 
     uint32_t bar_low = read_pci(dev->bus, dev->dev, dev->func, 0x10);
     if (bar_low == UINT32_MAX || (bar_low & 1u)) {
-        log("ohci: BAR0 is not a memory BAR\n");
+        log("ohci: bar0 is not a memory bar\n");
         return;
     }
+
     uint32_t bar_type = (bar_low >> 1) & 3u;
     if (bar_type != 0 && bar_type != 2) {
-        log("ohci: unsupported BAR0 type\n");
+        log("ohci: unsupported bar0 type\n");
         return;
     }
+
     uint64_t mmio_phys = bar_low & 0xFFFFFFF0u;
     if (bar_type == 2) mmio_phys |= (uint64_t)read_pci(dev->bus, dev->dev, dev->func, 0x14) << 32;
+
     if (!mmio_phys) {
-        log("ohci: invalid BAR0 address\n");
+        log("ohci: invalid bar0 address\n");
         return;
     }
 
@@ -537,8 +530,9 @@ void init_ohci(pci_device_t *dev) {
     uint16_t page_offset = (uint16_t)(mmio_phys - page_phys);
     uint8_t mmio_pages = (uint8_t)((page_offset + 0x100 + PAGE_SIZE - 1) / PAGE_SIZE);
     void *mapping = vmap_mmio(page_phys, mmio_pages);
+
     if (!mapping) {
-        log("ohci: failed to map BAR0\n");
+        log("ohci: failed to map bar0\n");
         return;
     }
 
@@ -552,12 +546,14 @@ void init_ohci(pci_device_t *dev) {
     uint16_t pci_command = read_pci_word(dev->bus, dev->dev, dev->func, 0x04);
     write_pci_word(dev->bus, dev->dev, dev->func, 0x04, pci_command | (1u << 1) | (1u << 2));
     uint8_t revision = (uint8_t)read_ohci_register(ctrl, OHCI_REVISION);
+
     if ((revision & 0xF0u) != 0x10u) {
-        log("ohci: unsupported revision 0x%x\n", revision);
+        log("ohci: unsupported revision\n");
         release_ohci_resources(ctrl);
         memset(ctrl, 0, sizeof(*ctrl));
         return;
     }
+
     if (!take_ohci_ownership(ctrl)) {
         release_ohci_resources(ctrl);
         memset(ctrl, 0, sizeof(*ctrl));
@@ -567,17 +563,19 @@ void init_ohci(pci_device_t *dev) {
     uint32_t descriptor_a = read_ohci_register(ctrl, OHCI_RH_DESCRIPTOR_A);
     ctrl->num_ports = (uint8_t)(descriptor_a & OHCI_RH_A_NDP);
     if (ctrl->num_ports == 0 || ctrl->num_ports > OHCI_MAX_PORTS) {
-        log("ohci: invalid root hub port count %u\n", ctrl->num_ports);
+        log("ohci: invalid root hub\n");
         release_ohci_resources(ctrl);
         memset(ctrl, 0, sizeof(*ctrl));
         return;
     }
+
     if (!allocate_ohci_resources(ctrl)) {
-        log("ohci: failed to allocate DMA32 schedule memory\n");
+        log("ohci: failed to allocate dma32 schedule memory\n");
         release_ohci_resources(ctrl);
         memset(ctrl, 0, sizeof(*ctrl));
         return;
     }
+
     if (!start_ohci_controller(ctrl)) {
         log("ohci: failed to start controller\n");
         release_ohci_resources(ctrl);
@@ -592,7 +590,7 @@ void init_ohci(pci_device_t *dev) {
     ctrl->hcd.hcd_data = ctrl;
     ctrl->initialized = true;
     register_usb_hcd(&ctrl->hcd);
-    log("ohci: initialized ohci\n");
     ohci_count++;
     scan_ohci_ports(ctrl);
+    log("ohci: initialized ohci\n");
 }

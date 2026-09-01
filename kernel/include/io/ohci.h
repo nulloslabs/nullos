@@ -31,6 +31,16 @@
 #define OHCI_RH_STATUS         0x50
 #define OHCI_RH_PORT_STATUS(n) (0x54 + (n) * 4)
 
+#define OHCI_MAX_CONTROL_DATA          512
+#define OHCI_CONTROL_SETUP_OFFSET      0
+#define OHCI_CONTROL_DATA_OFFSET       16
+#define OHCI_CONTROL_ED_OFFSET         544
+#define OHCI_CONTROL_TD_OFFSET         576
+#define OHCI_INTERRUPT_ED_OFFSET       0
+#define OHCI_INTERRUPT_TD_OFFSET       32
+#define OHCI_INTERRUPT_DUMMY_TD_OFFSET 64
+#define OHCI_INTERRUPT_DATA_OFFSET     96
+
 #define OHCI_CONTROL_PLE       (1u << 2)
 #define OHCI_CONTROL_CLE       (1u << 4)
 #define OHCI_CONTROL_HCFS      (3u << 6)
@@ -67,9 +77,7 @@
 #define OHCI_PORT_PSSC         0x00040000u
 #define OHCI_PORT_OCIC         0x00080000u
 #define OHCI_PORT_PRSC         0x00100000u
-#define OHCI_PORT_CHANGE_MASK  (OHCI_PORT_CSC | OHCI_PORT_PESC | \
-                                OHCI_PORT_PSSC | OHCI_PORT_OCIC | \
-                                OHCI_PORT_PRSC)
+#define OHCI_PORT_CHANGE_MASK  (OHCI_PORT_CSC | OHCI_PORT_PESC | OHCI_PORT_PSSC | OHCI_PORT_OCIC | OHCI_PORT_PRSC)
 
 #define OHCI_ED_SKIP           (1u << 14)
 #define OHCI_ED_LOW_SPEED      (1u << 13)
