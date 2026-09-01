@@ -63,7 +63,7 @@ static void poll_ac97(void) {
             audio_size = 0;
             audio_offset = 0;
         }
-        __asm__ volatile("mfence" ::: "memory");
+        __asm__ volatile ("mfence" ::: "memory");
         nabm_write8(NABM_PCM_OUT_LVI, last_index);
         nabm_write16(NABM_PCM_OUT_SR, 0x1C);
     }

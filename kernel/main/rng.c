@@ -16,13 +16,13 @@ static bool rng_seeded = false;
 
 static bool try_rdseed64(uint64_t *value) {
     unsigned char ok;
-    __asm__ volatile("rdseed %0; setc %1" : "=r"(*value), "=qm"(ok));
+    __asm__ volatile ("rdseed %0; setc %1" : "=r"(*value), "=qm"(ok));
     return ok != 0;
 }
 
 static bool try_rdrand64(uint64_t *value) {
     unsigned char ok;
-    __asm__ volatile("rdrand %0; setc %1" : "=r"(*value), "=qm"(ok));
+    __asm__ volatile ("rdrand %0; setc %1" : "=r"(*value), "=qm"(ok));
     return ok != 0;
 }
 
@@ -76,7 +76,7 @@ static void collect_jitter_entropy(uint64_t out[16]) {
             mix ^= delta + GOLDEN_RATIO + (mix << 6) + (mix >> 2);
             mix ^= get_raw_time_counter() + ((uint64_t)read_pit_counter() << 32);
             for (uint64_t pause = 0; pause < ((mix & 0x1f) + 1); pause++) {
-                __asm__ volatile("pause");
+                __asm__ volatile ("pause");
             }
             #undef GOLDEN_RATIO
         }

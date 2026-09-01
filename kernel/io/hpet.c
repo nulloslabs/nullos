@@ -31,7 +31,7 @@ void sleep_hpet(uint64_t ms) {
     volatile uint64_t *counter = (volatile uint64_t *)(hpet_base + 0xF0);
     uint64_t ticks = (ms * 1000000000000ULL) / hpet_period;
     uint64_t start = *counter;
-    while (*counter - start < ticks) __asm__ volatile("pause");
+    while (*counter - start < ticks) __asm__ volatile ("pause");
 }
 
 void sleep_hpet_us(uint64_t us) {
@@ -39,14 +39,7 @@ void sleep_hpet_us(uint64_t us) {
     volatile uint64_t *counter = (volatile uint64_t *)(hpet_base + 0xF0);
     uint64_t ticks = (us * 1000000000ULL) / hpet_period;
     uint64_t start = *counter;
-    while (*counter - start < ticks) __asm__ volatile("pause");
-}
-
-void stop_hpet(void) {
-    if (!hpet_base || !hpet_period) return;
-    volatile uint64_t *config = (volatile uint64_t *)(hpet_base + 0x10);
-    *config &= ~1ULL;
-    __asm__ volatile("" ::: "memory");
+    while (*counter - start < ticks) __asm__ volatile ("pause");
 }
 
 void init_hpet(void) {

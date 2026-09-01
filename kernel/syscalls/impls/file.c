@@ -62,9 +62,23 @@ void sys_open(syscall_frame_t *frame) {
     build_abs_path(path, abs_path, sizeof(abs_path));
 
     char resolved[256];
-    resolve_path_symlinks(abs_path, resolved, sizeof(resolved));
-    strncpy(abs_path, resolved, sizeof(abs_path) - 1);
-    abs_path[sizeof(abs_path) - 1] = '\0';
+    if (flags & O_NOFOLLOW) {
+        resolve_path_symlinks_ex(abs_path, resolved, sizeof(resolved), false);
+        struct stat st_link;
+        bool is_link = false;
+        if (stat_tmpfs_to_kst(resolved, &st_link, false) && S_ISLNK(st_link.st_mode)) is_link = true;
+        else if (stat_initrd_to_kst(resolved, &st_link, false) && S_ISLNK(st_link.st_mode)) is_link = true;
+        else if (stat_ext4_to_kst(resolved, &st_link, false) && S_ISLNK(st_link.st_mode)) is_link = true;
+        else if (stat_iso9660_to_kst(resolved, &st_link, false) && S_ISLNK(st_link.st_mode)) is_link = true;
+        else if (stat_vfat_to_kst(resolved, &st_link, false) && S_ISLNK(st_link.st_mode)) is_link = true;
+        if (is_link) { frame->rax = (uint64_t)-ELOOP; return; }
+        strncpy(abs_path, resolved, sizeof(abs_path) - 1);
+        abs_path[sizeof(abs_path) - 1] = '\0';
+    } else {
+        resolve_path_symlinks(abs_path, resolved, sizeof(resolved));
+        strncpy(abs_path, resolved, sizeof(abs_path) - 1);
+        abs_path[sizeof(abs_path) - 1] = '\0';
+    }
 
     char rel_path[256];
     // Check devpts BEFORE devtmpfs: /dev/pts is a sub-path of /dev (devtmpfs), // so devtmpfs would incorrectly match /dev/pts paths with rel="pts/...".
@@ -216,6 +230,8 @@ void sys_open(syscall_frame_t *frame) {
 
     if (!file.mode && !(flags & O_CREAT)) { frame->rax = (uint64_t)-ENOENT; return; }
 
+    if ((flags & O_CREAT) && (flags & O_EXCL) && file.mode) { frame->rax = (uint64_t)-EEXIST; return; }
+
     int parent_access = check_parent_access(abs_path, false);
     if (parent_access < 0) { frame->rax = (uint64_t)parent_access; return; }
 
@@ -267,6 +283,9 @@ void sys_stat(syscall_frame_t *frame) {
     resolve_path_symlinks(abs_path, resolved, sizeof(resolved));
     strncpy(abs_path, resolved, sizeof(abs_path) - 1);
     abs_path[sizeof(abs_path) - 1] = '\0';
+
+    int pacc = check_parent_access(abs_path, false);
+    if (pacc < 0) { frame->rax = (uint64_t)pacc; return; }
 
     struct stat kst = {0};
     if (stat_virtual_device(abs_path, &kst) || stat_tmpfs_to_kst(abs_path, &kst, true) || stat_ext4_to_kst(abs_path, &kst, true) || stat_iso9660_to_kst(abs_path, &kst, true) || stat_vfat_to_kst(abs_path, &kst, true)) {
@@ -392,6 +411,9 @@ void sys_lstat(syscall_frame_t *frame) {
         strncpy(abs_path, resolved, sizeof(abs_path) - 1);
         abs_path[sizeof(abs_path) - 1] = '\0';
     }
+
+    int pacc2 = check_parent_access(abs_path, false);
+    if (pacc2 < 0) { frame->rax = (uint64_t)pacc2; return; }
 
     struct stat kst = {0};
     if (stat_virtual_device(abs_path, &kst) || stat_tmpfs_to_kst(abs_path, &kst, false) || stat_ext4_to_kst(abs_path, &kst, false) || stat_iso9660_to_kst(abs_path, &kst, false) || stat_vfat_to_kst(abs_path, &kst, false)) {
@@ -2088,12 +2110,26 @@ void sys_openat(syscall_frame_t *frame) {
     int res = build_abs_path_at(dirfd, path_buf, abs_path, sizeof(abs_path));
     if (res < 0) { frame->rax = (uint64_t)res; return; }
 
-    // Resolve intermediate symlinks so /dev-clone/null -> /dev/null
+    // Resolve symlinks, respecting O_NOFOLLOW for final component
     {
         char resolved[256];
-        resolve_path_symlinks(abs_path, resolved, sizeof(resolved));
-        strncpy(abs_path, resolved, sizeof(abs_path) - 1);
-        abs_path[sizeof(abs_path) - 1] = '\0';
+        if (flags & O_NOFOLLOW) {
+            resolve_path_symlinks_ex(abs_path, resolved, sizeof(resolved), false);
+            struct stat st_link;
+            bool is_link = false;
+            if (stat_tmpfs_to_kst(resolved, &st_link, false) && S_ISLNK(st_link.st_mode)) is_link = true;
+            else if (stat_initrd_to_kst(resolved, &st_link, false) && S_ISLNK(st_link.st_mode)) is_link = true;
+            else if (stat_ext4_to_kst(resolved, &st_link, false) && S_ISLNK(st_link.st_mode)) is_link = true;
+            else if (stat_iso9660_to_kst(resolved, &st_link, false) && S_ISLNK(st_link.st_mode)) is_link = true;
+            else if (stat_vfat_to_kst(resolved, &st_link, false) && S_ISLNK(st_link.st_mode)) is_link = true;
+            if (is_link) { frame->rax = (uint64_t)-ELOOP; return; }
+            strncpy(abs_path, resolved, sizeof(abs_path) - 1);
+            abs_path[sizeof(abs_path) - 1] = '\0';
+        } else {
+            resolve_path_symlinks(abs_path, resolved, sizeof(resolved));
+            strncpy(abs_path, resolved, sizeof(abs_path) - 1);
+            abs_path[sizeof(abs_path) - 1] = '\0';
+        }
     }
 
     char rel_path[256];
@@ -2198,6 +2234,8 @@ void sys_openat(syscall_frame_t *frame) {
 
     if (!file.mode && !(flags & O_CREAT)) { frame->rax = (uint64_t)-ENOENT; return; }
 
+    if ((flags & O_CREAT) && (flags & O_EXCL) && file.mode) { frame->rax = (uint64_t)-EEXIST; return; }
+
     int parent_access = check_parent_access(abs_path, false);
     if (parent_access < 0) { frame->rax = (uint64_t)parent_access; return; }
 
@@ -2288,6 +2326,9 @@ void sys_fstatat(syscall_frame_t *frame) {
         strncpy(abs_path, resolved, sizeof(abs_path) - 1);
         abs_path[sizeof(abs_path) - 1] = '\0';
     }
+
+    int pacc = check_parent_access(abs_path, false);
+    if (pacc < 0) { frame->rax = (uint64_t)pacc; return; }
 
     struct stat kst = {0};
     if (stat_virtual_device(abs_path, &kst)) {

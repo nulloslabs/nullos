@@ -51,7 +51,7 @@ void idt_set_descriptor(uint8_t vector, void* isr, uint8_t flags) {
     descriptor->reserved = 0;
 }
 
-void load_idt_for_cpu(void) { __asm__ volatile("lidt %0" : : "m"(idtr)); }
+void load_idt_for_cpu(void) { __asm__ volatile ("lidt %0" : : "m"(idtr)); }
 
 void init_idt(void) {
     idtr.base = (uint64_t)&idt[0];
@@ -92,6 +92,6 @@ void init_idt(void) {
     SET_MSI(90) SET_MSI(91) SET_MSI(92) SET_MSI(93) SET_MSI(94) SET_MSI(95)
 #undef SET_MSI
 
-    __asm__ volatile("lidt %0" : : "m"(idtr));
+    __asm__ volatile ("lidt %0" : : "m"(idtr));
     log("idt: initialized idt\n");
 }

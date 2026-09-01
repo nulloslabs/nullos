@@ -138,7 +138,7 @@ void set_vmm_user(vmm_context_t* ctx, uint64_t virt) {
     pt[pt_idx] |= VMM_USER;
 
 flush:
-    __asm__ volatile("invlpg (%0)" : : "r"(virt) : "memory");
+    __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
 }
 
 bool map_vmm(vmm_context_t* ctx, uint64_t virt, uint64_t phys, uint64_t flags) {
@@ -160,7 +160,7 @@ bool map_vmm(vmm_context_t* ctx, uint64_t virt, uint64_t phys, uint64_t flags) {
     pt[pt_idx] = phys | flags | VMM_PRESENT;
     
     // Invalidate the TLB for this address
-    __asm__ volatile("invlpg (%0)" : : "r"(virt) : "memory");
+    __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
     
     spin_unlock_irqrestore(&vmm_lock, flags_irq);
     return true;
@@ -186,7 +186,7 @@ bool reserve_vmm(vmm_context_t* ctx, uint64_t virt, uint64_t flags) {
     // The CPU ignores all bits when present=0, so we can freely use them
     // to remember what permissions this page should have once faulted in.
     pt[pt_idx] = (flags & ~VMM_PRESENT) | VMM_DEMAND;
-    __asm__ volatile("invlpg (%0)" : : "r"(virt) : "memory");
+    __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
 
     spin_unlock_irqrestore(&vmm_lock, flags_irq);
     return true;
@@ -216,7 +216,7 @@ void unmap_vmm(vmm_context_t* ctx, uint64_t virt) {
 
     // Clear the entry and flush TLB
     pt[pt_idx] = 0;
-    __asm__ volatile("invlpg (%0)" : : "r"(virt) : "memory");
+    __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
 
 out:
     spin_unlock_irqrestore(&vmm_lock, flags_irq);
@@ -346,7 +346,7 @@ int memset_vmm(vmm_context_t* ctx, uint64_t virt_dest, int val, size_t size) {
 void switch_vmm_context(vmm_context_t* ctx) {
     // Get physical address of the PML4 (remove the HHDM offset)
     uint64_t phys_pml4 = (uint64_t)ctx->pml4 - hhdm_req.response->offset;
-    __asm__ volatile("mov %0, %%cr3" : : "r"(phys_pml4) : "memory");
+    __asm__ volatile ("mov %0, %%cr3" : : "r"(phys_pml4) : "memory");
 }
 
 vmm_context_t* create_vmm_context(void) {
@@ -720,14 +720,14 @@ void init_vmm(void) {
 
     // Make supervisor writes obey read-only PTEs as well.
     uint64_t cr0;
-    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    __asm__ volatile ("mov %%cr0, %0" : "=r"(cr0));
     cr0 |= 1ULL << 16;
-    __asm__ volatile("mov %0, %%cr0" : : "r"(cr0) : "memory");
+    __asm__ volatile ("mov %0, %%cr0" : : "r"(cr0) : "memory");
     enable_smap();
     enable_smep();
 
     uint64_t current_cr3;
-    __asm__ volatile("mov %%cr3, %0" : "=r"(current_cr3));
+    __asm__ volatile ("mov %%cr3, %0" : "=r"(current_cr3));
     
     kernel_context.pml4 = (uint64_t*)phys_to_virt(current_cr3);
 

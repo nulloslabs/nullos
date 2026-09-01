@@ -45,7 +45,7 @@ static bool read_rtc_stable_time(rtc_time_t *time, uint8_t *status_b) {
     rtc_time_t cur;
 
     while (rtc_update_in_progress()) {
-        __asm__ volatile("pause");
+        __asm__ volatile ("pause");
     }
 
     prev.second = read_rtc_register(RTC_REG_SECONDS);
@@ -59,7 +59,7 @@ static bool read_rtc_stable_time(rtc_time_t *time, uint8_t *status_b) {
         cur = prev;
 
         while (rtc_update_in_progress()) {
-            __asm__ volatile("pause");
+            __asm__ volatile ("pause");
         }
 
         prev.second = read_rtc_register(RTC_REG_SECONDS);

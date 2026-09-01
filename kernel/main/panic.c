@@ -141,7 +141,7 @@ __attribute__((noreturn)) void dopanic(const char *func, const char *msg, ...) {
 
     uint64_t rip = (uint64_t)__builtin_return_address(0) - 1;
     uint64_t rsp;
-    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
+    __asm__ volatile ("mov %%rsp, %0" : "=r"(rsp));
 
     // I hate this.
     control_log_console(SYSLOG_ACTION_CONSOLE_LEVEL, 7);

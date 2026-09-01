@@ -102,11 +102,11 @@ uint32_t get_cpu_freq(void) {
     for (int i = 0; i < 5; i++) {
         uint64_t start = read_hpet_counter();
         uint64_t tsc_start;
-        __asm__ volatile("rdtsc" : "=A"(tsc_start));
+        __asm__ volatile ("rdtsc" : "=A"(tsc_start));
         uint64_t ticks = (uint64_t)freq_mhz * 70000;
         while (read_hpet_counter() - start < ticks);
         uint64_t tsc_end;
-        __asm__ volatile("rdtsc" : "=A"(tsc_end));
+        __asm__ volatile ("rdtsc" : "=A"(tsc_end));
         samples[i] = (uint32_t)((tsc_end - tsc_start) / 70000);
     }
     uint64_t sum = 0;

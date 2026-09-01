@@ -871,7 +871,7 @@ void schedule(void) {
         // xrstor/fxrstor doesn't #NM (TS should already be clear in our
         // eager model, but be defensive against any path that set it).
         if (old_task != next && tasks[next]->fpu_area) {
-            __asm__ volatile("clts");
+            __asm__ volatile ("clts");
             restore_fpu_state(tasks[next]->fpu_area);
         }
 

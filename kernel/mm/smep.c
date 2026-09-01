@@ -10,9 +10,9 @@ void enable_smep_for_cpu(void) {
     if (!cpu_has_feature(CPU_FEATURE_SMEP)) return;
 
     uint64_t cr4;
-    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    __asm__ volatile ("mov %%cr4, %0" : "=r"(cr4));
     cr4 |= CR4_SMEP;
-    __asm__ volatile("mov %0, %%cr4" : : "r"(cr4) : "memory");
+    __asm__ volatile ("mov %0, %%cr4" : : "r"(cr4) : "memory");
 }
 
 void enable_smep(void) {

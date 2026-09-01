@@ -1,5 +1,5 @@
-#include <io/power.h>
 #include <main/halt.h>
+#include <io/power.h>
 #include <io/io.h>
 #include <io/time.h>
 #include <uacpi/sleep.h>
@@ -9,13 +9,7 @@ static volatile int started_power_transition;
 static void begin_power_transition(void) {
     cli();
     if (!__sync_lock_test_and_set(&started_power_transition, 1)) return;
-    for (;;) __asm__ volatile("hlt" : : : "memory");
-}
-
-void poweroff(void) {
-    begin_power_transition();
-    uacpi_enter_sleep_state_simple(UACPI_SLEEP_STATE_S5);
-    halt();
+    idle();
 }
 
 void reboot(void) {
@@ -30,9 +24,18 @@ void reboot(void) {
             sleep(20);
             break;
         }
-        __asm__ volatile("pause");
+        __asm__ volatile ("pause");
     }
     outb(0xCF9, 0x02);
     outb(0xCF9, 0x06);
+    halt();
+}
+
+void poweroff(void) {
+    begin_power_transition();
+    // Try emulator ports first and then actual uACPI poweroff
+    outw(0x604, 0x2000);
+    outw(0xB004, 0x2000);
+    uacpi_enter_sleep_state_simple(UACPI_SLEEP_STATE_S5);
     halt();
 }

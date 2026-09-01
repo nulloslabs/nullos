@@ -252,12 +252,12 @@ uacpi_thread_id uacpi_kernel_get_thread_id(void) {
 
 uacpi_interrupt_state uacpi_kernel_disable_interrupts(void) {
     uacpi_interrupt_state state;
-    __asm__ volatile("pushfq; pop %0; cli" : "=r"(state) :: "memory");
+    __asm__ volatile ("pushfq; pop %0; cli" : "=r"(state) :: "memory");
     return state;
 }
 
 void uacpi_kernel_restore_interrupts(uacpi_interrupt_state state) {
-    __asm__ volatile("push %0; popfq" :: "r"(state) : "memory");
+    __asm__ volatile ("push %0; popfq" :: "r"(state) : "memory");
 }
 
 uacpi_status uacpi_kernel_acquire_mutex(uacpi_handle handle, uacpi_u16 timeout) {
@@ -266,7 +266,7 @@ uacpi_status uacpi_kernel_acquire_mutex(uacpi_handle handle, uacpi_u16 timeout) 
     uacpi_u64 start = monotonic_ms();
     do {
         if (__sync_bool_compare_and_swap(&mutex->lock, 0, 1)) return UACPI_STATUS_OK;
-        __asm__ volatile("pause");
+        __asm__ volatile ("pause");
     } while (timeout == 0xFFFF || monotonic_ms() - start < timeout);
     return UACPI_STATUS_TIMEOUT;
 }
@@ -288,7 +288,7 @@ uacpi_bool uacpi_kernel_wait_for_event(uacpi_handle handle, uacpi_u16 timeout) {
             return UACPI_TRUE;
         }
         spin_unlock_irqrestore(&event->lock, flags);
-        __asm__ volatile("pause");
+        __asm__ volatile ("pause");
     } while (timeout == 0xFFFF || monotonic_ms() - start < timeout);
     return UACPI_FALSE;
 }

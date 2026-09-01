@@ -89,11 +89,11 @@ static int poll_nvme_cq(nvme_queue_t *q, uint16_t cid, uint32_t *result) {
     // poll for completion
     for (int t = 0; t < NVME_TIMEOUT_POLL; t++) {
         volatile nvme_cq_entry_t *e = &q->cq[q->cq_head];
-        __asm__ volatile("" ::: "memory");
+        __asm__ volatile ("" ::: "memory");
         uint16_t sf = e->status & 0xFFFF;
         uint16_t phase = sf & 0x1;
-        if (phase != q->cq_phase) { __asm__ volatile("pause"); continue; }
-        if (e->cid != cid) { __asm__ volatile("pause"); continue; }
+        if (phase != q->cq_phase) { __asm__ volatile ("pause"); continue; }
+        if (e->cid != cid) { __asm__ volatile ("pause"); continue; }
         if (result) *result = e->result;
         uint16_t status = sf >> 1;
         uint16_t sc = status & 0xFF;
@@ -119,7 +119,7 @@ static int submit_nvme_admin(nvme_controller_t *c, nvme_sq_entry_t *cmd, uint32_
     nvme_queue_t *q = &c->admin_q;
     uint16_t tail = q->sq_tail;
     q->sq[tail] = *cmd;
-    __asm__ volatile("mfence" ::: "memory");
+    __asm__ volatile ("mfence" ::: "memory");
     q->sq_tail++;
     if (q->sq_tail >= q->depth) q->sq_tail = 0;
     write_nvme_reg32(c->regs, q->sq_doorbell, q->sq_tail);
@@ -426,7 +426,7 @@ int64_t read_nvme_blocks(uint32_t ns, uint64_t lba, void *buf, uint64_t count) {
     cmd.cid = cid;
     uint16_t tail = q->sq_tail;
     q->sq[tail] = cmd;
-    __asm__ volatile("mfence" ::: "memory");
+    __asm__ volatile ("mfence" ::: "memory");
     q->sq_tail++;
     if (q->sq_tail >= q->depth) q->sq_tail = 0;
     write_nvme_reg32(c->regs, q->sq_doorbell, q->sq_tail);
@@ -518,7 +518,7 @@ int64_t write_nvme_blocks(uint32_t ns, uint64_t lba, const void *buf, uint64_t c
     cmd.cid = cid;
     uint16_t tail = q->sq_tail;
     q->sq[tail] = cmd;
-    __asm__ volatile("mfence" ::: "memory");
+    __asm__ volatile ("mfence" ::: "memory");
     q->sq_tail++;
     if (q->sq_tail >= q->depth) q->sq_tail = 0;
     write_nvme_reg32(c->regs, q->sq_doorbell, q->sq_tail);

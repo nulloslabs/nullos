@@ -557,7 +557,8 @@ static int check_directory_access(const char *path, bool write) {
         st.st_gid = dir.gid;
     }
     if (!S_ISDIR(st.st_mode)) return -ENOTDIR;
-    return can_access_stat_mode(&st, 0, write, 1) ? 0 : -EACCES;
+    int can = can_access_stat_mode(&st, 0, write, 1);
+    return can ? 0 : -EACCES;
 }
 
 int check_parent_access(const char *path, bool modify) {
@@ -574,7 +575,9 @@ int check_parent_access(const char *path, bool modify) {
     bool immediate = modify;
     for (;;) {
         int status = check_directory_access(parent, immediate);
-        if (status < 0) return status;
+        if (status < 0) {
+            return status;
+        }
         if (strcmp(parent, "/") == 0) break;
         slash = strrchr(parent, '/');
         if (!slash || slash == parent) strlcpy(parent, "/", sizeof(parent));
@@ -2548,6 +2551,13 @@ int check_access_at(int dirfd, const char *user_path, int mode, int flags) {
     char abs_path[256];
     status = build_abs_path_at(dirfd, path, abs_path, sizeof(abs_path));
     if (status < 0) return status;
+    // Resolve intermediate symlinks for parent check, then verify search permission on parents
+    {
+        char resolved_for_parent[256];
+        resolve_path_symlinks(abs_path, resolved_for_parent, sizeof(resolved_for_parent));
+        int pacc = check_parent_access(resolved_for_parent, false);
+        if (pacc < 0) return pacc;
+    }
     return check_path_access(path, abs_path, mode, !(flags & AT_SYMLINK_NOFOLLOW));
 }
 

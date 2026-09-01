@@ -178,7 +178,7 @@ void init_mp(void) {
 
     // Wait for all APs to come online (with timeout)
     int expected = cpu_count - 1;
-    for (volatile int timeout = 0; timeout < 100000000 && ap_ready_count < expected; timeout++) __asm__ volatile("pause");
+    for (volatile int timeout = 0; timeout < 100000000 && ap_ready_count < expected; timeout++) __asm__ volatile ("pause");
 
     if (ap_ready_count < expected) {
         log("mp: warning: only %d/%d aps came online\n", ap_ready_count, expected);

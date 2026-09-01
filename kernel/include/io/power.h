@@ -1,4 +1,4 @@
 #pragma once
 
-void poweroff(void);
 void reboot(void);
+void poweroff(void);

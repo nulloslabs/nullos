@@ -19,7 +19,7 @@ static uacpi_status ec_wait_status(ec_controller_t *ec, uint8_t mask, uint8_t ex
     while ((inb(ec->command_port) & mask) != expected) {
         if (start && get_monotonic_time_us() - start >= EC_TIMEOUT_US) return UACPI_STATUS_HARDWARE_TIMEOUT;
         if (!start && ++spins >= EC_TIMEOUT_US * 16) return UACPI_STATUS_HARDWARE_TIMEOUT;
-        __asm__ volatile("pause");
+        __asm__ volatile ("pause");
     }
     return UACPI_STATUS_OK;
 }
