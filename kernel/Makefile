@@ -13,9 +13,9 @@ OBJ := $(SRC:.c=.o)
 OBJ := $(OBJ:.S=.o)
 DEP := $(OBJ:.o=.d)
 
-UACPI_SRC = $(wildcard uacpi/source/*.c)
-UACPI_OBJ = $(patsubst uacpi/source/%.c,uacpi/build/%.o,$(UACPI_SRC))
-UACPI_DEP = $(UACPI_OBJ:.o=.d)
+UACPI_SRC := $(wildcard uacpi/source/*.c)
+UACPI_OBJ := $(patsubst uacpi/source/%.c,uacpi/build/%.o,$(UACPI_SRC))
+UACPI_DEP := $(UACPI_OBJ:.o=.d)
 
 SUBDIRS = main io mm syscalls
 
