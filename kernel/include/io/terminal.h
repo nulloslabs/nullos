@@ -14,7 +14,9 @@
 typedef enum {
     STATE_NORMAL,
     STATE_EXPECT_BRACKET,
-    STATE_READ_PARAMS
+    STATE_READ_PARAMS,
+    STATE_OSC,
+    STATE_OSC_ESC
 } parser_state_t;
 
 typedef struct {

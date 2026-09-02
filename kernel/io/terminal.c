@@ -923,11 +923,15 @@ static int putchar_unlocked(int c) {
         // After ESC, if it's not '[', handle single-char ESC sequences.
         if (c == '[') {
             ansi_idx = 0; state = STATE_READ_PARAMS;
+        } else if (c == ']') {
+            state = STATE_OSC;
         } else if (c == '(') {
             // ESC ( X — select G0 charset. Next byte picks the charset:
             // '0' = DEC Special Graphics (line drawing), 'B' = US ASCII.
             expect_charset_designator = true;
             state = STATE_NORMAL; // consume the designator byte via the flag below
+        } else if (c == '\033') {
+            state = STATE_EXPECT_BRACKET;
         } else {
             // ESC 7/8 — DECSC/DECRC (save/restore cursor+attrs). vi uses these.
             // ESC D  — IND (index, line feed w/ scroll region respect)
@@ -984,8 +988,68 @@ static int putchar_unlocked(int c) {
                 case 'H':  // HTS: set a horizontal tab stop at the cursor
                     set_tab_stop(cursor_x / current_font_w);
                     break;
+                case 'c':  // RIS: Reset to Initial State
+                    is_bold = false;
+                    is_reverse = false;
+                    reverse_bg = 0;
+                    fg_color = default_color;
+                    bg_color = 0x00000000;
+                    cursor_x = 0;
+                    cursor_y = 0;
+                    line_start_y = 0;
+                    cursor_enabled = true;
+                    cursor_saved_w = 0;
+                    cursor_saved_h = 0;
+                    saved_cursor_x = 0;
+                    saved_cursor_y = 0;
+                    saved_fg = default_color;
+                    saved_bg = 0x00000000;
+                    saved_bold = false;
+                    saved_reverse = false;
+                    alt_active = false;
+                    alt_saved_cursor_x = 0;
+                    alt_saved_cursor_y = 0;
+                    alt_saved_fg = default_color;
+                    alt_saved_bg = 0x00000000;
+                    alt_saved_bold = false;
+                    alt_saved_reverse = false;
+                    region_set = false;
+                    region_top = 0;
+                    region_bottom = 0;
+                    reset_tab_stops();
+                    acs_active = false;
+                    expect_charset_designator = false;
+                    last_printable_char = ' ';
+                    ansi_idx = 0;
+                    if (cell_buffer && cell_columns && cell_rows)
+                        blank_cells(cell_buffer, cell_columns * cell_rows, 0);
+                    if (alt_cell_buffer && cell_columns && cell_rows)
+                        blank_cells(alt_cell_buffer, cell_columns * cell_rows, 0);
+                    if (back_buffer_available) {
+                        fill_rect_backbuffer(0, 0, fb->width, fb->height, 0);
+                        flush_backbuffer(fb);
+                    } else {
+                        for (uint64_t y = 0; y < fb->height; y++)
+                            for (uint64_t x = 0; x < fb->width; x++)
+                                put_pixel_fb(x, y, 0);
+                    }
+                    break;
             }
             state = STATE_NORMAL;
+        }
+    } else if (state == STATE_OSC) {
+        if (c == '\a') {
+            state = STATE_NORMAL;
+        } else if (c == '\033') {
+            state = STATE_OSC_ESC;
+        }
+    } else if (state == STATE_OSC_ESC) {
+        if (c == '\\' || c == '\a') {
+            state = STATE_NORMAL;
+        } else if (c == '\033') {
+            state = STATE_OSC_ESC;
+        } else {
+            state = STATE_OSC;
         }
     } else if (state == STATE_READ_PARAMS) {
         if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '@') {
@@ -1186,6 +1250,31 @@ static int putchar_unlocked(int c) {
                 int n = (npp > 0 && pp[0] > 0) ? pp[0] : 1;
                 uint64_t dx = (uint64_t)n * current_font_w;
                 cursor_x = (cursor_x >= dx) ? cursor_x - dx : 0;
+            } else if (c == 'E') {
+                // CNL: Cursor Next Line (down n lines, column 0)
+                int n = (npp > 0 && pp[0] > 0) ? pp[0] : 1;
+                cursor_x = 0;
+                uint64_t bot = region_set ? region_bottom : fb->height;
+                for (int i = 0; i < n; i++) {
+                    if (cursor_y + current_font_h >= bot) {
+                        scroll_region_both(1, bg_color);
+                    } else {
+                        cursor_y += current_font_h;
+                    }
+                }
+            } else if (c == 'F') {
+                // CPL: Cursor Previous Line (up n lines, column 0)
+                int n = (npp > 0 && pp[0] > 0) ? pp[0] : 1;
+                cursor_x = 0;
+                uint64_t top = region_set ? region_top : 0;
+                for (int i = 0; i < n; i++) {
+                    if (cursor_y >= top + current_font_h) {
+                        cursor_y -= current_font_h;
+                    } else {
+                        cursor_y = top;
+                        break;
+                    }
+                }
             } else if (c == 'G') {
                 // CHA: Cursor Horizontal Absolute (1-based column)
                 int col = (npp > 0 && pp[0] > 0) ? pp[0] - 1 : 0;
@@ -1335,6 +1424,25 @@ static int putchar_unlocked(int c) {
                     for (uint64_t y = cursor_y; y < cursor_y + current_font_h && y < fb->height; y++)
                         for (uint64_t x = (eol > del ? eol - del : 0); x < eol; x++) put_pixel_fb(x, y, bg_color);
                 }
+            } else if (c == 'X') {
+                // ECH: Erase Character(s) from cursor position
+                int n = (npp > 0 && pp[0] > 0) ? pp[0] : 1;
+                uint64_t row = cursor_y / current_font_h;
+                uint64_t col = cursor_x / current_font_w;
+                uint32_t erase_color = is_reverse ? fg_color : bg_color;
+                uint64_t count = (uint64_t)n;
+                if (col + count > cell_columns) count = (cell_columns > col) ? cell_columns - col : 0;
+                clear_cell_range(row, col, col + count, erase_color);
+                uint64_t erase_w = count * current_font_w;
+                if (cursor_x + erase_w > fb->width) erase_w = (fb->width > cursor_x) ? fb->width - cursor_x : 0;
+                if (back_buffer_available) {
+                    fill_rect_backbuffer(cursor_x, cursor_y, erase_w, current_font_h, erase_color);
+                    flush_region_backbuffer(fb, cursor_x, cursor_y, erase_w, current_font_h);
+                } else {
+                    for (uint64_t y = cursor_y; y < cursor_y + current_font_h && y < fb->height; y++)
+                        for (uint64_t x = cursor_x; x < cursor_x + erase_w && x < fb->width; x++)
+                            put_pixel_fb(x, y, erase_color);
+                }
             } else if (c == 'b') {
                 // REP: Repeat the last printable character n times.
                 int n = (npp > 0 && pp[0] > 0) ? pp[0] : 1;
@@ -1438,6 +1546,40 @@ static int putchar_unlocked(int c) {
                                 }
                             }
                         }
+                    }
+                }
+            } else if (c == 'p') {
+                if (ansi_buffer[0] == '!') {
+                    // DECSTR: Soft Terminal Reset
+                    is_bold = false;
+                    is_reverse = false;
+                    reverse_bg = 0;
+                    fg_color = default_color;
+                    bg_color = 0x00000000;
+                    cursor_enabled = true;
+                    cursor_saved_w = 0;
+                    cursor_saved_h = 0;
+                    saved_cursor_x = 0;
+                    saved_cursor_y = 0;
+                    saved_fg = default_color;
+                    saved_bg = 0x00000000;
+                    saved_bold = false;
+                    saved_reverse = false;
+                    region_set = false;
+                    region_top = 0;
+                    region_bottom = 0;
+                    acs_active = false;
+                    expect_charset_designator = false;
+                    last_printable_char = ' ';
+                }
+            } else if (c == 'c') {
+                if (!priv_mode) {
+                    int param = (npp > 0) ? pp[0] : 0;
+                    if (param == 0) {
+                        // DA: Primary Device Attributes query -> reply VT100 with AVO
+                        const char *da_reply = "\033[?1;2c";
+                        inject_tty_input(da_reply);
+                        serial_puts(COM1, da_reply);
                     }
                 }
             }

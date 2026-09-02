@@ -35,6 +35,7 @@ extern spinlock_t tty_lock;
 tty_t *get_tty(int idx);
 int read_tty_ring(tty_ring_t *r, char *buf, int len);
 int write_tty_ring(tty_ring_t *r, const char *buf, int len);
+void inject_tty_input(const char *s);
 int get_tty_ring_count(tty_ring_t *r);
 void tty_process_scancode(uint8_t sc);
 int signal_tty_pgrp(int tty_idx, int sig);

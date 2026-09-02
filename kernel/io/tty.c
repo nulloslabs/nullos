@@ -58,6 +58,14 @@ static void write_tty_input_str(const char *s) {
     }
 }
 
+void inject_tty_input(const char *s) {
+    if (!s) return;
+    uint64_t irq;
+    spin_lock_irqsave(&tty_lock, &irq);
+    write_tty_input_str(s);
+    spin_unlock_irqrestore(&tty_lock, irq);
+}
+
 uint16_t get_tty_keymap(int table, int key) {
     if (table < 0 || table >= TTY_KEYMAP_TABLES || key < 0 || key >= TTY_KEYMAP_KEYS) return KBD_KEY_HOLE;
     return tty_keymap[table][key];
