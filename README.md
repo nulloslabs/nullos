@@ -26,10 +26,11 @@ A secure, fast and privacy-focused hobby OS.
 | Done | Initrd support |
 | Done | Modular font system |
 | Done | MP support |
-| Done | OHCI and UHCI USB support |
 | Done | PCI(e) support |
 | Done | Serial port support |
 | Done | Syscall support |
+| Done | UHCI, OHCI and EHCI USB support |
+| Done | USB keyboards and USB BOT |
 
 ## 🖥️ System Requirements
 

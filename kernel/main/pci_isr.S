@@ -1,6 +1,6 @@
 .intel_syntax noprefix
 .global isr43
-.extern pci_dispatch
+.extern dispatch_pci
 .extern current_apic_mode
 .extern lapic_base
 
@@ -41,7 +41,7 @@ isr\vec:
     mov es, ax
 
     mov edi, \vec
-    call pci_dispatch
+    call dispatch_pci
 
     // LAPIC EOI (MSI is always LAPIC-delivered).
     mov eax, dword ptr [rip + current_apic_mode]
@@ -118,7 +118,7 @@ isr43:
     mov es, ax
 
     mov edi, 43
-    call pci_dispatch
+    call dispatch_pci
 
     // EOI for legacy: PIC if no APIC, LAPIC MMIO for xAPIC, MSR for x2APIC.
     mov eax, dword ptr [rip + current_apic_mode]

@@ -11,7 +11,7 @@ static void process_power_button(void *context) {
     (void)context;
     int init_index = task_index_by_pid(1);
     if (init_index >= 0 && send_task_signal(init_index, SIGUSR2)) return;
-    poweroff();
+    poweroff(); // If the init process dosen't exist or didn't get our signal, just poweroff
 }
 
 static uacpi_interrupt_ret handle_power_button(uacpi_handle context) {

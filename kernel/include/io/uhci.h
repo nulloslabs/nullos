@@ -57,7 +57,11 @@
 #define UHCI_TD_STATUS_ERROR_MASK (0x3F << 17)
 #define UHCI_TD_EXPECTED_LENGTH(n) ((((n) - 1) & 0x7FF) << 21)
 
-#define UHCI_FRAME_LIST_SIZE 1024
+#define UHCI_FRAME_LIST_SIZE      1024
+#define UHCI_MAX_BULK_DATA        2048
+#define UHCI_BULK_DMA_DATA_OFFSET 32
+#define UHCI_BULK_DMA_TD_OFFSET   2080
+#define UHCI_BULK_TIMEOUT_MS      2000
 
 typedef struct {
     uint32_t head_link_ptr;

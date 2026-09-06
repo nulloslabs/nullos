@@ -306,19 +306,19 @@ int ahci_write_sectors(int index, uint64_t lba, uint32_t sectors, const void *bu
     return status;
 }
 
-bool init_ahci(pci_device_t *dev) {
-    if (!dev) return false;
+void init_ahci(pci_device_t *dev) {
+    if (!dev) return;
     set_pci_d0(dev);
     uint32_t bar_low = read_pci(dev->bus, dev->dev, dev->func, 0x24);
-    if (bar_low & 1) return false;
+    if (bar_low & 1) return;
     uint64_t abar_phys = bar_low & 0xFFFFFFF0U;
-    if ((bar_low & 0x06) == 0x04) return false;
-    if (!abar_phys) return false;
+    if ((bar_low & 0x06) == 0x04) return;
+    if (!abar_phys) return;
 
     uint64_t page_offset = abar_phys & (PAGE_SIZE - 1);
     size_t pages = (page_offset + sizeof(ahci_hba_regs_t) + PAGE_SIZE - 1) / PAGE_SIZE;
     ahci_hba_regs_t *hba = vmap_mmio(abar_phys, pages);
-    if (!hba) return false;
+    if (!hba) return;
     uint32_t command = read_pci(dev->bus, dev->dev, dev->func, 0x04);
     write_pci(dev->bus, dev->dev, dev->func, 0x04, command | 0x06);
     if (hba->cap2 & AHCI_CAP2_BOH) {
@@ -334,8 +334,7 @@ bool init_ahci(pci_device_t *dev) {
     for (int port = 0; port < 32 && ahci_devices_found < AHCI_MAX_DEVICES; port++) {
         if (implemented & (1U << port)) ahci_prepare_device(hba, port, dma64);
     }
-    if (!ahci_devices_found) return false;
+    if (!ahci_devices_found) return;
     is_sata_present = true;
     log("ahci: initialized ahci\n");
-    return true;
 }

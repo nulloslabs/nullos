@@ -8,6 +8,7 @@ typedef enum {
     DISK_BUS_PATA,
     DISK_BUS_SATA,
     DISK_BUS_NVME,
+    DISK_BUS_USB,
 } disk_device_bus_t;
 
 // Compatibility aliases
@@ -16,6 +17,7 @@ typedef disk_device_bus_t device_bus_t;
 #define DEV_BUS_PATA DISK_BUS_PATA
 #define DEV_BUS_SATA DISK_BUS_SATA
 #define DEV_BUS_NVME DISK_BUS_NVME
+#define DEV_BUS_USB  DISK_BUS_USB
 
 uint64_t read_device(const char* name, void* buf, uint64_t count, uint64_t offset);
 uint64_t write_device(const char* name, const void* buf, uint64_t count, uint64_t offset);

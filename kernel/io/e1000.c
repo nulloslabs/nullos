@@ -8,6 +8,7 @@
 #include <mm/mm.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
+
 static uint8_t mac_addr[6];
 static volatile uint8_t *e1000_mmio;
 
@@ -24,7 +25,6 @@ static spinlock_t e1000_lock = SPINLOCK_INIT;
 static net_device_t e1000_net_device;
 
 static void write_mmio32(uint32_t reg, uint32_t val) { *(volatile uint32_t *)(e1000_mmio + reg) = val; }
-
 static uint32_t read_mmio32(uint32_t reg) { return *(volatile uint32_t *)(e1000_mmio + reg); }
 
 static void reset_e1000_tx(void) {

@@ -10,16 +10,17 @@
 #include <io/rtl8139.h>
 #include <io/svga_ii.h>
 #include <io/virtio_gpu.h>
-#include <io/ide.h>
 #include <io/ahci.h>
+#include <io/ide.h>
+#include <io/nvme.h>
 #include <io/atapi.h>
 #include <io/pata.h>
 #include <io/sata.h>
 #include <io/usb.h>
+#include <io/ehci.h>
 #include <io/uhci.h>
 #include <io/ohci.h>
 #include <io/time.h>
-#include <io/nvme.h>
 #include <mm/vmm.h>
 #include <uacpi/acpi.h>
 #include <uacpi/tables.h>
@@ -54,43 +55,6 @@ static volatile uint8_t* get_ecam_ptr(uint8_t bus, uint8_t dev, uint8_t func, ui
     return g_ecam_virt + total;
 }
 
-static int init_pcie_ecam(void) {
-    // find mcfg via uacpi
-    uacpi_table tbl;
-    uacpi_status st = uacpi_table_find_by_signature(ACPI_MCFG_SIGNATURE, &tbl);
-    if (uacpi_unlikely_error(st)) return -1;
-    struct acpi_mcfg *mcfg = (struct acpi_mcfg*)tbl.hdr;
-    if (!mcfg) { uacpi_table_unref(&tbl); return -1; }
-    uint32_t hdr_len = mcfg->hdr.length;
-    if (hdr_len < sizeof(struct acpi_mcfg)) { uacpi_table_unref(&tbl); return -1; }
-    uint32_t entry_count = (hdr_len - sizeof(struct acpi_mcfg)) / sizeof(struct acpi_mcfg_allocation);
-    if (entry_count == 0) { uacpi_table_unref(&tbl); return -1; }
-    // use first entry with seg 0
-    struct acpi_mcfg_allocation *chosen = 0;
-    for (uint32_t i = 0; i < entry_count; i++) {
-        struct acpi_mcfg_allocation *e = &mcfg->entries[i];
-        if (e->segment == 0) { chosen = e; break; }
-    }
-    if (!chosen) { uacpi_table_unref(&tbl); return -1; }
-    if (chosen->start_bus > chosen->end_bus) { uacpi_table_unref(&tbl); return -1; }
-    uint64_t base = chosen->address;
-    uint8_t start = chosen->start_bus;
-    uint8_t end = chosen->end_bus;
-    uint64_t bus_cnt = (uint64_t)end - start + 1;
-    uint64_t bytes = bus_cnt * PCIE_ECAM_BYTES_PER_BUS;
-    size_t pages = (bytes + 4095) / 4096;
-    void *virt = vmap_mmio(base, pages);
-    if (!virt) { uacpi_table_unref(&tbl); return -1; }
-    g_ecam_virt = (volatile uint8_t*)virt;
-    g_ecam_phys = base;
-    g_ecam_start = start;
-    g_ecam_end = end;
-    g_has_ecam = true;
-    g_ecam_pages = pages;
-    uacpi_table_unref(&tbl);
-    return 0;
-}
-
 static uint8_t pci_find_cap(pci_device_t *dev, uint8_t cap_id) {
     uint32_t status_cmd = read_pci(dev->bus, dev->dev, dev->func, 0x04);
     if (!(status_cmd & (1 << 20))) return 0;
@@ -103,11 +67,47 @@ static uint8_t pci_find_cap(pci_device_t *dev, uint8_t cap_id) {
     return 0;
 }
 
-static void pci_set_intx_disable(pci_device_t *dev, int disable) {
+static void set_pci_intx_disable(pci_device_t *dev, int disable) {
     uint32_t cmd = read_pci(dev->bus, dev->dev, dev->func, 0x04);
     if (disable) cmd |= (1 << 10);
     else cmd &= ~(1 << 10);
     write_pci(dev->bus, dev->dev, dev->func, 0x04, cmd);
+}
+
+static void init_pcie_ecam(void) {
+    // find mcfg via uacpi
+    uacpi_table tbl;
+    uacpi_status st = uacpi_table_find_by_signature(ACPI_MCFG_SIGNATURE, &tbl);
+    if (uacpi_unlikely_error(st)) return;
+    struct acpi_mcfg *mcfg = (struct acpi_mcfg*)tbl.hdr;
+    if (!mcfg) { uacpi_table_unref(&tbl); return; }
+    uint32_t hdr_len = mcfg->hdr.length;
+    if (hdr_len < sizeof(struct acpi_mcfg)) { uacpi_table_unref(&tbl); return; }
+    uint32_t entry_count = (hdr_len - sizeof(struct acpi_mcfg)) / sizeof(struct acpi_mcfg_allocation);
+    if (entry_count == 0) { uacpi_table_unref(&tbl); return; }
+    // use first entry with seg 0
+    struct acpi_mcfg_allocation *chosen = 0;
+    for (uint32_t i = 0; i < entry_count; i++) {
+        struct acpi_mcfg_allocation *e = &mcfg->entries[i];
+        if (e->segment == 0) { chosen = e; break; }
+    }
+    if (!chosen) { uacpi_table_unref(&tbl); return; }
+    if (chosen->start_bus > chosen->end_bus) { uacpi_table_unref(&tbl); return; }
+    uint64_t base = chosen->address;
+    uint8_t start = chosen->start_bus;
+    uint8_t end = chosen->end_bus;
+    uint64_t bus_cnt = (uint64_t)end - start + 1;
+    uint64_t bytes = bus_cnt * PCIE_ECAM_BYTES_PER_BUS;
+    size_t pages = (bytes + 4095) / 4096;
+    void *virt = vmap_mmio(base, pages);
+    if (!virt) { uacpi_table_unref(&tbl); return; }
+    g_ecam_virt = (volatile uint8_t*)virt;
+    g_ecam_phys = base;
+    g_ecam_start = start;
+    g_ecam_end = end;
+    g_has_ecam = true;
+    g_ecam_pages = pages;
+    uacpi_table_unref(&tbl);
 }
 
 bool has_pcie_ecam(void) {
@@ -170,7 +170,7 @@ uint16_t find_pcie_ext_cap(uint8_t bus, uint8_t dev, uint8_t func, uint16_t cap_
     return 0;
 }
 
-void pci_dispatch(uint8_t vector) {
+void dispatch_pci(uint8_t vector) {
     if (vector >= LEGACY_IRQ_BASE && vector < LEGACY_IRQ_BASE + 16) {
         intx_chain_t *c = &intx_chains[vector - LEGACY_IRQ_BASE];
         for (int i = 0; i < c->count; i++) {
@@ -182,11 +182,11 @@ void pci_dispatch(uint8_t vector) {
     if (h) h();
 }
 
-void pci_register_msi_handler(uint8_t vector, void (*handler)(void)) {
+void register_pci_msi_handler(uint8_t vector, void (*handler)(void)) {
     msi_handlers[vector] = handler;
 }
 
-void pci_register_intx_handler(uint8_t irq_line, void (*handler)(void)) {
+void register_pci_intx_handler(uint8_t irq_line, void (*handler)(void)) {
     if (irq_line >= 16) return;
     intx_chain_t *c = &intx_chains[irq_line];
     if (c->count < MAX_INTX_SHARED) c->fns[c->count++] = handler;
@@ -302,23 +302,23 @@ uint8_t pci_enable_msi(pci_device_t *dev) {
     mc &= ~(7 << 4);
     uint32_t new_mc_dword = (mc_dword & 0x0000FFFF) | ((uint32_t)mc << 16);
     write_pci(dev->bus, dev->dev, dev->func, cap, new_mc_dword);
-    pci_set_intx_disable(dev, 1);
+    set_pci_intx_disable(dev, 1);
     return vector;
 }
 
 uint8_t pci_request_irq(pci_device_t *dev, void (*handler)(void)) {
     uint8_t v = pci_enable_msi(dev);
-    if (v) { pci_register_msi_handler(v, handler); return v; }
-    pci_set_intx_disable(dev, 0);
+    if (v) { register_pci_msi_handler(v, handler); return v; }
+    set_pci_intx_disable(dev, 0);
     uint32_t r = read_pci(dev->bus, dev->dev, dev->func, 0x3C);
     uint8_t line = r & 0xFF;
     if (line == 0xFF) return 0;
-    pci_register_intx_handler(line, handler);
+    register_pci_intx_handler(line, handler);
     return LEGACY_IRQ_BASE + line;
 }
 
 void init_pci(void) {
-    (void)init_pcie_ecam();
+    init_pcie_ecam();
     for (uint16_t bus = 0; bus < 256; bus++) {
         for (uint8_t dev = 0; dev < 32; dev++) {
             for (uint8_t func = 0; func < 8; func++) {
@@ -356,10 +356,11 @@ void init_pci_drivers(void) {
         uint8_t subclass;
         uint8_t progif_mask;
         uint8_t progif_value;
-        bool (*init)(pci_device_t*);
+        void (*init)(pci_device_t*);
     } known_storage_controllers[] = {
-        {"ide",  IDE_CLASS,  IDE_SUBCLASS,  IDE_PROGIF_MASK,  IDE_PROGIF_VALUE,  init_ide},
         {"ahci", AHCI_CLASS, AHCI_SUBCLASS, AHCI_PROGIF_MASK, AHCI_PROGIF_VALUE, init_ahci},
+        {"ide",  IDE_CLASS,  IDE_SUBCLASS,  IDE_PROGIF_MASK,  IDE_PROGIF_VALUE,  init_ide},
+        {"nvme", NVME_CLASS, NVME_SUBCLASS, NVME_PROGIF_MASK, NVME_PROGIF_VALUE, init_nvme},
     };
 
     const struct {
@@ -369,6 +370,7 @@ void init_pci_drivers(void) {
     } known_usb_drivers[] = {
         {"uhci", USB_PROGIF_UHCI, init_uhci},
         {"ohci", USB_PROGIF_OHCI, init_ohci},
+        {"ehci", USB_PROGIF_EHCI, init_ehci},
     };
 
     for (int i = 0; i < (int)(sizeof(known_pci_drivers) / sizeof(known_pci_drivers[0])); i++) {
@@ -388,20 +390,21 @@ void init_pci_drivers(void) {
             if ((dev->progif & known_storage_controllers[i].progif_mask) != known_storage_controllers[i].progif_value) continue;
 
             log("pci: found controller for %s\n", known_storage_controllers[i].name);
-            if (known_storage_controllers[i].init(dev)) {
-                if (dev->class == AHCI_CLASS && dev->subclass == AHCI_SUBCLASS && dev->progif == AHCI_PROGIF_VALUE) {
-                    log("pci: found driver for sata\n");
-                    init_sata();
-                } else {
-                    if (is_atapi_present) {
-                        log("pci: found driver for atapi\n");
-                        init_atapi();
-                    }
-                    if (is_pata_present) {
-                        log("pci: found driver for pata\n");
-                        init_pata();
-                    }
+            known_storage_controllers[i].init(dev);
+            if (dev->class == AHCI_CLASS && dev->subclass == AHCI_SUBCLASS) {
+                log("pci: found driver for sata\n");
+                init_sata();
+            } else if (dev->class == IDE_CLASS && dev->subclass == IDE_SUBCLASS) {
+                if (is_atapi_present) {
+                    log("pci: found driver for atapi\n");
+                    init_atapi();
                 }
+                if (is_pata_present) {
+                    log("pci: found driver for pata\n");
+                    init_pata();
+                }
+            } else if (dev->class == NVME_CLASS && dev->subclass == NVME_SUBCLASS) {
+                log("pci: found driver for nvme\n");
             }
             break;
         }
@@ -413,14 +416,6 @@ void init_pci_drivers(void) {
                 log("pci: found %s usb controller\n", known_usb_drivers[i].name);
                 known_usb_drivers[i].init(&pci_devices[j]);
             }
-        }
-    }
-
-    for (int j = 0; j < pci_device_count; j++) {
-        pci_device_t *dev = &pci_devices[j];
-        if (dev->class == NVME_CLASS && dev->subclass == NVME_SUBCLASS) {
-            log("pci: found driver for nvme\n");
-            init_nvme(dev);
         }
     }
 

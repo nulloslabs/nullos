@@ -8,6 +8,8 @@
 #define NVME_CLASS          0x01
 #define NVME_SUBCLASS       0x08
 #define NVME_PROGIF         0x02
+#define NVME_PROGIF_MASK    0xFF
+#define NVME_PROGIF_VALUE   0x02
 #define NVME_MAX_NAMESPACES 8
 #define NVME_QUEUE_DEPTH    64
 #define NVME_BLOCK_SIZE     512

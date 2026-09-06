@@ -181,12 +181,9 @@ void init_mp(void) {
     for (volatile int timeout = 0; timeout < 100000000 && ap_ready_count < expected; timeout++) __asm__ volatile ("pause");
 
     if (ap_ready_count < expected) {
-        log("mp: warning: only %d/%d aps came online\n", ap_ready_count, expected);
-    } else {
-        if (ap_ready_count > 0) {
-            log("mp: all %d aps online\n", ap_ready_count);
-        } else {
-            log("mp: no aps available\n");
-        }
+        log("mp: only %d/%d aps came online\n", ap_ready_count, expected);
+        return;
     }
+
+    log("mp: initialized mp\n");
 }

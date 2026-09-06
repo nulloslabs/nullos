@@ -49,7 +49,14 @@ static const uint32_t nice_weights[40] = {
     110, 87, 70, 56, 45, 36, 29, 23, 18, 15
 };
 
-static void idle_task(void) { idle(); }
+static void idle_task(void) {
+    // usb has no interrupt handler, so the hcds are polled here whenever the
+    // cpu is idle; poll_usb_hcds self-gates to every 4 ms and cpu 0 only
+    for (;;) {
+        poll_usb_hcds();
+        __asm__ volatile ("hlt" : : : "memory");
+    }
+}
 
 // --- Per-CPU runqueue helpers (sched_lock must be held) ---
 static void rq_enqueue_locked(task_t *task) {

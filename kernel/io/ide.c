@@ -176,9 +176,9 @@ static void detect_ide_devices(void) {
     }
 }
 
-bool init_ide(pci_device_t *dev) {
-    if (!dev) return false;
-    if (ide_ready) return dev->bus == ide_bus && dev->dev == ide_dev && dev->func == ide_func;
+void init_ide(pci_device_t *dev) {
+    if (!dev) return;
+    if (ide_ready) return;
 
     set_pci_d0(dev);
     uint32_t bar0 = read_pci(dev->bus, dev->dev, dev->func, 0x10);
@@ -186,7 +186,7 @@ bool init_ide(pci_device_t *dev) {
     uint32_t bar2 = read_pci(dev->bus, dev->dev, dev->func, 0x18);
     uint32_t bar3 = read_pci(dev->bus, dev->dev, dev->func, 0x1C);
     uint32_t bar4 = read_pci(dev->bus, dev->dev, dev->func, 0x20);
-    if (!(bar4 & 0x1) || !(bar4 & 0xFFFFFFFCu)) return false;
+    if (!(bar4 & 0x1) || !(bar4 & 0xFFFFFFFCu)) return;
 
     uint16_t bus_master = (uint16_t)(bar4 & 0xFFFCu);
     ide_channels[0][0] = bar0 & 0xFFFFFFFCu ? (uint16_t)(bar0 & 0xFFFCu) : IDE_PRIMARY_IO;
@@ -203,7 +203,7 @@ bool init_ide(pci_device_t *dev) {
 
     uint64_t data_phys = virt_to_phys(ide_dma_data);
     uint64_t prdt_phys = virt_to_phys(ide_prdt);
-    if (data_phys > UINT32_MAX || IDE_DMA_BUFFER_SIZE > UINT32_MAX - data_phys || prdt_phys > UINT32_MAX || (prdt_phys & 0xFFFF) > 0xFFF0) return false;
+    if (data_phys > UINT32_MAX || IDE_DMA_BUFFER_SIZE > UINT32_MAX - data_phys || prdt_phys > UINT32_MAX || (prdt_phys & 0xFFFF) > 0xFFF0) return;
 
     ide_bus = dev->bus;
     ide_dev = dev->dev;
@@ -211,5 +211,4 @@ bool init_ide(pci_device_t *dev) {
     ide_ready = true;
     detect_ide_devices();
     log("ide: initialized ide\n");
-    return true;
 }

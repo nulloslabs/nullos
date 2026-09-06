@@ -5,6 +5,7 @@
 #include <main/string.h>
 #include <io/time.h>
 #include <io/usb.h>
+#include <io/ehci.h>
 #include <io/uhci.h>
 #include <io/ohci.h>
 #include <io/usb_keyboard.h>
@@ -65,5 +66,6 @@ void poll_usb_hcds(void) {
     last_poll_us = now;
     poll_uhci_ports();
     poll_ohci_ports();
+    poll_ehci_ports();
     poll_usb_keyboard();
 }

@@ -48,5 +48,6 @@ typedef struct {
 bool probe_gpt_for_sata_disk(int disk_index, const char *disk_name, uint64_t disk_size);
 bool probe_gpt_for_pata_disk(int disk_index, const char *disk_name, uint64_t disk_size);
 bool probe_gpt_for_nvme_disk(int disk_index, const char *disk_name, uint64_t disk_size);
+bool probe_gpt_for_usb_disk(int disk_index, const char *disk_name, uint64_t disk_size);
 void remove_gpt_partitions(int disk_index, disk_device_bus_t bus);
 

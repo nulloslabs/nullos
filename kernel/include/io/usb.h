@@ -91,7 +91,7 @@ typedef struct {
     uint8_t  bMaxPower;
 } __attribute__((packed)) usb_config_descriptor_t;
 
-typedef struct __attribute__((packed)) {
+typedef struct {
     uint8_t bLength;
     uint8_t bDescriptorType;
     uint8_t bInterfaceNumber;
@@ -113,15 +113,22 @@ typedef struct {
 } __attribute__((packed)) usb_endpoint_descriptor_t;
 
 typedef struct usb_device {
-    uint8_t  address;        // Device address on the bus (1-127)
-    uint8_t  speed;          // USB_SPEED_*
-    uint8_t  max_packet_size; // For EP0
+    uint8_t address;
+    uint8_t speed;
+    uint8_t max_packet_size;
     uint16_t vendor_id;
     uint16_t product_id;
-    uint8_t  port_id;        // Physical port identifier on the HCD
-    uint8_t  interrupt_toggle; // DATA0/DATA1 for interrupt transfers
+    uint8_t port_id;
+    uint8_t interrupt_toggle;
     uint16_t interrupt_max_packet;
-    void    *hcd_data;       // HCD-specific per-device data
+    uint8_t bulk_in_endpoint;
+    uint8_t bulk_out_endpoint;
+    uint16_t bulk_in_max_packet;
+    uint16_t bulk_out_max_packet;
+    uint8_t bulk_in_toggle;
+    uint8_t bulk_out_toggle;
+    uint8_t interface_number;
+    void *hcd_data;
     struct usb_device *next;
 } usb_device_t;
 

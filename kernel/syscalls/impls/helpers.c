@@ -663,7 +663,7 @@ int proc_open_common(char *abs_path, size_t abs_size, uint32_t flags) {
         return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_PROC, flags);
     }
     // Regular procfs files are readable.
-    if (n.entry == PROC_FILE_MAPS || n.entry == PROC_FILE_MOUNTS || n.entry == PROC_FILE_AUXV || n.entry == PROC_FILE_CPUINFO || n.entry == PROC_FILE_MEMINFO || n.entry == PROC_FILE_UPTIME || n.entry == PROC_FILE_ROOT_STAT || n.entry == PROC_FILE_LOADAVG || n.entry == PROC_FILE_STAT || n.entry == PROC_FILE_STATUS || n.entry == PROC_FILE_CMDLINE || n.entry == PROC_FILE_COMM) {
+    if (n.entry == PROC_FILE_MAPS || n.entry == PROC_FILE_MOUNTS || n.entry == PROC_FILE_AUXV || n.entry == PROC_FILE_CPUINFO || n.entry == PROC_FILE_MEMINFO || n.entry == PROC_FILE_UPTIME || n.entry == PROC_FILE_ROOT_STAT || n.entry == PROC_FILE_LOADAVG || n.entry == PROC_FILE_PARTITIONS || n.entry == PROC_FILE_STAT || n.entry == PROC_FILE_STATUS || n.entry == PROC_FILE_CMDLINE || n.entry == PROC_FILE_COMM) {
         return alloc_fd(&current_task_ptr->fd_table, abs_path, FD_PROC, flags);
     }
     return -EACCES;

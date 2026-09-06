@@ -22,5 +22,4 @@ typedef struct {
     uacpi_handle context;
 } uacpi_irq_t;
 
-void init_acpi_tables(void);
-void init_acpi_namespace(void);
+void init_acpi(void);

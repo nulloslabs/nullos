@@ -2,10 +2,11 @@
 #include <stddef.h>
 #include <ctype.h>
 #include <main/log.h>
+#include <main/idt.h>
 #include <main/limine_req.h>
 #include <main/spinlocks.h>
 #include <main/sched.h>
-#include <main/idt.h>
+#include <main/halt.h>
 #include <main/panic.h>
 #include <io/acpi.h>
 #include <io/apic.h>
@@ -28,19 +29,6 @@ static spinlock_t pci_config_lock = SPINLOCK_INIT;
 static spinlock_t acpi_log_lock = SPINLOCK_INIT;
 static uint64_t early_table_buffer[512];
 static char acpi_log_buffer[1024];
-static uacpi_bool early_tables_ready;
-
-static uacpi_u64 monotonic_ms(void) {
-    return get_monotonic_time_us() / 1000;
-}
-
-static uint32_t pci_read_dword(uacpi_pci_handle_t *device, uacpi_size offset) {
-    return read_pci(device->address.bus, device->address.device, device->address.function, (uint8_t)offset);
-}
-
-static void pci_write_dword(uacpi_pci_handle_t *device, uacpi_size offset, uint32_t value) {
-    write_pci(device->address.bus, device->address.device, device->address.function, (uint8_t)offset, value);
-}
 
 uacpi_status uacpi_kernel_get_rsdp(uacpi_phys_addr *out_rsdp_address) {
     if (!out_rsdp_address || !rsdp_req.response || !rsdp_req.response->address) return UACPI_STATUS_NOT_FOUND;
@@ -109,7 +97,7 @@ uacpi_status uacpi_kernel_pci_read8(uacpi_handle handle, uacpi_size offset, uacp
     if (!handle || !value || offset >= 256) return UACPI_STATUS_INVALID_ARGUMENT;
     uint64_t flags;
     spin_lock_irqsave(&pci_config_lock, &flags);
-    uint32_t data = pci_read_dword(handle, offset);
+    uint32_t data = read_pci(((uacpi_pci_handle_t *)handle)->address.bus, ((uacpi_pci_handle_t *)handle)->address.device, ((uacpi_pci_handle_t *)handle)->address.function, (uint8_t)offset);
     spin_unlock_irqrestore(&pci_config_lock, flags);
     *value = (data >> ((offset & 3) * 8)) & 0xFF;
     return UACPI_STATUS_OK;
@@ -119,7 +107,7 @@ uacpi_status uacpi_kernel_pci_read16(uacpi_handle handle, uacpi_size offset, uac
     if (!handle || !value || offset >= 255 || (offset & 1)) return UACPI_STATUS_INVALID_ARGUMENT;
     uint64_t flags;
     spin_lock_irqsave(&pci_config_lock, &flags);
-    uint32_t data = pci_read_dword(handle, offset);
+    uint32_t data = read_pci(((uacpi_pci_handle_t *)handle)->address.bus, ((uacpi_pci_handle_t *)handle)->address.device, ((uacpi_pci_handle_t *)handle)->address.function, (uint8_t)offset);
     spin_unlock_irqrestore(&pci_config_lock, flags);
     *value = (data >> ((offset & 2) * 8)) & 0xFFFF;
     return UACPI_STATUS_OK;
@@ -129,7 +117,7 @@ uacpi_status uacpi_kernel_pci_read32(uacpi_handle handle, uacpi_size offset, uac
     if (!handle || !value || offset >= 253 || (offset & 3)) return UACPI_STATUS_INVALID_ARGUMENT;
     uint64_t flags;
     spin_lock_irqsave(&pci_config_lock, &flags);
-    *value = pci_read_dword(handle, offset);
+    *value = read_pci(((uacpi_pci_handle_t *)handle)->address.bus, ((uacpi_pci_handle_t *)handle)->address.device, ((uacpi_pci_handle_t *)handle)->address.function, (uint8_t)offset);
     spin_unlock_irqrestore(&pci_config_lock, flags);
     return UACPI_STATUS_OK;
 }
@@ -138,9 +126,9 @@ uacpi_status uacpi_kernel_pci_write8(uacpi_handle handle, uacpi_size offset, uac
     if (!handle || offset >= 256) return UACPI_STATUS_INVALID_ARGUMENT;
     uint64_t flags;
     spin_lock_irqsave(&pci_config_lock, &flags);
-    uint32_t data = pci_read_dword(handle, offset);
+    uint32_t data = read_pci(((uacpi_pci_handle_t *)handle)->address.bus, ((uacpi_pci_handle_t *)handle)->address.device, ((uacpi_pci_handle_t *)handle)->address.function, (uint8_t)offset);
     uint32_t shift = (offset & 3) * 8;
-    pci_write_dword(handle, offset, (data & ~(0xFFu << shift)) | ((uint32_t)value << shift));
+    write_pci(((uacpi_pci_handle_t *)handle)->address.bus, ((uacpi_pci_handle_t *)handle)->address.device, ((uacpi_pci_handle_t *)handle)->address.function, (uint8_t)(offset & ~3u), (data & ~(0xFFu << shift)) | ((uint32_t)value << shift));
     spin_unlock_irqrestore(&pci_config_lock, flags);
     return UACPI_STATUS_OK;
 }
@@ -149,9 +137,9 @@ uacpi_status uacpi_kernel_pci_write16(uacpi_handle handle, uacpi_size offset, ua
     if (!handle || offset >= 255 || (offset & 1)) return UACPI_STATUS_INVALID_ARGUMENT;
     uint64_t flags;
     spin_lock_irqsave(&pci_config_lock, &flags);
-    uint32_t data = pci_read_dword(handle, offset);
+    uint32_t data = read_pci(((uacpi_pci_handle_t *)handle)->address.bus, ((uacpi_pci_handle_t *)handle)->address.device, ((uacpi_pci_handle_t *)handle)->address.function, (uint8_t)offset);
     uint32_t shift = (offset & 2) * 8;
-    pci_write_dword(handle, offset, (data & ~(0xFFFFu << shift)) | ((uint32_t)value << shift));
+    write_pci(((uacpi_pci_handle_t *)handle)->address.bus, ((uacpi_pci_handle_t *)handle)->address.device, ((uacpi_pci_handle_t *)handle)->address.function, (uint8_t)(offset & ~3u), (data & ~(0xFFFFu << shift)) | ((uint32_t)value << shift));
     spin_unlock_irqrestore(&pci_config_lock, flags);
     return UACPI_STATUS_OK;
 }
@@ -160,7 +148,7 @@ uacpi_status uacpi_kernel_pci_write32(uacpi_handle handle, uacpi_size offset, ua
     if (!handle || offset >= 253 || (offset & 3)) return UACPI_STATUS_INVALID_ARGUMENT;
     uint64_t flags;
     spin_lock_irqsave(&pci_config_lock, &flags);
-    pci_write_dword(handle, offset, value);
+    write_pci(((uacpi_pci_handle_t *)handle)->address.bus, ((uacpi_pci_handle_t *)handle)->address.device, ((uacpi_pci_handle_t *)handle)->address.function, (uint8_t)offset, value);
     spin_unlock_irqrestore(&pci_config_lock, flags);
     return UACPI_STATUS_OK;
 }
@@ -215,12 +203,12 @@ uacpi_u64 uacpi_kernel_get_nanoseconds_since_boot(void) {
     return get_monotonic_time_us() * 1000;
 }
 
-void uacpi_kernel_stall(uacpi_u8 usec) {
-    sleep_us(usec);
-}
-
 void uacpi_kernel_sleep(uacpi_u64 msec) {
     sleep(msec);
+}
+
+void uacpi_kernel_stall(uacpi_u8 usec) {
+    sleep_us(usec);
 }
 
 uacpi_handle uacpi_kernel_create_mutex(void) {
@@ -252,7 +240,8 @@ uacpi_thread_id uacpi_kernel_get_thread_id(void) {
 
 uacpi_interrupt_state uacpi_kernel_disable_interrupts(void) {
     uacpi_interrupt_state state;
-    __asm__ volatile ("pushfq; pop %0; cli" : "=r"(state) :: "memory");
+    __asm__ volatile ("pushfq; pop %0" : "=r"(state) :: "memory");
+    cli();
     return state;
 }
 
@@ -263,11 +252,11 @@ void uacpi_kernel_restore_interrupts(uacpi_interrupt_state state) {
 uacpi_status uacpi_kernel_acquire_mutex(uacpi_handle handle, uacpi_u16 timeout) {
     if (!handle) return UACPI_STATUS_INVALID_ARGUMENT;
     uacpi_lock_t *mutex = handle;
-    uacpi_u64 start = monotonic_ms();
+    uacpi_u64 start = get_monotonic_time_us() / 1000;
     do {
         if (__sync_bool_compare_and_swap(&mutex->lock, 0, 1)) return UACPI_STATUS_OK;
         __asm__ volatile ("pause");
-    } while (timeout == 0xFFFF || monotonic_ms() - start < timeout);
+    } while (timeout == 0xFFFF || get_monotonic_time_us() / 1000 - start < timeout);
     return UACPI_STATUS_TIMEOUT;
 }
 
@@ -278,7 +267,7 @@ void uacpi_kernel_release_mutex(uacpi_handle handle) {
 uacpi_bool uacpi_kernel_wait_for_event(uacpi_handle handle, uacpi_u16 timeout) {
     if (!handle) return UACPI_FALSE;
     uacpi_event_t *event = handle;
-    uacpi_u64 start = monotonic_ms();
+    uacpi_u64 start = get_monotonic_time_us() / 1000;
     do {
         uint64_t flags;
         spin_lock_irqsave(&event->lock, &flags);
@@ -289,7 +278,7 @@ uacpi_bool uacpi_kernel_wait_for_event(uacpi_handle handle, uacpi_u16 timeout) {
         }
         spin_unlock_irqrestore(&event->lock, flags);
         __asm__ volatile ("pause");
-    } while (timeout == 0xFFFF || monotonic_ms() - start < timeout);
+    } while (timeout == 0xFFFF || get_monotonic_time_us() / 1000 - start < timeout);
     return UACPI_FALSE;
 }
 
@@ -378,20 +367,13 @@ uacpi_status uacpi_kernel_wait_for_work_completion(void) {
     return UACPI_STATUS_OK;
 }
 
-void init_acpi_tables(void) {
+void init_acpi(void) {
     uacpi_status status = uacpi_setup_early_table_access(early_table_buffer, sizeof(early_table_buffer));
     if (uacpi_unlikely_error(status)) {
         log("uacpi: early table initialization failed: %s\n", uacpi_status_to_string(status));
         return;
     }
-    early_tables_ready = UACPI_TRUE;
-    log("acpi: initialized acpi tables\n");
-}
-
-void init_acpi_namespace(void) {
-    if (!early_tables_ready) init_acpi_tables();
-    if (!early_tables_ready) return;
-    uacpi_status status = uacpi_initialize(0);
+    status = uacpi_initialize(0);
     if (uacpi_unlikely_error(status)) {
         log("acpi: initialization failed: %s\n", uacpi_status_to_string(status));
         return;
@@ -412,5 +394,5 @@ void init_acpi_namespace(void) {
         return;
     }
     init_power_button();
-    log("acpi: initialized acpi namespace\n");
+    log("acpi: initialized acpi\n");
 }

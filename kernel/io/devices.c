@@ -20,9 +20,10 @@
 #include <main/strings.h>
 #include <io/atapi.h>
 #include <io/ide.h>
+#include <io/nvme.h>
 #include <io/pata.h>
 #include <io/sata.h>
-#include <io/nvme.h>
+#include <io/usb_bot.h>
 
 devtmpfs_device_t devtmpfs_devices[MAX_DEVTMPFS_DEVICES];
 spinlock_t devtmpfs_lock = SPINLOCK_INIT;
@@ -366,32 +367,9 @@ uint64_t write_device(const char *name, const void *buf, uint64_t count, uint64_
 }
 
 void init_devices(void) {
-    for (int i = 0; i < MAX_DEVTMPFS_DEVICES; i++) {
-        devtmpfs_devices[i].active = false;
-        devtmpfs_devices[i].name[0] = '\0';
-        devtmpfs_devices[i].read = NULL;
-        devtmpfs_devices[i].write = NULL;
-        devtmpfs_devices[i].block = false;
-        devtmpfs_devices[i].size = 0;
-        devtmpfs_devices[i].bus = DISK_BUS_NONE;
-    }
-
+    int sd_index = 0;
     register_device("null", null_read, null_write);
     register_device("zero", zero_read, zero_write);
-
-    if (fb_req.response && fb_req.response->framebuffer_count > 0) {
-        for (uint64_t i = 0; i < fb_req.response->framebuffer_count; i++) {
-            if (i == 0) register_device("fb0", fb0_read, fb0_write);
-            else if (i == 1) register_device("fb1", fb1_read, fb1_write);
-            else if (i == 2) register_device("fb2", fb2_read, fb2_write);
-            else if (i == 3) register_device("fb3", fb3_read, fb3_write);
-            else if (i == 4) register_device("fb4", fb4_read, fb4_write);
-            else if (i == 5) register_device("fb5", fb5_read, fb5_write);
-            else if (i == 6) register_device("fb6", fb6_read, fb6_write);
-            else if (i == 7) register_device("fb7", fb7_read, fb7_write);
-            else panic("too many framebuffers");
-        }
-    }
 
     register_device_idx("tty",     read_tty, write_tty, TTY_CTTY_INDEX);
     register_device_idx("console", read_tty, write_tty, TTY_ACTIVE_INDEX);
@@ -409,10 +387,30 @@ void init_devices(void) {
     register_device("random", read_random, write_random);
     register_device("urandom", read_urandom, write_urandom);
 
+    if (fb_req.response && fb_req.response->framebuffer_count > 0) {
+        for (uint64_t i = 0; i < fb_req.response->framebuffer_count; i++) {
+            if (i == 0) register_device("fb0", fb0_read, fb0_write);
+            else if (i == 1) register_device("fb1", fb1_read, fb1_write);
+            else if (i == 2) register_device("fb2", fb2_read, fb2_write);
+            else if (i == 3) register_device("fb3", fb3_read, fb3_write);
+            else if (i == 4) register_device("fb4", fb4_read, fb4_write);
+            else if (i == 5) register_device("fb5", fb5_read, fb5_write);
+            else if (i == 6) register_device("fb6", fb6_read, fb6_write);
+            else if (i == 7) register_device("fb7", fb7_read, fb7_write);
+            else panic("too many framebuffers");
+        }
+    }
+
     {
         char name[24];
         uint64_t size;
-        int sd_index = 0;
+        // release usb disks first so built-in disks claim the lower letters
+        for (int i = 0; i < USB_BOT_MAX_DEVICES; i++) {
+            if (!bot_entries[i].present) continue;
+            remove_gpt_partitions(i, DISK_BUS_USB);
+            remove_mbr_partitions(i, DISK_BUS_USB);
+            unregister_device(bot_entries[i].name);
+        }
         if (is_atapi_present) {
             for (int i = 0; i < IDE_MAX_DEVICES; i++) {
                 if (!atapi_device_size(i, &size)) continue;
@@ -425,11 +423,13 @@ void init_devices(void) {
         if (is_pata_present) {
             for (int i = 0; i < IDE_MAX_DEVICES; i++) {
                 if (!pata_device_size(i, &size)) continue;
-                if (!make_pata_disk_name(name, sizeof(name), sd_index)) continue;
-                if (register_disk_device_idx(name, read_pata_device, write_pata_device, i, size, DISK_BUS_PATA) < 0) {
-                    log("devices: unable to register '%s'\n", name);
-                    continue;
+                bool registered = false;
+                for (int attempt = 0; attempt < 26; attempt++) {
+                    if (!make_pata_disk_name(name, sizeof(name), sd_index)) { sd_index++; continue; }
+                    if (register_disk_device_idx(name, read_pata_device, write_pata_device, i, size, DISK_BUS_PATA) == 0) { registered = true; break; }
+                    sd_index++;
                 }
+                if (!registered) { log("devices: unable to register pata disk %d\n", i); continue; }
                 if (!probe_gpt_for_pata_disk(i, name, size)) probe_mbr_for_pata_disk(i, name, size);
                 sd_index++;
             }
@@ -437,11 +437,13 @@ void init_devices(void) {
         if (is_sata_present) {
             for (int i = 0; i < sata_device_count(); i++) {
                 if (!sata_device_size(i, &size)) continue;
-                if (!make_sata_disk_name(name, sizeof(name), sd_index)) continue;
-                if (register_disk_device_idx(name, read_sata_device, write_sata_device, i, size, DISK_BUS_SATA) < 0) {
-                    log("devices: unable to register '%s'\n", name);
-                    continue;
+                bool registered = false;
+                for (int attempt = 0; attempt < 26; attempt++) {
+                    if (!make_sata_disk_name(name, sizeof(name), sd_index)) { sd_index++; continue; }
+                    if (register_disk_device_idx(name, read_sata_device, write_sata_device, i, size, DISK_BUS_SATA) == 0) { registered = true; break; }
+                    sd_index++;
                 }
+                if (!registered) { log("devices: unable to register sata disk %d\n", i); continue; }
                 if (!probe_gpt_for_sata_disk(i, name, size)) probe_mbr_for_sata_disk(i, name, size);
                 sd_index++;
             }
@@ -464,5 +466,23 @@ void init_devices(void) {
         }
     }
 
+    // re-register usb disks at the next free letters past the built-in disks
+    for (int i = 0; i < USB_BOT_MAX_DEVICES; i++) {
+        if (!bot_entries[i].present) continue;
+        bool named = false;
+        for (int j = sd_index; j < 26; j++) {
+            char name[16];
+            if (!make_usb_bot_name(name, sizeof(name), j)) continue;
+            uint64_t dummy = 0;
+            if (get_block_device_size(name, &dummy) == 0) continue;
+            memcpy(bot_entries[i].name, name, sizeof(bot_entries[i].name));
+            sd_index = j + 1;
+            named = true;
+            break;
+        }
+        if (!named) continue;
+        if (register_disk_device_idx(bot_entries[i].name, read_usb_bot_device, write_usb_bot_device, i, bot_entries[i].total_size, DISK_BUS_USB) < 0) continue;
+        if (!probe_gpt_for_usb_disk(i, bot_entries[i].name, bot_entries[i].total_size)) probe_mbr_for_usb_disk(i, bot_entries[i].name, bot_entries[i].total_size);
+    }
     log("devices: initialized devices\n");
 }

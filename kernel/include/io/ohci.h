@@ -43,6 +43,7 @@
 
 #define OHCI_CONTROL_PLE       (1u << 2)
 #define OHCI_CONTROL_CLE       (1u << 4)
+#define OHCI_CONTROL_BLE       (1u << 5)
 #define OHCI_CONTROL_HCFS      (3u << 6)
 #define OHCI_CONTROL_IR        (1u << 8)
 #define OHCI_CONTROL_RWC       (1u << 9)
@@ -53,6 +54,7 @@
 
 #define OHCI_COMMAND_HCR       (1u << 0)
 #define OHCI_COMMAND_CLF       (1u << 1)
+#define OHCI_COMMAND_BLF       (1u << 2)
 #define OHCI_COMMAND_OCR       (1u << 3)
 
 #define OHCI_INTERRUPT_WDH     (1u << 1)
@@ -96,8 +98,13 @@
 #define OHCI_TD_IN             0x00100000u
 #define OHCI_TD_ROUND          0x00040000u
 
-#define OHCI_FRAME_INTERVAL_VALUE 0x2EDFu
+#define OHCI_FRAME_INTERVAL_VALUE      0x2EDFu
 #define OHCI_LOW_SPEED_THRESHOLD_VALUE 0x0628u
+#define OHCI_MAX_BULK_DATA             2048
+#define OHCI_BULK_DATA_OFFSET          0
+#define OHCI_BULK_ED_OFFSET            2080
+#define OHCI_BULK_TD_OFFSET            2112
+#define OHCI_BULK_TIMEOUT_MS           2000
 
 typedef struct {
     volatile uint32_t interrupt_table[32];
@@ -136,6 +143,10 @@ typedef struct {
     ohci_td_t *interrupt_td;
     ohci_td_t *interrupt_dummy_td;
     uint8_t *interrupt_buffer;
+    uint8_t *bulk_page;
+    uint64_t bulk_page_phys;
+    ohci_ed_t *bulk_ed;
+    bool bulk_busy;
     usb_hcd_t hcd;
     usb_device_t *pending_dev;
     uint8_t *pending_buffer;

@@ -75,4 +75,4 @@ int prepare_ide_dma(const ide_device_t *device, uint32_t bytes, bool read);
 int start_ide_dma(const ide_device_t *device);
 bool make_ide_disk_name(char *name, size_t name_size, const char *prefix, uint64_t index);
 bool make_ide_numbered_name(char *name, size_t name_size, const char *prefix, uint64_t index);
-bool init_ide(pci_device_t *dev);
+void init_ide(pci_device_t *dev);

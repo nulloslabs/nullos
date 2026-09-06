@@ -4,6 +4,18 @@
 #include <io/pci.h>
 #include <io/usb.h>
 
+#define HID_MOD_LCTRL  (1 << 0)
+#define HID_MOD_LSHIFT (1 << 1)
+#define HID_MOD_LALT   (1 << 2)
+#define HID_MOD_LGUI   (1 << 3)
+#define HID_MOD_RCTRL  (1 << 4)
+#define HID_MOD_RSHIFT (1 << 5)
+#define HID_MOD_RALT   (1 << 6)
+#define HID_MOD_RGUI   (1 << 7)
+
+#define USB_KEYBOARD_REPEAT_DELAY_TICKS    125
+#define USB_KEYBOARD_REPEAT_INTERVAL_TICKS 8
+
 // Keyboard device entry (also used by HCI drivers for polling)
 typedef struct {
     usb_device_t *dev;
@@ -18,9 +30,9 @@ typedef struct {
     uint8_t pending_leds;     // HID boot-keyboard output report
     uint8_t applied_leds;
     bool leds_dirty;
-} kbd_entry_t;
+} usb_keyboard_entry_t;
 
-extern kbd_entry_t *kbd_list;
+extern usb_keyboard_entry_t *kbd_list;
 extern int kbd_max_total;
 extern int kbd_total;
 

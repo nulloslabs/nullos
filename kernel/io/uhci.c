@@ -7,6 +7,7 @@
 #include <io/usb.h>
 #include <io/pci.h>
 #include <io/io.h>
+#include <io/usb_bot.h>
 #include <io/usb_keyboard.h>
 #include <io/time.h>
 #include <mm/mm.h>
@@ -216,10 +217,92 @@ static int uhci_interrupt_transfer(usb_hcd_t *hcd, usb_device_t *dev, uint8_t en
     return 0; // submitted
 }
 
-static int uhci_bulk_transfer(usb_hcd_t *hcd, usb_device_t *dev,
-                               uint8_t endpoint, void *data, uint16_t length) {
-    (void)hcd; (void)dev; (void)endpoint; (void)data; (void)length;
-    return -1;
+static int uhci_bulk_transfer(usb_hcd_t *hcd, usb_device_t *dev, uint8_t endpoint, void *data, uint16_t length) {
+    if (!hcd || !dev || !data || length == 0 || length > UHCI_MAX_BULK_DATA) return -1;
+    if (dev->speed == USB_SPEED_LOW) return -1;
+    uint8_t ep_num = endpoint & 0x0F;
+    if (ep_num == 0 || ep_num > 15) return -1;
+    bool dir_in = (endpoint & 0x80) != 0;
+    uint16_t max_packet = dir_in ? dev->bulk_in_max_packet : dev->bulk_out_max_packet;
+    if (max_packet != 8 && max_packet != 16 && max_packet != 32 && max_packet != 64) return -1;
+    uhci_controller_t *ctrl = (uhci_controller_t *)hcd->hcd_data;
+    if (!ctrl || !ctrl->initialized || !ctrl->qh || !ctrl->term_td) return -1;
+    void *dma_raw = prealloc_dma32(2);
+    if (!dma_raw) return -1;
+    uint64_t dma_phys = (uint64_t)dma_raw;
+    uint8_t *dma_page = (uint8_t *)phys_to_virt(dma_phys);
+    uint8_t *dma_data = dma_page + UHCI_BULK_DMA_DATA_OFFSET;
+    uhci_td_t *tds = (uhci_td_t *)(dma_page + UHCI_BULK_DMA_TD_OFFSET);
+    uint64_t tds_phys = dma_phys + UHCI_BULK_DMA_TD_OFFSET;
+    uint8_t addr = dev->address;
+    uint8_t start_toggle = dir_in ? (dev->bulk_in_toggle & 1) : (dev->bulk_out_toggle & 1);
+    uint8_t toggle = start_toggle;
+    int td_count = (length + max_packet - 1) / max_packet;
+    if (td_count <= 0 || (uint64_t)td_count * sizeof(uhci_td_t) + UHCI_BULK_DMA_TD_OFFSET > PAGE_SIZE * 2) { pfree_range(dma_raw, PAGE_SIZE * 2); return -1; }
+    if (!dir_in) memcpy(dma_data, data, length);
+    else memset(dma_data, 0, length);
+    uint16_t done = 0;
+    for (int i = 0; i < td_count; i++) {
+        uint16_t packet = length - done;
+        if (packet > max_packet) packet = max_packet;
+        tds[i].buffer_ptr = (uint32_t)(dma_phys + UHCI_BULK_DMA_DATA_OFFSET + done);
+        tds[i].status = UHCI_TD_ACTIVE | UHCI_TD_ERROR_COUNT(3);
+        if (dir_in) tds[i].status |= UHCI_TD_SPD;
+        tds[i].token = UHCI_TD_EXPECTED_LENGTH(packet) | ((uint32_t)toggle << 19) | ((uint32_t)ep_num << 15) | ((uint32_t)addr << 8) | (dir_in ? UHCI_PID_IN : UHCI_PID_OUT);
+        if (i + 1 < td_count) tds[i].link_ptr = (uint32_t)(tds_phys + (uint64_t)(i + 1) * sizeof(uhci_td_t));
+        else tds[i].link_ptr = (uint32_t)virt_to_phys(ctrl->term_td);
+        done += packet;
+        toggle ^= 1;
+    }
+    __sync_synchronize();
+    ctrl->qh->element_link_ptr = (uint32_t)tds_phys;
+    __sync_synchronize();
+    int ret = -2;
+    for (int elapsed = 0; elapsed < UHCI_BULK_TIMEOUT_MS; elapsed++) {
+        bool failed = false;
+        for (int i = 0; i < td_count; i++) { if (uhci_check_td(&tds[i]) == -2) failed = true; }
+        if (failed) break;
+        if (uhci_check_td(&tds[td_count - 1]) == 0) ret = 0;
+        if (ret == 0) break;
+        bool short_done = false;
+        for (int i = 0; i < td_count; i++) {
+            uint32_t st = *(volatile uint32_t *)&tds[i].status;
+            if (st & UHCI_TD_ACTIVE) break;
+            uint16_t expect = max_packet;
+            if (i == td_count - 1) expect = length - (uint16_t)((uint16_t)i * max_packet);
+            uint16_t actual = (uint16_t)((st + 1) & UHCI_TD_ACTLEN_MASK);
+            if (actual < expect) short_done = true;
+        }
+        if (short_done) ret = 0;
+        if (ret == 0) break;
+        sleep(1);
+    }
+    int actual_total = 0;
+    int completed = 0;
+    if (ret == 0) {
+        uint16_t remain = length;
+        for (int i = 0; i < td_count; i++) {
+            uint16_t expect = remain < max_packet ? remain : max_packet;
+            uint32_t st = *(volatile uint32_t *)&tds[i].status;
+            if (st & UHCI_TD_ACTIVE) break;
+            uint16_t actual = (uint16_t)((st + 1) & UHCI_TD_ACTLEN_MASK);
+            if (actual > expect) actual = expect;
+            actual_total += actual;
+            completed++;
+            remain -= expect;
+            if (actual < expect) break;
+        }
+        if (dir_in && actual_total > 0) memcpy(data, dma_data, (size_t)actual_total);
+        uint8_t end_toggle = (start_toggle + (uint8_t)completed) & 1;
+        if (dir_in) dev->bulk_in_toggle = end_toggle;
+        else dev->bulk_out_toggle = end_toggle;
+    }
+    ctrl->qh->element_link_ptr = (uint32_t)virt_to_phys(ctrl->term_td);
+    __sync_synchronize();
+    sleep(2);
+    pfree_range(dma_raw, PAGE_SIZE * 2);
+    if (ret != 0) return -2;
+    return actual_total;
 }
 
 static void update_uhci_port(uhci_controller_t *ctrl, int port,
@@ -281,6 +364,21 @@ static void remove_uhci_keyboard(uhci_controller_t *ctrl, int port) {
         __sync_synchronize();
     }
     remove_usb_keyboard(&ctrl->hcd, (uint8_t)port);
+    remove_usb_bot(&ctrl->hcd, (uint8_t)port);
+}
+
+static bool check_keyboard_claim(usb_hcd_t *hcd, uint8_t port) {
+    for (int i = 0; i < kbd_total; i++) { if (kbd_list[i].hcd == hcd && kbd_list[i].dev && kbd_list[i].dev->port_id == port) return true; }
+    return false;
+}
+
+static void probe_uhci_port(uhci_controller_t *ctrl, int port, int ls) {
+    register_usb_hcd(&ctrl->hcd);
+    init_usb_keyboard(&ctrl->hcd, ls ? USB_SPEED_LOW : USB_SPEED_FULL, (uint8_t)port);
+    if (check_keyboard_claim(&ctrl->hcd, (uint8_t)port)) return;
+    if (!reset_uhci_port(ctrl, port)) return;
+    sleep(100);
+    init_usb_bot(&ctrl->hcd, ls ? USB_SPEED_LOW : USB_SPEED_FULL, (uint8_t)port);
 }
 
 void poll_uhci_ports(void) {
@@ -323,9 +421,7 @@ void poll_uhci_ports(void) {
                     if (!reset_uhci_port(ctrl, i)) continue;
                     status = inw(io_base + port_reg);
                     int ls = (status & UHCI_PORT_LSDA) ? 1 : 0;
-
-                    register_usb_hcd(&ctrl->hcd);
-                    init_usb_keyboard(&ctrl->hcd, ls ? USB_SPEED_LOW : USB_SPEED_FULL, i);
+                    probe_uhci_port(ctrl, i, ls);
                 } else {
                     // Device disconnected
                     remove_uhci_keyboard(ctrl, i);
@@ -450,9 +546,7 @@ void rescan_uhci_ports(int ctrl_idx, int port_hint) {
             if (!reset_uhci_port(ctrl, i)) continue;
             status = inw(io_base + port_reg);
             int ls = (status & UHCI_PORT_LSDA) ? 1 : 0;
-
-            register_usb_hcd(&ctrl->hcd);
-            init_usb_keyboard(&ctrl->hcd, ls ? USB_SPEED_LOW : USB_SPEED_FULL, i);
+            probe_uhci_port(ctrl, i, ls);
         }
     }
 }
@@ -603,15 +697,12 @@ void init_uhci(pci_device_t *dev) {
     for (int i = 0; i < ctrl->num_ports; i++) {
         uint16_t port_reg = UHCI_PORTSC1 + (uint16_t)i * 2;
         uint16_t status = inw(io_base + port_reg);
-
         if (status & UHCI_PORT_CCS) {
             sleep(100);
             if (!reset_uhci_port(ctrl, i)) continue;
             status = inw(io_base + port_reg);
             int ls = (status & UHCI_PORT_LSDA) ? 1 : 0;
-
-            register_usb_hcd(&ctrl->hcd);
-            init_usb_keyboard(&ctrl->hcd, ls ? USB_SPEED_LOW : USB_SPEED_FULL, i);
+            probe_uhci_port(ctrl, i, ls);
         }
     }
 }

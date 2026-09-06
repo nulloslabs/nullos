@@ -22,4 +22,4 @@ int ahci_device_count(void);
 bool ahci_device_info(int index, ahci_device_info_t *info);
 int ahci_read_sectors(int index, uint64_t lba, uint32_t sectors, void *buffer);
 int ahci_write_sectors(int index, uint64_t lba, uint32_t sectors, const void *buffer);
-bool init_ahci(pci_device_t *dev);
+void init_ahci(pci_device_t *dev);

@@ -16,49 +16,51 @@
 #include <mm/vma.h>
 
 const proc_static_node_t proc_nodes[] = {
-    { "",              PROC_NODE_DIR,     PROC_DIR_ROOT         },
-    { "/self",         PROC_NODE_SYMLINK, PROC_LINK_SELF        },
-    { "/mounts",       PROC_NODE_SYMLINK, PROC_LINK_ROOT_MOUNTS },
-    { "/cpuinfo",      PROC_NODE_FILE,    PROC_FILE_CPUINFO     },
-    { "/meminfo",      PROC_NODE_FILE,    PROC_FILE_MEMINFO     },
-    { "/uptime",       PROC_NODE_FILE,    PROC_FILE_UPTIME      },
-    { "/stat",         PROC_NODE_FILE,    PROC_FILE_ROOT_STAT   },
-    { "/loadavg",      PROC_NODE_FILE,    PROC_FILE_LOADAVG     },
-    { "/<pid>",        PROC_NODE_DIR,     PROC_DIR_PID          },
-    { "/<pid>/fd",     PROC_NODE_DIR,     PROC_DIR_FD           },
-    { "/<pid>/maps",   PROC_NODE_FILE,    PROC_FILE_MAPS        },
-    { "/<pid>/mounts", PROC_NODE_FILE,    PROC_FILE_MOUNTS      },
-    { "/<pid>/auxv",   PROC_NODE_FILE,    PROC_FILE_AUXV        },
-    { "/<pid>/stat",   PROC_NODE_FILE,    PROC_FILE_STAT        },
-    { "/<pid>/status", PROC_NODE_FILE,    PROC_FILE_STATUS      },
-    { "/<pid>/cmdline",PROC_NODE_FILE,    PROC_FILE_CMDLINE     },
-    { "/<pid>/comm",   PROC_NODE_FILE,    PROC_FILE_COMM        },
-    { "/<pid>/exe",    PROC_NODE_SYMLINK, PROC_LINK_EXE         },
-    { "/<pid>/cwd",    PROC_NODE_SYMLINK, PROC_LINK_CWD         },
-    { "/<pid>/fd/<n>", PROC_NODE_SYMLINK, PROC_LINK_FD          },
+    { "",               PROC_NODE_DIR,     PROC_DIR_ROOT         },
+    { "/self",          PROC_NODE_SYMLINK, PROC_LINK_SELF        },
+    { "/mounts",        PROC_NODE_SYMLINK, PROC_LINK_ROOT_MOUNTS },
+    { "/cpuinfo",       PROC_NODE_FILE,    PROC_FILE_CPUINFO     },
+    { "/meminfo",       PROC_NODE_FILE,    PROC_FILE_MEMINFO     },
+    { "/uptime",        PROC_NODE_FILE,    PROC_FILE_UPTIME      },
+    { "/stat",          PROC_NODE_FILE,    PROC_FILE_ROOT_STAT   },
+    { "/loadavg",       PROC_NODE_FILE,    PROC_FILE_LOADAVG     },
+    { "/partitions",    PROC_NODE_FILE,    PROC_FILE_PARTITIONS  },
+    { "/<pid>",         PROC_NODE_DIR,     PROC_DIR_PID          },
+    { "/<pid>/fd",      PROC_NODE_DIR,     PROC_DIR_FD           },
+    { "/<pid>/maps",    PROC_NODE_FILE,    PROC_FILE_MAPS        },
+    { "/<pid>/mounts",  PROC_NODE_FILE,    PROC_FILE_MOUNTS      },
+    { "/<pid>/auxv",    PROC_NODE_FILE,    PROC_FILE_AUXV        },
+    { "/<pid>/stat",    PROC_NODE_FILE,    PROC_FILE_STAT        },
+    { "/<pid>/status",  PROC_NODE_FILE,    PROC_FILE_STATUS      },
+    { "/<pid>/cmdline", PROC_NODE_FILE,    PROC_FILE_CMDLINE     },
+    { "/<pid>/comm",    PROC_NODE_FILE,    PROC_FILE_COMM        },
+    { "/<pid>/exe",     PROC_NODE_SYMLINK, PROC_LINK_EXE         },
+    { "/<pid>/cwd",     PROC_NODE_SYMLINK, PROC_LINK_CWD         },
+    { "/<pid>/fd/<n>",  PROC_NODE_SYMLINK, PROC_LINK_FD          },
 };
 
 const dirent_static_t root_children[] = {
-    { "self",    DT_LNK },
-    { "mounts",  DT_LNK },
-    { "cpuinfo", DT_REG },
-    { "meminfo", DT_REG },
-    { "uptime",  DT_REG },
-    { "stat",    DT_REG },
-    { "loadavg", DT_REG },
+    { "self",       DT_LNK },
+    { "mounts",     DT_LNK },
+    { "cpuinfo",    DT_REG },
+    { "meminfo",    DT_REG },
+    { "uptime",     DT_REG },
+    { "stat",       DT_REG },
+    { "loadavg",    DT_REG },
+    { "partitions", DT_REG },
 };
 
 const dirent_static_t pid_children[] = {
-    { "fd",     DT_DIR },
-    { "maps",   DT_REG },
-    { "mounts", DT_REG },
-    { "auxv",   DT_REG },
-    { "stat",   DT_REG },
-    { "status", DT_REG },
-    { "cmdline",DT_REG },
-    { "comm",   DT_REG },
-    { "exe",    DT_LNK },
-    { "cwd",    DT_LNK },
+    { "fd",      DT_DIR },
+    { "maps",    DT_REG },
+    { "mounts",  DT_REG },
+    { "auxv",    DT_REG },
+    { "stat",    DT_REG },
+    { "status",  DT_REG },
+    { "cmdline", DT_REG },
+    { "comm",    DT_REG },
+    { "exe",     DT_LNK },
+    { "cwd",     DT_LNK },
 };
 
 static int fmt_int(int v, char *out, size_t out_size) {
@@ -349,6 +351,37 @@ static size_t build_loadavg(char *out) {
     return pos;
 }
 
+static uint32_t get_part_major(const char *name) {
+    if (!name) return 8;
+    if (name[0] == 's' && name[1] == 'd') return 8;
+    if (name[0] == 's' && name[1] == 'r') return 11;
+    if (name[0] == 'n' && name[1] == 'v' && name[2] == 'm' && name[3] == 'e') return 259;
+    return 8;
+}
+
+static size_t build_partitions(char *out) {
+    size_t pos = 0;
+    out[0] = '\0';
+    buf_append(out, &pos, PROCFS_MAX_CONTENT, "major minor  #blocks  name\n\n");
+    uint64_t irq;
+    spin_lock_irqsave(&devtmpfs_lock, &irq);
+    for (int i = 0; i < MAX_DEVTMPFS_DEVICES; i++) {
+        if (!devtmpfs_devices[i].active || !devtmpfs_devices[i].block) continue;
+        uint32_t major = get_part_major(devtmpfs_devices[i].name);
+        buf_append(out, &pos, PROCFS_MAX_CONTENT, "   ");
+        buf_append_u64(out, &pos, PROCFS_MAX_CONTENT, major);
+        buf_append(out, &pos, PROCFS_MAX_CONTENT, "        ");
+        buf_append_u64(out, &pos, PROCFS_MAX_CONTENT, (uint64_t)i);
+        buf_append(out, &pos, PROCFS_MAX_CONTENT, "   ");
+        buf_append_u64(out, &pos, PROCFS_MAX_CONTENT, devtmpfs_devices[i].size / 1024);
+        buf_append(out, &pos, PROCFS_MAX_CONTENT, " ");
+        buf_append(out, &pos, PROCFS_MAX_CONTENT, devtmpfs_devices[i].name);
+        buf_append(out, &pos, PROCFS_MAX_CONTENT, "\n");
+    }
+    spin_unlock_irqrestore(&devtmpfs_lock, irq);
+    return pos;
+}
+
 static char get_task_state(const task_t *task) {
     if (task->state == TASK_ZOMBIE) return 'Z';
     if (task->state == TASK_SLEEPING) return 'S';
@@ -559,6 +592,7 @@ size_t get_procfs_content(const proc_node_t *node, char *out) {
         case PROC_FILE_UPTIME:  return build_uptime(out);
         case PROC_FILE_ROOT_STAT: return build_root_stat(out);
         case PROC_FILE_LOADAVG: return build_loadavg(out);
+        case PROC_FILE_PARTITIONS: return build_partitions(out);
         case PROC_FILE_STAT:    return build_stat(node->pid, out);
         case PROC_FILE_STATUS:  return build_status(node->pid, out);
         case PROC_FILE_CMDLINE: return build_cmdline(node->pid, out);

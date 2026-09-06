@@ -23,7 +23,7 @@ AS = $(CC)
 AFLAGS = $(CFLAGS) -D__ASSEMBLY__
 
 LD = $(CROSS)ld
-LDFLAGS = -melf_x86_64 -T linker.ld -z max-page-size=0x200000 -no-pie -L./uacpi/build/
+LDFLAGS = -melf_x86_64 -T linker.ld -z max-page-size=0x1000 -no-pie -L./uacpi/build/
 LIBS = -luacpi
 
 AR = $(CROSS)ar

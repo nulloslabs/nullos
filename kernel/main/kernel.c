@@ -65,7 +65,7 @@ __attribute__((noreturn)) void kmain(void) {
     init_gdt();
     init_idt();
     remap_pic();
-    init_acpi_tables();
+    init_acpi();
     parse_madt();
     detect_apic();
     init_apic();
@@ -76,17 +76,16 @@ __attribute__((noreturn)) void kmain(void) {
     init_stack_protector();
     init_pci();
     init_pci_drivers();
-    init_sched();
-    init_acpi_namespace();
     cache_machine_info();
     cache_utsname();
-    init_ps2_keyboard();
-    configure_dhcp();
     init_tty();
     init_pty();
+    init_ps2_keyboard();
     init_devices();
     init_tmpfs();
+    init_sched();
     init_syscalls();
+    configure_dhcp();
 
     if (current_apic_mode != APIC_NONE) {
         init_apic_timer(250);
@@ -103,8 +102,7 @@ __attribute__((noreturn)) void kmain(void) {
     // Execute init process
     const char *init_path = "/init";
     char *init_argv[] = { (char*)init_path, NULL };
-    char *init_envp[] = { NULL };
-    int init = execute_elf(init_path, init_argv, init_envp);
+    int init = execute_elf(init_path, init_argv, NULL);
     if (init < 0) panic("init process didn't run due to an error");
     start_kernel_workqueue();
 

@@ -29,7 +29,6 @@ void disable_pic(void) {
     // Mask all IRQs on both PICs
     outb(PIC1_DATA, 0xFF);
     outb(PIC2_DATA, 0xFF);
-    log("pic: disabled pic\n");
 }
 
 void remap_pic(void) {

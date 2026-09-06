@@ -390,6 +390,10 @@ void sys_ioctl(syscall_frame_t *frame) {
                 remove_mbr_partitions(disk_index, DISK_BUS_NVME);
                 remove_gpt_partitions(disk_index, DISK_BUS_NVME);
                 if (!probe_gpt_for_nvme_disk(disk_index, rel, blk_size)) probe_mbr_for_nvme_disk(disk_index, rel, blk_size);
+            } else if (bus == DISK_BUS_USB) {
+                remove_mbr_partitions(disk_index, DISK_BUS_USB);
+                remove_gpt_partitions(disk_index, DISK_BUS_USB);
+                if (!probe_gpt_for_usb_disk(disk_index, rel, blk_size)) probe_mbr_for_usb_disk(disk_index, rel, blk_size);
             } else {
                 frame->rax = (uint64_t)-EINVAL;
                 return;

@@ -41,9 +41,9 @@ void write_pcie_ecam(uint8_t bus, uint8_t dev, uint8_t func, uint16_t off, uint3
 uint16_t read_pcie_word(uint8_t bus, uint8_t dev, uint8_t func, uint16_t off);
 void write_pcie_word(uint8_t bus, uint8_t dev, uint8_t func, uint16_t off, uint16_t val);
 uint16_t find_pcie_ext_cap(uint8_t bus, uint8_t dev, uint8_t func, uint16_t cap_id);
-void pci_dispatch(uint8_t vector);
-void pci_register_msi_handler(uint8_t vector, void (*handler)(void));
-void pci_register_intx_handler(uint8_t irq_line, void (*handler)(void));
+void dispatch_pci(uint8_t vector);
+void register_pci_msi_handler(uint8_t vector, void (*handler)(void));
+void register_pci_intx_handler(uint8_t irq_line, void (*handler)(void));
 uint32_t read_pci(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg);
 void write_pci(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg, uint32_t val);
 uint16_t read_pci_word(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg);

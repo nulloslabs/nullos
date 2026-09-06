@@ -7,6 +7,7 @@
 #include <io/ohci.h>
 #include <io/pci.h>
 #include <io/usb.h>
+#include <io/usb_bot.h>
 #include <io/usb_keyboard.h>
 #include <mm/mm.h>
 #include <mm/pmm.h>
@@ -62,6 +63,22 @@ static void cancel_ohci_interrupt(ohci_controller_t *ctrl) {
 static void remove_ohci_keyboard(ohci_controller_t *ctrl, uint8_t port) {
     if (ctrl->pending_dev && ctrl->pending_dev->port_id == port) cancel_ohci_interrupt(ctrl);
     remove_usb_keyboard(&ctrl->hcd, port);
+    remove_usb_bot(&ctrl->hcd, port);
+}
+
+static bool check_keyboard_claim_ohci(usb_hcd_t *hcd, uint8_t port) {
+    for (int i = 0; i < kbd_total; i++) { if (kbd_list[i].hcd == hcd && kbd_list[i].dev && kbd_list[i].dev->port_id == port) return true; }
+    return false;
+}
+
+static bool reset_ohci_port(ohci_controller_t *ctrl, uint8_t port);
+
+static void probe_ohci_port(ohci_controller_t *ctrl, uint8_t port, uint8_t speed) {
+    init_usb_keyboard(&ctrl->hcd, speed, port);
+    if (check_keyboard_claim_ohci(&ctrl->hcd, port)) return;
+    if (!reset_ohci_port(ctrl, port)) return;
+    sleep(100);
+    init_usb_bot(&ctrl->hcd, speed, port);
 }
 
 static void clear_ohci_port_changes(ohci_controller_t *ctrl, uint8_t port, uint32_t status) {
@@ -237,12 +254,105 @@ static int submit_ohci_interrupt_transfer(usb_hcd_t *hcd, usb_device_t *dev, uin
 }
 
 static int perform_ohci_bulk_transfer(usb_hcd_t *hcd, usb_device_t *dev, uint8_t endpoint, void *data, uint16_t length) {
-    (void)hcd;
-    (void)dev;
-    (void)endpoint;
-    (void)data;
-    (void)length;
-    return -1;
+    if (!hcd || !dev || !data || length == 0 || length > OHCI_MAX_BULK_DATA) return -1;
+    if (dev->speed == USB_SPEED_LOW) return -1;
+    uint8_t ep_num = endpoint & 0x0F;
+    if (ep_num == 0 || ep_num > 15) return -1;
+    bool dir_in = (endpoint & 0x80) != 0;
+    uint16_t max_packet = dir_in ? dev->bulk_in_max_packet : dev->bulk_out_max_packet;
+    if (max_packet != 8 && max_packet != 16 && max_packet != 32 && max_packet != 64) return -1;
+    ohci_controller_t *ctrl = (ohci_controller_t *)hcd->hcd_data;
+    if (!ctrl || !ctrl->initialized || !ctrl->bulk_page || !ctrl->bulk_ed || ctrl->bulk_busy) return -1;
+    ctrl->bulk_busy = true;
+    uint8_t *page = ctrl->bulk_page;
+    uint64_t page_phys = ctrl->bulk_page_phys;
+    uint8_t *dma_data = page + OHCI_BULK_DATA_OFFSET;
+    ohci_td_t *tds = (ohci_td_t *)(page + OHCI_BULK_TD_OFFSET);
+    uint32_t tds_phys = (uint32_t)(page_phys + OHCI_BULK_TD_OFFSET);
+    int td_count = (length + max_packet - 1) / max_packet;
+    int dummy_index = td_count;
+    uint32_t dummy_phys = tds_phys + (uint32_t)dummy_index * (uint32_t)sizeof(ohci_td_t);
+    if (td_count <= 0 || OHCI_BULK_TD_OFFSET + (uint32_t)(td_count + 1) * (uint32_t)sizeof(ohci_td_t) > PAGE_SIZE * 2) { ctrl->bulk_busy = false; return -1; }
+    if (!dir_in) memcpy(dma_data, data, length);
+    else memset(dma_data, 0, length);
+    uint8_t toggle = dir_in ? (dev->bulk_in_toggle & 1) : (dev->bulk_out_toggle & 1);
+    uint16_t done = 0;
+    for (int i = 0; i < td_count; i++) {
+        uint16_t packet = length - done;
+        if (packet > max_packet) packet = max_packet;
+        uint32_t flags = toggle ? OHCI_TD_DATA1 : OHCI_TD_DATA0;
+        if (dir_in) flags |= OHCI_TD_IN;
+        else flags |= OHCI_TD_OUT;
+        if (dir_in && i + 1 == td_count) flags |= OHCI_TD_ROUND;
+        flags |= OHCI_TD_DELAY(7);
+        fill_ohci_td(&tds[i], flags, (uint32_t)(page_phys + OHCI_BULK_DATA_OFFSET + done), packet, tds_phys + (uint32_t)(i + 1) * (uint32_t)sizeof(ohci_td_t));
+        done += packet;
+        toggle ^= 1;
+    }
+    memset(&tds[dummy_index], 0, sizeof(ohci_td_t));
+    uint32_t dir_flag = dir_in ? OHCI_ED_IN : OHCI_ED_OUT;
+    uint32_t ed_flags = make_ohci_ed_flags(dev, ep_num, max_packet, dir_flag);
+    ctrl->bulk_ed->flags = ed_flags | OHCI_ED_SKIP;
+    ctrl->bulk_ed->tail_pointer = dummy_phys;
+    ctrl->bulk_ed->head_pointer = tds_phys;
+    ctrl->bulk_ed->next_ed = 0;
+    __sync_synchronize();
+    ctrl->bulk_ed->flags = ed_flags;
+    write_ohci_register(ctrl, OHCI_BULK_HEAD_ED, (uint32_t)(page_phys + OHCI_BULK_ED_OFFSET));
+    write_ohci_register(ctrl, OHCI_COMMAND_STATUS, OHCI_COMMAND_BLF);
+    __sync_synchronize();
+    int result = -2;
+    for (int elapsed = 0; elapsed < OHCI_BULK_TIMEOUT_MS; elapsed++) {
+        bool failed = false;
+        for (int i = 0; i < td_count; i++) { uint8_t cc = get_ohci_td_condition(&tds[i]); if (cc != 0 && cc != 15) failed = true; }
+        if (failed) break;
+        if (get_ohci_td_condition(&tds[td_count - 1]) == 0) result = 0;
+        if (result == 0) break;
+        bool short_found = false;
+        for (int i = 0; i < td_count; i++) {
+            uint8_t cc = get_ohci_td_condition(&tds[i]);
+            if (cc == 15) break;
+            if (cc != 0) break;
+            uint32_t start = (uint32_t)(page_phys + OHCI_BULK_DATA_OFFSET + (uint32_t)i * max_packet);
+            uint16_t expect = max_packet;
+            if (i == td_count - 1) expect = length - (uint16_t)i * max_packet;
+            uint16_t actual = get_ohci_td_actual(&tds[i], start, expect);
+            if (actual < expect) short_found = true;
+        }
+        if (short_found) result = 0;
+        if (result == 0) break;
+        sleep(1);
+    }
+    int actual_total = 0;
+    int completed = 0;
+    if (result == 0) {
+        for (int i = 0; i < td_count; i++) {
+            uint8_t cc = get_ohci_td_condition(&tds[i]);
+            if (cc == 15) break;
+            if (cc != 0) break;
+            uint32_t start = (uint32_t)(page_phys + OHCI_BULK_DATA_OFFSET + (uint32_t)i * max_packet);
+            uint16_t expect = max_packet;
+            if ((uint32_t)i * max_packet >= length) break;
+            if (length - (uint16_t)((uint32_t)i * max_packet) < max_packet) expect = length - (uint16_t)((uint32_t)i * max_packet);
+            uint16_t actual = get_ohci_td_actual(&tds[i], start, expect);
+            actual_total += actual;
+            completed++;
+            if (actual < expect) break;
+        }
+        if (dir_in && actual_total > 0) memcpy(data, dma_data, (size_t)actual_total);
+        uint8_t start_toggle = dir_in ? (dev->bulk_in_toggle & 1) : (dev->bulk_out_toggle & 1);
+        uint8_t end_toggle = (uint8_t)(start_toggle + (uint8_t)completed) & 1;
+        if (dir_in) dev->bulk_in_toggle = end_toggle;
+        else dev->bulk_out_toggle = end_toggle;
+    }
+    ctrl->bulk_ed->flags = ed_flags | OHCI_ED_SKIP;
+    __sync_synchronize();
+    sleep(2);
+    ctrl->bulk_ed->head_pointer = dummy_phys;
+    ctrl->bulk_ed->tail_pointer = dummy_phys;
+    ctrl->bulk_busy = false;
+    if (result != 0) return -2;
+    return actual_total;
 }
 
 static void finish_ohci_interrupt(ohci_controller_t *ctrl) {
@@ -297,7 +407,7 @@ static void enumerate_ohci_port(ohci_controller_t *ctrl, uint8_t port) {
     if (!reset_ohci_port(ctrl, port)) return;
     status = read_ohci_register(ctrl, OHCI_RH_PORT_STATUS(port));
     uint8_t speed = status & OHCI_PORT_LSDA ? USB_SPEED_LOW : USB_SPEED_FULL;
-    init_usb_keyboard(&ctrl->hcd, speed, port);
+    probe_ohci_port(ctrl, port, speed);
 }
 
 static void scan_ohci_ports(ohci_controller_t *ctrl) {
@@ -350,28 +460,27 @@ static bool allocate_ohci_resources(ohci_controller_t *ctrl) {
     void *hcca_raw = pmalloc_dma32();
     void *control_raw = pmalloc_dma32();
     void *interrupt_raw = pmalloc_dma32();
-    if (!hcca_raw || !control_raw || !interrupt_raw) {
-        if (hcca_raw) pfree(hcca_raw);
-        if (control_raw) pfree(control_raw);
-        if (interrupt_raw) pfree(interrupt_raw);
-        return false;
-    }
-
+    void *bulk_raw = prealloc_dma32(2);
+    if (!hcca_raw || !control_raw || !interrupt_raw || !bulk_raw) { if (hcca_raw) pfree(hcca_raw); if (control_raw) pfree(control_raw); if (interrupt_raw) pfree(interrupt_raw); if (bulk_raw) pfree_range(bulk_raw, PAGE_SIZE * 2); return false; }
     ctrl->hcca_phys = (uint64_t)hcca_raw;
     ctrl->control_page_phys = (uint64_t)control_raw;
     ctrl->interrupt_page_phys = (uint64_t)interrupt_raw;
+    ctrl->bulk_page_phys = (uint64_t)bulk_raw;
     ctrl->hcca = (ohci_hcca_t *)phys_to_virt(ctrl->hcca_phys);
     ctrl->control_page = (uint8_t *)phys_to_virt(ctrl->control_page_phys);
     ctrl->interrupt_page = (uint8_t *)phys_to_virt(ctrl->interrupt_page_phys);
+    ctrl->bulk_page = (uint8_t *)phys_to_virt(ctrl->bulk_page_phys);
     memset(ctrl->hcca, 0, PAGE_SIZE);
     memset(ctrl->control_page, 0, PAGE_SIZE);
     memset(ctrl->interrupt_page, 0, PAGE_SIZE);
-
+    memset(ctrl->bulk_page, 0, PAGE_SIZE * 2);
     ctrl->control_ed = (ohci_ed_t *)(ctrl->control_page + OHCI_CONTROL_ED_OFFSET);
     ctrl->interrupt_ed = (ohci_ed_t *)(ctrl->interrupt_page + OHCI_INTERRUPT_ED_OFFSET);
     ctrl->interrupt_td = (ohci_td_t *)(ctrl->interrupt_page + OHCI_INTERRUPT_TD_OFFSET);
     ctrl->interrupt_dummy_td = (ohci_td_t *)(ctrl->interrupt_page + OHCI_INTERRUPT_DUMMY_TD_OFFSET);
     ctrl->interrupt_buffer = ctrl->interrupt_page + OHCI_INTERRUPT_DATA_OFFSET;
+    ctrl->bulk_ed = (ohci_ed_t *)(ctrl->bulk_page + OHCI_BULK_ED_OFFSET);
+    ctrl->bulk_busy = false;
     return true;
 }
 
@@ -379,6 +488,7 @@ static void release_ohci_resources(ohci_controller_t *ctrl) {
     if (ctrl->hcca) pfree((void *)ctrl->hcca_phys);
     if (ctrl->control_page) pfree((void *)ctrl->control_page_phys);
     if (ctrl->interrupt_page) pfree((void *)ctrl->interrupt_page_phys);
+    if (ctrl->bulk_page) pfree_range((void *)ctrl->bulk_page_phys, PAGE_SIZE * 2);
     if (ctrl->mmio_mapping) vunmap_mmio(ctrl->mmio_mapping, ctrl->mmio_pages);
 }
 
@@ -397,10 +507,14 @@ static bool start_ohci_controller(ohci_controller_t *ctrl) {
     memset(ctrl->hcca, 0, PAGE_SIZE);
     memset(ctrl->control_page, 0, PAGE_SIZE);
     memset(ctrl->interrupt_page, 0, PAGE_SIZE);
+    memset(ctrl->bulk_page, 0, PAGE_SIZE * 2);
     uint32_t control_ed_phys = (uint32_t)(ctrl->control_page_phys + OHCI_CONTROL_ED_OFFSET);
     uint32_t interrupt_ed_phys = (uint32_t)(ctrl->interrupt_page_phys + OHCI_INTERRUPT_ED_OFFSET);
+    uint32_t bulk_ed_phys = (uint32_t)(ctrl->bulk_page_phys + OHCI_BULK_ED_OFFSET);
     ctrl->control_ed->flags = OHCI_ED_SKIP;
     ctrl->interrupt_ed->flags = OHCI_ED_SKIP;
+    ctrl->bulk_ed->flags = OHCI_ED_SKIP;
+    ctrl->bulk_busy = false;
     for (int i = 0; i < 32; i++) ctrl->hcca->interrupt_table[i] = interrupt_ed_phys;
 
     uint32_t old_interval = read_ohci_register(ctrl, OHCI_FRAME_INTERVAL);
@@ -410,7 +524,7 @@ static bool start_ohci_controller(ohci_controller_t *ctrl) {
     uint32_t frame_interval = ((old_interval ^ (1u << 31)) & (1u << 31)) | (largest_packet << 16) | interval;
 
     write_ohci_register(ctrl, OHCI_CONTROL_HEAD_ED, control_ed_phys);
-    write_ohci_register(ctrl, OHCI_BULK_HEAD_ED, 0);
+    write_ohci_register(ctrl, OHCI_BULK_HEAD_ED, bulk_ed_phys);
     write_ohci_register(ctrl, OHCI_HCCA, (uint32_t)ctrl->hcca_phys);
     write_ohci_register(ctrl, OHCI_FRAME_INTERVAL, frame_interval);
     write_ohci_register(ctrl, OHCI_PERIODIC_START, (9u * interval) / 10u);
@@ -419,7 +533,7 @@ static bool start_ohci_controller(ohci_controller_t *ctrl) {
     __sync_synchronize();
 
     uint32_t preserved = read_ohci_register(ctrl, OHCI_CONTROL) & OHCI_CONTROL_RWC;
-    write_ohci_register(ctrl, OHCI_CONTROL, preserved | OHCI_CONTROL_PLE | OHCI_CONTROL_CLE | OHCI_USB_OPERATIONAL);
+    write_ohci_register(ctrl, OHCI_CONTROL, preserved | OHCI_CONTROL_PLE | OHCI_CONTROL_CLE | OHCI_CONTROL_BLE | OHCI_USB_OPERATIONAL);
     if ((read_ohci_register(ctrl, OHCI_CONTROL) & OHCI_CONTROL_HCFS) != OHCI_USB_OPERATIONAL) return false;
     if (!(read_ohci_register(ctrl, OHCI_FRAME_INTERVAL) & 0x3FFF0000u)) return false;
     if (!read_ohci_register(ctrl, OHCI_PERIODIC_START)) return false;
@@ -439,9 +553,11 @@ static bool start_ohci_controller(ohci_controller_t *ctrl) {
 
 static void recover_ohci_controller(ohci_controller_t *ctrl) {
     cancel_ohci_interrupt(ctrl);
-    for (uint8_t port = 0; port < ctrl->num_ports; port++) remove_usb_keyboard(&ctrl->hcd, port);
+    for (uint8_t port = 0; port < ctrl->num_ports; port++) { remove_usb_keyboard(&ctrl->hcd, port); remove_usb_bot(&ctrl->hcd, port); }
     ctrl->present_ports = 0;
     ctrl->control_busy = false;
+    ctrl->bulk_busy = false;
+    if (ctrl->bulk_ed) ctrl->bulk_ed->flags |= OHCI_ED_SKIP;
     ctrl->initialized = false;
     if (!start_ohci_controller(ctrl)) {
         log("ohci: controller recovery failed\n");
