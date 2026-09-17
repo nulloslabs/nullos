@@ -1,36 +1,35 @@
 #include <main/halt.h>
-#include <main/mp.h>
+#include <main/smp.h>
 #include <io/apic.h>
 
 volatile int system_halted = 0;
 
-void cli(void) { __asm__ volatile ("cli" : : : "memory"); }
-
-void sti(void) { __asm__ volatile ("sti" : : : "memory"); }
-
 void halt_other_cpus(void) {
-    if (current_apic_mode == APIC_NONE || cpu_count <= 1)
-        return;
-
+    if (current_apic_mode == APIC_NONE || cpu_count <= 1) return;
     uint32_t self = get_apic_id();
     for (int i = 0; i < cpu_count; i++) {
-        if (!cpus[i].active || cpus[i].lapic_id == self)
-            continue;
+        if (!cpus[i].active || cpus[i].lapic_id == self) continue;
         send_init_apic(cpus[i].lapic_id);
     }
 }
 
-__attribute__((noreturn)) void halt(void) {
-    if (!__sync_lock_test_and_set(&system_halted, 1))
-        halt_other_cpus();
-
+void cli(void) {
     __asm__ volatile ("cli" : : : "memory");
-    for (;;) __asm__ volatile ("hlt" : : : "memory");
 }
 
-__attribute__((noreturn)) void idle(void) { for (;;) __asm__ volatile ("hlt" : : : "memory"); }
+void sti(void) {
+    __asm__ volatile ("sti" : : : "memory");
+}
 
-void pause(void) { __asm__ volatile ("pause" : : : "memory"); }
+__attribute__((noreturn)) void idle(void) {
+    for (;;) __asm__ volatile ("hlt" : : : "memory");
+    __builtin_unreachable();
+}
 
-// Wait for interrupt
-void wfi(void) { __asm__ volatile ("sti; pause; hlt" : : : "memory"); }
+__attribute__((noreturn)) void halt(void) {
+    if (!__sync_lock_test_and_set(&system_halted, 1)) halt_other_cpus();
+    cli();
+    idle();
+    __builtin_unreachable();
+}
+

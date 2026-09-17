@@ -131,7 +131,8 @@ int read_pata(void *data, uint64_t count, uint64_t offset) { return read_pata_in
 
 int write_pata(const void *data, uint64_t count, uint64_t offset) { return write_pata_index(first_pata, data, count, offset); }
 
-uint64_t read_pata_device(void *data, uint64_t count, uint64_t offset, int index) {
+uint64_t read_pata_device(void *data, uint64_t count, uint64_t offset, int index, void *handle) {
+    (void)handle;
     uint64_t sectors = pata_sectors[index] < PATA_LBA28_LIMIT ? pata_sectors[index] : PATA_LBA28_LIMIT;
     uint64_t size = sectors * PATA_SECTOR_SIZE;
     if (offset >= size) return 0;
@@ -140,7 +141,8 @@ uint64_t read_pata_device(void *data, uint64_t count, uint64_t offset, int index
     return status < 0 ? (uint64_t)status : count;
 }
 
-uint64_t write_pata_device(const void *data, uint64_t count, uint64_t offset, int index) {
+uint64_t write_pata_device(const void *data, uint64_t count, uint64_t offset, int index, void *handle) {
+    (void)handle;
     uint64_t sectors = pata_sectors[index] < PATA_LBA28_LIMIT ? pata_sectors[index] : PATA_LBA28_LIMIT;
     uint64_t size = sectors * PATA_SECTOR_SIZE;
     if (offset >= size) return (uint64_t)-ENOSPC;

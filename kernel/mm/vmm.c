@@ -30,7 +30,7 @@ static uint64_t* get_vmm_next_level(uint64_t* current_level, uint64_t index, boo
 
     if (!allocate) return NULL;
 
-    void* next_level_phys = pmalloc();
+    void *next_level_phys = pmalloc();
     if (!next_level_phys) return NULL;
 
     uint64_t* next_level_virt = (uint64_t*)phys_to_virt((uint64_t)next_level_phys);
@@ -93,9 +93,9 @@ static bool vmm_user_page_valid(vmm_context_t *ctx, uint64_t virt, bool write) {
 }
 
 // Helper: Get virtual address of a physical page using HHDM
-void* phys_to_virt(uint64_t phys) { return (void*)(phys + hhdm_req.response->offset); }
+void *phys_to_virt(uint64_t phys) { return (void*)(phys + hhdm_req.response->offset); }
 
-uint64_t virt_to_phys(void* virt) {
+uint64_t virt_to_phys(void *virt) {
     uintptr_t addr = (uintptr_t)virt;
     
     // Check if it's in the kernel executable range
@@ -279,7 +279,7 @@ bool vmm_user_range_valid(vmm_context_t *ctx, uint64_t addr, size_t size, bool w
     return true;
 }
 
-int read_vmm(vmm_context_t* ctx, void* dest, uint64_t virt_src, size_t size) {
+int read_vmm(vmm_context_t* ctx, void *dest, uint64_t virt_src, size_t size) {
     uint8_t* d = (uint8_t*)dest;
     size_t remaining = size;
     uint64_t curr_src = virt_src;
@@ -301,7 +301,7 @@ int read_vmm(vmm_context_t* ctx, void* dest, uint64_t virt_src, size_t size) {
     return 0;
 }
 
-int write_vmm(vmm_context_t* ctx, uint64_t virt_dest, const void* src, size_t size) {
+int write_vmm(vmm_context_t* ctx, uint64_t virt_dest, const void *src, size_t size) {
     const uint8_t* s = (const uint8_t*)src;
     size_t remaining = size;
     uint64_t curr_dest = virt_dest;
@@ -355,7 +355,7 @@ vmm_context_t* create_vmm_context(void) {
     if (!ctx) return NULL;
 
     // allocate physical page for PML4
-    void* pml4_raw = pmalloc();
+    void *pml4_raw = pmalloc();
     if (!pml4_raw) { free(ctx); return NULL; }
 
     // get virtual address
@@ -477,7 +477,7 @@ vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
                         continue;
                     }
 
-                    void* new_phys = pmalloc();
+                    void *new_phys = pmalloc();
                     if (!new_phys) {
                         destroy_vmm_context(child);
                         return NULL;
@@ -500,7 +500,7 @@ vmm_context_t* clone_vmm_context(vmm_context_t* parent) {
     return child;
 }
 
-void* vmalloc_ex(vmm_context_t* ctx, size_t size, uint64_t flags) {
+void *vmalloc_ex(vmm_context_t* ctx, size_t size, uint64_t flags) {
     if (size == 0) return NULL;
 
     uint64_t total_size = size + sizeof(vmalloc_header_t);
@@ -510,17 +510,17 @@ void* vmalloc_ex(vmm_context_t* ctx, size_t size, uint64_t flags) {
     spin_lock_irqsave(&vmm_lock, &flags_irq);
     
     uint64_t *cursor = (flags & VMM_USER) ? &vuser_cursor : &vmalloc_cursor;
-    void* start_addr = (void*)*cursor;
+    void *start_addr = (void*)*cursor;
     *cursor += (num_pages * PAGE_SIZE);
     
     spin_unlock_irqrestore(&vmm_lock, flags_irq);
 
-    void* first_phys = NULL;
+    void *first_phys = NULL;
     uint64_t curr_addr = (uint64_t)start_addr;
     uint64_t mapped_count = 0;
 
     for (uint64_t i = 0; i < num_pages; i++) {
-        void* phys = pmalloc();
+        void *phys = pmalloc();
         if (!phys) {
             // Rollback: unmap and free all previously allocated pages
             uint64_t rollback_addr = (uint64_t)start_addr;
@@ -551,15 +551,15 @@ void* vmalloc_ex(vmm_context_t* ctx, size_t size, uint64_t flags) {
     return (void*)((uintptr_t)start_addr + sizeof(vmalloc_header_t));
 }
 
-void* vmalloc_user_ex(vmm_context_t* ctx, size_t size) { return vmalloc_ex(ctx, size, VMM_WRITABLE | VMM_USER | VMM_NX); }
+void *vmalloc_user_ex(vmm_context_t* ctx, size_t size) { return vmalloc_ex(ctx, size, VMM_WRITABLE | VMM_USER | VMM_NX); }
 
-void* vmap_mmio(uint64_t phys, size_t num_pages) {
+void *vmap_mmio(uint64_t phys, size_t num_pages) {
     if (num_pages == 0) return NULL;
 
     uint64_t flags_irq;
     spin_lock_irqsave(&vmm_lock, &flags_irq);
 
-    void* start_addr = (void*)vmalloc_cursor;
+    void *start_addr = (void*)vmalloc_cursor;
     vmalloc_cursor += num_pages * PAGE_SIZE;
 
     spin_unlock_irqrestore(&vmm_lock, flags_irq);
@@ -580,7 +580,7 @@ void* vmap_mmio(uint64_t phys, size_t num_pages) {
     return (void*)((uintptr_t)start_addr + (phys & (PAGE_SIZE - 1)));
 }
 
-void vunmap_mmio(void* addr, size_t num_pages) {
+void vunmap_mmio(void *addr, size_t num_pages) {
     if (!addr || num_pages == 0) return;
 
     uint64_t base = (uintptr_t)addr & ~(PAGE_SIZE - 1);
@@ -590,7 +590,7 @@ void vunmap_mmio(void* addr, size_t num_pages) {
     }
 }
 
-void* vmap_user_at(vmm_context_t* ctx, uint64_t virt, size_t size, uint64_t flags) {
+void *vmap_user_at(vmm_context_t* ctx, uint64_t virt, size_t size, uint64_t flags) {
     if (!ctx || size == 0 || virt >= USER_VIRTUAL_LIMIT || size > USER_VIRTUAL_LIMIT - virt) return NULL;
     uint64_t num_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
     uint64_t curr_addr = virt & ~0xFFFULL;
@@ -619,7 +619,7 @@ void* vmap_user_at(vmm_context_t* ctx, uint64_t virt, size_t size, uint64_t flag
     return (void*)virt;
 }
 
-void* vmap_user_range(vmm_context_t* ctx, size_t size, uint64_t flags) {
+void *vmap_user_range(vmm_context_t* ctx, size_t size, uint64_t flags) {
     if (!ctx || size == 0 || size > SIZE_MAX - (PAGE_SIZE - 1)) return NULL;
 
     uint64_t num_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
@@ -640,7 +640,7 @@ void* vmap_user_range(vmm_context_t* ctx, size_t size, uint64_t flags) {
     return vmap_user_at(ctx, start_addr, map_size, flags);
 }
 
-void* vmap_user_range_32(vmm_context_t* ctx, size_t size, uint64_t flags) {
+void *vmap_user_range_32(vmm_context_t* ctx, size_t size, uint64_t flags) {
     if (!ctx || size == 0 || size > SIZE_MAX - (PAGE_SIZE - 1)) return NULL;
     uint64_t num_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
     uint64_t map_size = num_pages * PAGE_SIZE;
@@ -671,11 +671,15 @@ void* vmap_user_range_32(vmm_context_t* ctx, size_t size, uint64_t flags) {
     return vmap_user_at(ctx, start_addr, map_size, flags);
 }
 
-void* vmalloc(size_t size) { return vmalloc_ex(&kernel_context, size, VMM_WRITABLE | VMM_NX); }
+void *vmalloc(size_t size) {
+    return vmalloc_ex(&kernel_context, size, VMM_WRITABLE | VMM_NX);
+}
 
-void* vmalloc_user(size_t size) { return vmalloc_user_ex(&kernel_context, size); }
+void *vmalloc_user(size_t size) {
+    return vmalloc_user_ex(&kernel_context, size);
+}
 
-void* vrealloc(void* ptr, size_t size) {
+void *vrealloc(void *ptr, size_t size) {
     if (!ptr) return vmalloc(size);
     
     vmalloc_header_t* header = (vmalloc_header_t*)((uintptr_t)ptr - sizeof(vmalloc_header_t));
@@ -690,7 +694,7 @@ void* vrealloc(void* ptr, size_t size) {
     }
 
     // Otherwise, do the full move
-    void* new_ptr = vmalloc(size);
+    void *new_ptr = vmalloc(size);
     if (!new_ptr) return NULL;
 
     memcpy(new_ptr, ptr, old_data_size);
@@ -699,7 +703,13 @@ void* vrealloc(void* ptr, size_t size) {
     return new_ptr;
 }
 
-void vfree(void* ptr) {
+void *vcalloc(size_t nmemb, size_t size) {
+    if (nmemb == 0 || size == 0) return NULL;
+    if (nmemb > SIZE_MAX / size) return NULL;
+    return vmalloc(nmemb * size);
+}
+
+void vfree(void *ptr) {
     if (!ptr) return;
 
     vmalloc_header_t* header = (vmalloc_header_t*)((uintptr_t)ptr - sizeof(vmalloc_header_t));

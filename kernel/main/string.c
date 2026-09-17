@@ -1,6 +1,5 @@
 #include <stdint.h>
 #include <stddef.h>
-#include <errno.h>
 #include <main/string.h>
 #include <mm/mm.h>
 

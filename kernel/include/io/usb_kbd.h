@@ -13,8 +13,8 @@
 #define HID_MOD_RALT   (1 << 6)
 #define HID_MOD_RGUI   (1 << 7)
 
-#define USB_KEYBOARD_REPEAT_DELAY_TICKS    125
-#define USB_KEYBOARD_REPEAT_INTERVAL_TICKS 8
+#define USB_KBD_REPEAT_DELAY_TICKS    125
+#define USB_KBD_REPEAT_INTERVAL_TICKS 8
 
 // Keyboard device entry (also used by HCI drivers for polling)
 typedef struct {
@@ -30,15 +30,15 @@ typedef struct {
     uint8_t pending_leds;     // HID boot-keyboard output report
     uint8_t applied_leds;
     bool leds_dirty;
-} usb_keyboard_entry_t;
+} usb_kbd_entry_t;
 
-extern usb_keyboard_entry_t *kbd_list;
+extern usb_kbd_entry_t *kbd_list;
 extern int kbd_max_total;
 extern int kbd_total;
 
-void usb_keyboard_process_report(uint8_t *report, int kbd_index);
-void poll_usb_keyboard(void);
+void usb_kbd_process_report(uint8_t *report, int kbd_index);
+void poll_usb_kbd(void);
 int kbd_find_index(usb_device_t *dev);
-void set_usb_keyboard_leds(uint8_t leds);
-void remove_usb_keyboard(usb_hcd_t *hcd, uint8_t port_id);
-void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id);
+void set_usb_kbd_leds(uint8_t leds);
+void remove_usb_kbd(usb_hcd_t *hcd, uint8_t port_id);
+void init_usb_kbd(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id);

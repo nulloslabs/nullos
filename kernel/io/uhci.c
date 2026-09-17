@@ -7,8 +7,8 @@
 #include <io/usb.h>
 #include <io/pci.h>
 #include <io/io.h>
-#include <io/usb_bot.h>
-#include <io/usb_keyboard.h>
+#include <io/usb_storage.h>
+#include <io/usb_kbd.h>
 #include <io/time.h>
 #include <mm/mm.h>
 #include <mm/pmm.h>
@@ -305,8 +305,7 @@ static int uhci_bulk_transfer(usb_hcd_t *hcd, usb_device_t *dev, uint8_t endpoin
     return actual_total;
 }
 
-static void update_uhci_port(uhci_controller_t *ctrl, int port,
-                             uint16_t set, uint16_t clear) {
+static void update_uhci_port(uhci_controller_t *ctrl, int port, uint16_t set, uint16_t clear) {
     uint16_t reg = UHCI_PORTSC1 + (uint16_t)port * 2;
     uint16_t status = inw(ctrl->io_base + reg);
     uint16_t value = status & UHCI_PORT_RW;
@@ -356,29 +355,29 @@ static uint16_t detect_uhci_ports(uhci_controller_t *ctrl) {
     return ports >= 2 && ports <= 7 ? ports : 2;
 }
 
-static void remove_uhci_keyboard(uhci_controller_t *ctrl, int port) {
+static void remove_uhci_kbd(uhci_controller_t *ctrl, int port) {
     if (ctrl->pending_dev && ctrl->pending_dev->port_id == port) {
         ctrl->pending_dev = NULL;
         ctrl->pending_buf = NULL;
         ctrl->intr_qh->element_link_ptr = UHCI_PTR_TERMINATE;
         __sync_synchronize();
     }
-    remove_usb_keyboard(&ctrl->hcd, (uint8_t)port);
-    remove_usb_bot(&ctrl->hcd, (uint8_t)port);
+    remove_usb_kbd(&ctrl->hcd, (uint8_t)port);
+    remove_usb_storage(&ctrl->hcd, (uint8_t)port);
 }
 
-static bool check_keyboard_claim(usb_hcd_t *hcd, uint8_t port) {
+static bool check_kbd_claim(usb_hcd_t *hcd, uint8_t port) {
     for (int i = 0; i < kbd_total; i++) { if (kbd_list[i].hcd == hcd && kbd_list[i].dev && kbd_list[i].dev->port_id == port) return true; }
     return false;
 }
 
 static void probe_uhci_port(uhci_controller_t *ctrl, int port, int ls) {
     register_usb_hcd(&ctrl->hcd);
-    init_usb_keyboard(&ctrl->hcd, ls ? USB_SPEED_LOW : USB_SPEED_FULL, (uint8_t)port);
-    if (check_keyboard_claim(&ctrl->hcd, (uint8_t)port)) return;
+    init_usb_kbd(&ctrl->hcd, ls ? USB_SPEED_LOW : USB_SPEED_FULL, (uint8_t)port);
+    if (check_kbd_claim(&ctrl->hcd, (uint8_t)port)) return;
     if (!reset_uhci_port(ctrl, port)) return;
     sleep(100);
-    init_usb_bot(&ctrl->hcd, ls ? USB_SPEED_LOW : USB_SPEED_FULL, (uint8_t)port);
+    init_usb_storage(&ctrl->hcd, ls ? USB_SPEED_LOW : USB_SPEED_FULL, (uint8_t)port);
 }
 
 void poll_uhci_ports(void) {
@@ -410,7 +409,7 @@ void poll_uhci_ports(void) {
                     // A PEDC without CSC means the controller disabled the
                     // port after a fault. Resetting loses the USB address, so
                     // discard any old instance before enumerating it again.
-                    remove_uhci_keyboard(ctrl, i);
+                    remove_uhci_kbd(ctrl, i);
 
                     // Clear pending state on new connection
                     ctrl->pending_dev = NULL;
@@ -424,7 +423,7 @@ void poll_uhci_ports(void) {
                     probe_uhci_port(ctrl, i, ls);
                 } else {
                     // Device disconnected
-                    remove_uhci_keyboard(ctrl, i);
+                    remove_uhci_kbd(ctrl, i);
                     if (!ctrl->pending_dev && ctrl->intr_qh)
                         ctrl->intr_qh->element_link_ptr = UHCI_PTR_TERMINATE;
                 }
@@ -447,7 +446,7 @@ void poll_uhci_ports(void) {
                     dev->interrupt_toggle ^= 1;
                     int ki = kbd_find_index(dev);
                     if (ki >= 0 && ki < kbd_total) {
-                        usb_keyboard_process_report(buf, ki);
+                        usb_kbd_process_report(buf, ki);
                         uint8_t *temp = kbd_list[ki].report_buf;
                         kbd_list[ki].report_buf = kbd_list[ki].report_buf_next;
                         kbd_list[ki].report_buf_next = temp;
@@ -464,16 +463,16 @@ void poll_uhci_ports(void) {
         }
         // Arm next UHCI keyboard on this controller if none pending
         if (!ctrl->pending_dev && kbd_total > 0) {
-            if (ctrl->keyboard_cursor >= kbd_total) ctrl->keyboard_cursor = 0;
+            if (ctrl->kbd_cursor >= kbd_total) ctrl->kbd_cursor = 0;
             for (int step = 0; step < kbd_total; step++) {
-                int k = (ctrl->keyboard_cursor + step) % kbd_total;
+                int k = (ctrl->kbd_cursor + step) % kbd_total;
                 usb_hcd_t *hcd = kbd_list[k].hcd;
                 usb_device_t *dev = kbd_list[k].dev;
                 uint8_t *buf = kbd_list[k].report_buf_next;
                 if (hcd == &ctrl->hcd && dev && buf) {
                     int ret = ctrl->hcd.interrupt_transfer(&ctrl->hcd, dev, kbd_list[k].endpoint_number, buf, 8);
                     if (ret == 0) {
-                        ctrl->keyboard_cursor = (k + 1) % kbd_total;
+                        ctrl->kbd_cursor = (k + 1) % kbd_total;
                         break;
                     }
                 }

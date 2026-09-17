@@ -3,6 +3,7 @@
 #include <main/string.h>
 #include <main/spinlocks.h>
 #include <main/sched.h>
+#include <main/signal.h>
 #include <io/unix_sockets.h>
 #include <io/tmpfs.h>
 #include <mm/mm.h>
@@ -248,7 +249,21 @@ int64_t write_unix_handle(unix_handle_t *h, const void *buf, size_t count, uint3
         spin_lock_irqsave(&ch->lock, &flags);
         if (ch->readers == 0) {
             spin_unlock_irqrestore(&ch->lock, flags);
-            return done ? (int64_t)done : -EPIPE;
+            // POSIX: a write with no readers raises SIGPIPE; EPIPE is only
+            // returned when the signal is ignored or blocked
+            uint64_t pipe_handler = current_task_ptr->sigactions[SIGPIPE * 4];
+            bool pipe_blocked = current_task_ptr->blocked_signals & (1ULL << (SIGPIPE - 1));
+            if (pipe_handler == (uint64_t)SIG_IGN || pipe_blocked) return done ? (int64_t)done : -EPIPE;
+            if (pipe_handler != (uint64_t)SIG_DFL) {
+                // caught: queue the signal and still fail with EPIPE, like Linux
+                send_task_signal(current_task, SIGPIPE);
+                return done ? (int64_t)done : -EPIPE;
+            }
+            // default action kills the writer outright; same sequence as the
+            // SIG_DFL path in check_signals_context(); exit_task() never returns
+            current_task_ptr->pending_signals = 0;
+            current_task_ptr->term_sig = SIGPIPE;
+            exit_task(128 + SIGPIPE);
         }
         while (done < count && ch->len < UNIX_BUF_SIZE) {
             ch->buf[ch->tail] = in[done++];

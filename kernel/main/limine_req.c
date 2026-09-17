@@ -47,7 +47,7 @@ volatile struct limine_rsdp_request rsdp_req = {
 };
 
 __attribute__((used, section(".limine_requests")))
-volatile struct limine_mp_request mp_req = {
+volatile struct limine_mp_request smp_req = {
     .id = LIMINE_MP_REQUEST_ID,
     .revision = 0
 };

@@ -5,7 +5,7 @@
 #include <main/string.h>
 #include <main/sched.h>
 #include <main/fd.h>
-#include <main/mp.h>
+#include <main/smp.h>
 #include <main/machine_info.h>
 #include <main/timekeeping.h>
 #include <io/devtmpfs.h>

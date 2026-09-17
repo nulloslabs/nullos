@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <limits.h>
 #include <main/assert.h>
 #include <main/log.h>
 #include <main/string.h>
@@ -72,14 +73,10 @@ static void split_block_locked(struct memory_header *block, size_t wanted) {
     assert(block->magic == HEAP_BLOCK_MAGIC);
     assert(block->size >= wanted);
 
-    // The caller retains ownership state of the first part.  malloc() splits
-    // a free block, while realloc() can split an allocated block; in either
-    // case the newly-created tail is free.
     size_t remainder = block->size - wanted;
     if (remainder < sizeof(struct memory_header) + HEAP_MIN_SPLIT) return;
 
-    struct memory_header *tail = (struct memory_header *)
-        ((uint8_t *)(block + 1) + wanted);
+    struct memory_header *tail = (struct memory_header *)((uint8_t *)(block + 1) + wanted);
     tail->size = remainder - sizeof(*tail);
     tail->magic = HEAP_BLOCK_MAGIC;
     tail->is_free = 1;
@@ -126,8 +123,6 @@ static bool grow_kernel_heap(size_t wanted) {
         return false;
     }
 
-    // pmalloc() already zeroes every page. Publish the fully mapped region
-    // only after all mappings succeed, so allocation never sees half a span.
     spin_lock_irqsave(&mm_lock, &irq);
     insert_region_locked((void *)start, grow_size);
     spin_unlock_irqrestore(&mm_lock, irq);
@@ -163,26 +158,6 @@ void *malloc(size_t size) {
         spin_unlock_irqrestore(&mm_lock, irq);
         if (!grow_kernel_heap(size)) return NULL;
     }
-}
-
-void free(void *ptr) {
-    if (!ptr) return;
-
-    uint64_t irq;
-    spin_lock_irqsave(&mm_lock, &irq);
-    struct memory_header *block = find_header_locked(ptr);
-    if (block) {
-        if (!block->is_free) {
-            block->is_free = 1;
-            coalesce_free_list_locked();
-        }
-        spin_unlock_irqrestore(&mm_lock, irq);
-        return;
-    }
-    spin_unlock_irqrestore(&mm_lock, irq);
-
-    // vmalloc allocations occupy the distinct range above KERNEL_HEAP_LIMIT.
-    if ((uintptr_t)ptr >= KERNEL_HEAP_LIMIT) vfree(ptr);
 }
 
 void *realloc(void *ptr, size_t size) {
@@ -227,6 +202,35 @@ void *realloc(void *ptr, size_t size) {
     memcpy(replacement, ptr, old_size);
     free(ptr);
     return replacement;
+}
+
+void *calloc(size_t nmemb, size_t size) {
+    if (nmemb == 0 || size == 0) return NULL;
+    if (nmemb > SIZE_MAX / size) return NULL;
+    void *ptr = malloc(nmemb * size);
+    if (!ptr) return NULL;
+    memset(ptr, '\0', nmemb * size);
+    return ptr;
+}
+
+void free(void *ptr) {
+    if (!ptr) return;
+
+    uint64_t irq;
+    spin_lock_irqsave(&mm_lock, &irq);
+    struct memory_header *block = find_header_locked(ptr);
+    if (block) {
+        if (!block->is_free) {
+            block->is_free = 1;
+            coalesce_free_list_locked();
+        }
+        spin_unlock_irqrestore(&mm_lock, irq);
+        return;
+    }
+    spin_unlock_irqrestore(&mm_lock, irq);
+
+    // vmalloc allocations occupy the distinct range above KERNEL_HEAP_LIMIT.
+    if ((uintptr_t)ptr >= KERNEL_HEAP_LIMIT) vfree(ptr);
 }
 
 void init_mm(void) {

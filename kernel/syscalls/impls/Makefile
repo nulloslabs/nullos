@@ -35,3 +35,6 @@ mrproper: clean
 .PHONY: all clean mrproper
 
 print:
+
+FORCE:
+.PHONY: FORCE

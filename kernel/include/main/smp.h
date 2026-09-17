@@ -4,8 +4,7 @@
 #include <stdbool.h>
 #include <main/sched.h>
 
-#define MAX_CPUS 64
-
+#define MAX_CPUS           64
 #define CPU_INDEX_MAP_SIZE (MAX_CPUS * 2)
 
 typedef struct {
@@ -36,4 +35,4 @@ void clear_cpu_index_map(void);
 void map_cpu_index(uint32_t lapic_id, int cpu_index);
 int get_cpu_index(void);
 cpu_t *get_cpu(void);
-void init_mp(void);
+void init_smp(void);

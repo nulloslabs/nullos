@@ -125,13 +125,53 @@ static void *allocate_pages(uint64_t count, bool dma32, bool oom) {
     return (void *)phys;
 }
 
-void* pmalloc(void) { return allocate_pages(1, false, true); }
+uint64_t get_total_pmm_memory(void) {
+    uint64_t flags;
+    spin_lock_irqsave(&pmm_lock, &flags);
+    uint64_t memory = total_pages * PAGE_SIZE;
+    spin_unlock_irqrestore(&pmm_lock, flags);
+    return memory;
+}
 
-void* pmalloc_dma32(void) { return allocate_pages(1, true, false); }
+uint64_t get_free_pmm_memory(void) {
+    uint64_t flags;
+    spin_lock_irqsave(&pmm_lock, &flags);
+    uint64_t memory = free_pages * PAGE_SIZE;
+    spin_unlock_irqrestore(&pmm_lock, flags);
+    return memory;
+}
 
-void* prealloc(uint64_t count) { return allocate_pages(count, false, true); }
+uint64_t get_used_pmm_memory(void) {
+    uint64_t flags;
+    spin_lock_irqsave(&pmm_lock, &flags);
+    uint64_t memory = (total_pages - free_pages) * PAGE_SIZE;
+    spin_unlock_irqrestore(&pmm_lock, flags);
+    return memory;
+}
 
-void* prealloc_dma32(uint64_t count) { return allocate_pages(count, true, false); }
+void *pmalloc(void) {
+    return allocate_pages(1, false, true);
+}
+
+void *pmalloc_dma32(void) {
+    return allocate_pages(1, true, false);
+}
+
+void *prealloc(uint64_t count) {
+    return allocate_pages(count, false, true);
+}
+
+void *prealloc_dma32(uint64_t count) {
+    return allocate_pages(count, true, false);
+}
+
+void *pcalloc(uint64_t count) {
+    return prealloc(count);
+}
+
+void *pcalloc_dma32(uint64_t count) {
+    return prealloc_dma32(count);
+}
 
 void pfree(void *phys_addr) {
     if (!phys_addr) return;
@@ -185,30 +225,6 @@ bool pref(void *phys_addr) {
     }
     spin_unlock_irqrestore(&pmm_lock, flags);
     return retained;
-}
-
-uint64_t get_total_pmm_memory(void) {
-    uint64_t flags;
-    spin_lock_irqsave(&pmm_lock, &flags);
-    uint64_t memory = total_pages * PAGE_SIZE;
-    spin_unlock_irqrestore(&pmm_lock, flags);
-    return memory;
-}
-
-uint64_t get_free_pmm_memory(void) {
-    uint64_t flags;
-    spin_lock_irqsave(&pmm_lock, &flags);
-    uint64_t memory = free_pages * PAGE_SIZE;
-    spin_unlock_irqrestore(&pmm_lock, flags);
-    return memory;
-}
-
-uint64_t get_used_pmm_memory(void) {
-    uint64_t flags;
-    spin_lock_irqsave(&pmm_lock, &flags);
-    uint64_t memory = (total_pages - free_pages) * PAGE_SIZE;
-    spin_unlock_irqrestore(&pmm_lock, flags);
-    return memory;
 }
 
 void init_pmm(void) {

@@ -6,7 +6,7 @@
 #include <main/spinlocks.h>
 #include <main/halt.h>
 #include <main/timekeeping.h>
-#include <main/mp.h>
+#include <main/smp.h>
 #include <main/msr.h>
 #include <main/fd.h>
 #include <main/sched.h>
@@ -50,11 +50,9 @@ static const uint32_t nice_weights[40] = {
 };
 
 static void idle_task(void) {
-    // usb has no interrupt handler, so the hcds are polled here whenever the
-    // cpu is idle; poll_usb_hcds self-gates to every 4 ms and cpu 0 only
     for (;;) {
         poll_usb_hcds();
-        __asm__ volatile ("hlt" : : : "memory");
+        __asm__ volatile ("hlt" ::: "memory"); // No idle() here since we execute hlt once
     }
 }
 
@@ -196,8 +194,14 @@ static void update_load_averages(void) {
     }
 }
 
-task_t *get_current_task_ptr(void) { return current_task_ptr; }
-int get_task_nice(task_t *task) { return task ? task->nice : 0; }
+
+bool is_sched_ready(void) {
+    return sched_ready;
+}
+
+task_t *get_current_task_ptr(void) {
+    return current_task_ptr;
+}
 
 void let_current_task_sleep(uint64_t duration_us) {
     assert(current_task_ptr != NULL);
@@ -208,6 +212,10 @@ void let_current_task_sleep(uint64_t duration_us) {
     yield_sched();
     spin_lock(&sched_lock);
     current_task_ptr->sleep_deadline_us = 0;
+}
+
+int get_task_nice(task_t *task) {
+    return task ? task->nice : 0;
 }
 
 int set_task_nice(task_t *task, int nice) {
@@ -225,7 +233,9 @@ task_t *task_by_pid(pid_t pid) {
 }
 
 int task_index_by_pid(pid_t pid) {
-    for (int i = 0; i < MAX_TASKS; i++) if (tasks[i] != dead_task && tasks[i]->state != TASK_DEAD && tasks[i]->pid == pid) return i;
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (tasks[i] != dead_task && tasks[i]->state != TASK_DEAD && tasks[i]->pid == pid) return i;
+    }
     return -1;
 }
 
@@ -247,16 +257,36 @@ uint64_t get_idle_time_us(void) {
     return idle;
 }
 
-uint64_t get_context_switch_count(void) { return context_switch_count; }
-uint64_t get_processes_created(void) { return processes_created; }
-uint64_t get_timer_interrupt_count(void) { return __atomic_load_n(&timer_interrupt_count, __ATOMIC_RELAXED); }
-pid_t get_last_created_pid(void) { return last_created_pid; }
-void record_timer_interrupt(void) { __atomic_add_fetch(&timer_interrupt_count, 1, __ATOMIC_RELAXED); }
+uint64_t get_context_switch_count(void) {
+    return context_switch_count;
+}
+
+uint64_t get_processes_created(void) {
+    return processes_created;
+}
+
+uint64_t get_timer_interrupt_count(void) {
+    return __atomic_load_n(&timer_interrupt_count, __ATOMIC_RELAXED);
+}
+
+pid_t get_last_created_pid(void) {
+    return last_created_pid;
+}
+
+void record_timer_interrupt(void) {
+    __atomic_add_fetch(&timer_interrupt_count, 1, __ATOMIC_RELAXED);
+}
 
 uint32_t get_runnable_task_count(void) {
     uint32_t count = 0;
-    for (int i = 0; i < MAX_CPUS; i++) if (cpus[i].active || i == 0) count += cpus[i].rq_count;
-    for (int i = 0; i < cpu_count; i++) if (cpus[i].task && cpus[i].task->state == TASK_RUNNING) count++;
+    for (int i = 0; i < MAX_CPUS; i++) {
+        if (cpus[i].active || i == 0) count += cpus[i].rq_count;
+    }
+
+    for (int i = 0; i < cpu_count; i++) { 
+        if (cpus[i].task && cpus[i].task->state == TASK_RUNNING) count++;
+    }
+
     if (count == 0) {
         for (int i = 1; i < MAX_TASKS; i++) if (tasks[i]->state == TASK_READY || tasks[i]->state == TASK_RUNNING) count++;
     }
@@ -274,10 +304,6 @@ void get_load_averages(unsigned long loads[3]) {
     loads[0] = load_averages[0] << 5;
     loads[1] = load_averages[1] << 5;
     loads[2] = load_averages[2] << 5;
-}
-
-bool is_sched_ready(void) {
-    return sched_ready;
 }
 
 const vma_table_t *task_vma_table(int pid_idx) {
@@ -896,6 +922,26 @@ void schedule(void) {
             if (old->fpu_area) { vfree(old->fpu_area); old->fpu_area = NULL; }
             release_task_slot(old_task);
         }
+    }
+}
+
+void wake_waiting_parent(pid_t child_pid, pid_t parent_pid) {
+    // Wake a parent blocked in wait4()/vfork() when one of its children
+    // stops (WUNTRACED). A waiting parent sleeps in TASK_STOPPED with
+    // stopped_by_signal == 0 and waiting_for set; merely setting its
+    // pending SIGCHLD bit never schedules it, so without this the shell
+    // hangs forever after fg + Ctrl+Z (only exit_task woke waiters).
+    // sched_lock must be held.
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (tasks[i] == dead_task || tasks[i]->state == TASK_DEAD) continue;
+        if (tasks[i]->pid != parent_pid) continue;
+        if (tasks[i]->state == TASK_STOPPED && !tasks[i]->stopped_by_signal &&
+            (tasks[i]->waiting_for == -1 || tasks[i]->waiting_for == child_pid)) {
+            tasks[i]->waiting_for = 0;
+            tasks[i]->state = TASK_READY;
+            rq_enqueue_locked(tasks[i]);
+        }
+        break;
     }
 }
 

@@ -1,11 +1,117 @@
 .intel_syntax noprefix
-.global isr43
 .extern dispatch_pci
 .extern current_apic_mode
 .extern lapic_base
 
 #include <mm/smap.h>
 
+// Legacy INTx/GSI vectors 48..63 (GSIs 16-31, q35 PCI INTx territory).
+.macro LEGACY_STUB vec
+.global isr\vec
+isr\vec:
+    SANITIZE_KERNEL_FLAGS
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    mov ax, ds
+    push rax
+    mov ax, es
+    push rax
+
+    mov rax, [rsp + 144]
+    test al, 3
+    jz 5f
+    swapgs
+5:
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+
+    mov edi, \vec
+    call dispatch_pci
+
+    // EOI for legacy: PIC if no APIC, LAPIC MMIO for xAPIC, MSR for x2APIC.
+    mov eax, dword ptr [rip + current_apic_mode]
+    test eax, eax
+    jz 6f
+    cmp eax, 2
+    je 7f
+    // xAPIC
+    mov rbx, [rip + lapic_base]
+    test rbx, rbx
+    jz 8f
+    mov dword ptr [rbx + 0xB0], 0
+    jmp 8f
+7:
+    // x2APIC
+    xor edx, edx
+    xor eax, eax
+    mov ecx, 0x80B
+    wrmsr
+    jmp 8f
+6:
+    // Legacy PIC
+    mov al, 0x20
+    out 0x20, al
+8:
+
+    mov rax, [rsp + 144]
+    test al, 3
+    jz 9f
+    swapgs
+9:
+    pop rax
+    mov es, ax
+    pop rax
+    mov ds, ax
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    iretq
+.endm
+
+LEGACY_STUB 48
+LEGACY_STUB 49
+LEGACY_STUB 50
+LEGACY_STUB 51
+LEGACY_STUB 52
+LEGACY_STUB 53
+LEGACY_STUB 54
+LEGACY_STUB 55
+LEGACY_STUB 56
+LEGACY_STUB 57
+LEGACY_STUB 58
+LEGACY_STUB 59
+LEGACY_STUB 60
+LEGACY_STUB 61
+LEGACY_STUB 62
+LEGACY_STUB 63
+
+// MSI vectors 64..111 — one stub per device.
 .macro MSI_STUB vec
 .global isr\vec
 isr\vec:
@@ -86,108 +192,6 @@ isr\vec:
     iretq
 .endm
 
-isr43:
-    SANITIZE_KERNEL_FLAGS
-    push rax
-    push rbx
-    push rcx
-    push rdx
-    push rsi
-    push rdi
-    push rbp
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
-    push r14
-    push r15
-    mov ax, ds
-    push rax
-    mov ax, es
-    push rax
-
-    mov rax, [rsp + 144]
-    test al, 3
-    jz 5f
-    swapgs
-5:
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-
-    mov edi, 43
-    call dispatch_pci
-
-    // EOI for legacy: PIC if no APIC, LAPIC MMIO for xAPIC, MSR for x2APIC.
-    mov eax, dword ptr [rip + current_apic_mode]
-    test eax, eax
-    jz 6f
-    cmp eax, 2
-    je 7f
-    // xAPIC
-    mov rbx, [rip + lapic_base]
-    test rbx, rbx
-    jz 8f
-    mov dword ptr [rbx + 0xB0], 0
-    jmp 8f
-7:
-    // x2APIC
-    xor edx, edx
-    xor eax, eax
-    mov ecx, 0x80B
-    wrmsr
-    jmp 8f
-6:
-    // Legacy PIC
-    mov al, 0x20
-    out 0x20, al
-8:
-
-    mov rax, [rsp + 144]
-    test al, 3
-    jz 9f
-    swapgs
-9:
-    pop rax
-    mov es, ax
-    pop rax
-    mov ds, ax
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rbp
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
-    pop rbx
-    pop rax
-    iretq
-
-// MSI vectors 48..95 — one stub per device.
-MSI_STUB 48
-MSI_STUB 49
-MSI_STUB 50
-MSI_STUB 51
-MSI_STUB 52
-MSI_STUB 53
-MSI_STUB 54
-MSI_STUB 55
-MSI_STUB 56
-MSI_STUB 57
-MSI_STUB 58
-MSI_STUB 59
-MSI_STUB 60
-MSI_STUB 61
-MSI_STUB 62
-MSI_STUB 63
 MSI_STUB 64
 MSI_STUB 65
 MSI_STUB 66
@@ -220,5 +224,21 @@ MSI_STUB 92
 MSI_STUB 93
 MSI_STUB 94
 MSI_STUB 95
+MSI_STUB 96
+MSI_STUB 97
+MSI_STUB 98
+MSI_STUB 99
+MSI_STUB 100
+MSI_STUB 101
+MSI_STUB 102
+MSI_STUB 103
+MSI_STUB 104
+MSI_STUB 105
+MSI_STUB 106
+MSI_STUB 107
+MSI_STUB 108
+MSI_STUB 109
+MSI_STUB 110
+MSI_STUB 111
 
 .section .note.GNU-stack,"",@progbits

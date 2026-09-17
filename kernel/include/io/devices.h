@@ -19,13 +19,16 @@ typedef disk_device_bus_t device_bus_t;
 #define DEV_BUS_NVME DISK_BUS_NVME
 #define DEV_BUS_USB  DISK_BUS_USB
 
-uint64_t read_device(const char* name, void* buf, uint64_t count, uint64_t offset);
-uint64_t write_device(const char* name, const void* buf, uint64_t count, uint64_t offset);
+uint64_t read_device(const char* name, void* buf, uint64_t count, uint64_t offset, void *handle);
+uint64_t write_device(const char* name, const void* buf, uint64_t count, uint64_t offset, void *handle);
+int open_devtmpfs_device(const char *name, void **handle_out);
+void release_devtmpfs_device(const char *name, void *handle);
+int set_devtmpfs_device_hooks(const char *name, void *(*open_fn)(int), void (*release_fn)(void *));
 void init_devices(void);
-int register_device(const char* name, uint64_t (*read_fn)(void*, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void*, uint64_t, uint64_t, int));
-int register_device_idx(const char* name, uint64_t (*read_fn)(void*, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void*, uint64_t, uint64_t, int), int index);
-int register_block_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index, uint64_t size);
-int register_disk_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index, uint64_t size, disk_device_bus_t bus);
+int register_device(const char* name, uint64_t (*read_fn)(void*, uint64_t, uint64_t, int, void*), uint64_t (*write_fn)(const void*, uint64_t, uint64_t, int, void*));
+int register_device_idx(const char* name, uint64_t (*read_fn)(void*, uint64_t, uint64_t, int, void*), uint64_t (*write_fn)(const void*, uint64_t, uint64_t, int, void*), int index);
+int register_block_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int, void *), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int, void *), int index, uint64_t size);
+int register_disk_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int, void *), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int, void *), int index, uint64_t size, disk_device_bus_t bus);
 int get_block_device_size(const char *name, uint64_t *size);
 int get_block_device_bus(const char *name, disk_device_bus_t *bus, int *disk_index);
 int get_device_mode(const char *name, mode_t *mode);

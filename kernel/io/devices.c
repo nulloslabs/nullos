@@ -9,7 +9,7 @@
 #include <io/devices.h>
 #include <io/devtmpfs.h>
 #include <io/terminal.h>
-#include <io/keyboard.h>
+#include <io/kbd.h>
 #include <io/tty.h>
 #include <io/pty.h>
 #include <io/mbr.h>
@@ -23,12 +23,12 @@
 #include <io/nvme.h>
 #include <io/pata.h>
 #include <io/sata.h>
-#include <io/usb_bot.h>
+#include <io/usb_storage.h>
 
 devtmpfs_device_t devtmpfs_devices[MAX_DEVTMPFS_DEVICES];
 spinlock_t devtmpfs_lock = SPINLOCK_INIT;
 
-static int register_device_info(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index, bool block, uint64_t size, disk_device_bus_t bus) {
+static int register_device_info(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int, void *), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int, void *), int index, bool block, uint64_t size, disk_device_bus_t bus) {
     if (!name || name[0] == '\0') {
         return -EINVAL;
     }
@@ -53,6 +53,8 @@ static int register_device_info(const char *name, uint64_t (*read_fn)(void *, ui
             devtmpfs_devices[i].name[64] = '\0';
             devtmpfs_devices[i].read = read_fn;
             devtmpfs_devices[i].write = write_fn;
+            devtmpfs_devices[i].open = NULL;
+            devtmpfs_devices[i].release = NULL;
             devtmpfs_devices[i].index = index;
             devtmpfs_devices[i].block = block;
             devtmpfs_devices[i].size = size;
@@ -67,32 +69,36 @@ static int register_device_info(const char *name, uint64_t (*read_fn)(void *, ui
     return -ENOMEM;
 }
 
-static uint64_t null_read(void* buf, uint64_t count, uint64_t offset, int dev_idx) {
+static uint64_t null_read(void* buf, uint64_t count, uint64_t offset, int dev_idx, void *handle) {
+    (void)handle;
     (void)buf; (void)count; (void)offset; (void)dev_idx;
     return 0; 
 }
 
-static uint64_t null_write(const void* buf, uint64_t count, uint64_t offset, int dev_idx) {
+static uint64_t null_write(const void* buf, uint64_t count, uint64_t offset, int dev_idx, void *handle) {
+    (void)handle;
     (void)buf; (void)offset; (void)dev_idx;
     return count; 
 }
 
-static uint64_t zero_read(void* buf, uint64_t count, uint64_t offset, int dev_idx) {
+static uint64_t zero_read(void* buf, uint64_t count, uint64_t offset, int dev_idx, void *handle) {
+    (void)handle;
     (void)offset; (void)dev_idx;
     memset(buf, 0, count);
     return count;
 }
 
-static uint64_t zero_write(const void* buf, uint64_t count, uint64_t offset, int dev_idx) {
+static uint64_t zero_write(const void* buf, uint64_t count, uint64_t offset, int dev_idx, void *handle) {
+    (void)handle;
     (void)buf; (void)offset; (void)dev_idx;
     return count;
 }
 
-#define DEFINE_FB_CALLBACKS(n) static uint64_t fb##n##_read(void* buf, uint64_t count, uint64_t offset, int dev_idx) { \
-    (void)dev_idx; return fb_read_index(n, buf, count, offset); \
+#define DEFINE_FB_CALLBACKS(n) static uint64_t fb##n##_read(void* buf, uint64_t count, uint64_t offset, int dev_idx, void *handle) { \
+    (void)dev_idx; (void)handle; return fb_read_index(n, buf, count, offset); \
 } \
-static uint64_t fb##n##_write(const void* buf, uint64_t count, uint64_t offset, int dev_idx) { \
-    (void)dev_idx; return fb_write_index(n, buf, count, offset); \
+static uint64_t fb##n##_write(const void* buf, uint64_t count, uint64_t offset, int dev_idx, void *handle) { \
+    (void)dev_idx; (void)handle; return fb_write_index(n, buf, count, offset); \
 }
 
 DEFINE_FB_CALLBACKS(0)
@@ -104,26 +110,29 @@ DEFINE_FB_CALLBACKS(5)
 DEFINE_FB_CALLBACKS(6)
 DEFINE_FB_CALLBACKS(7)
 
-static uint64_t read_ptmx(void *buf, uint64_t count, uint64_t offset, int dev_idx) {
+static uint64_t read_ptmx(void *buf, uint64_t count, uint64_t offset, int dev_idx, void *handle) {
+    (void)handle;
     (void)buf; (void)count; (void)offset; (void)dev_idx;
     return (uint64_t)-EIO;
 }
 
-static uint64_t write_ptmx(const void *buf, uint64_t count, uint64_t offset, int dev_idx) {
+static uint64_t write_ptmx(const void *buf, uint64_t count, uint64_t offset, int dev_idx, void *handle) {
+    (void)handle;
     (void)buf; (void)count; (void)offset; (void)dev_idx;
     return (uint64_t)-EIO;
 }
 
 static int get_tty_device_index(int dev_idx) {
     task_t *task;
-    if (dev_idx == TTY_ACTIVE_INDEX) return keyboard_tty;
+    if (dev_idx == TTY_ACTIVE_INDEX) return kbd_tty;
     if (dev_idx != TTY_CTTY_INDEX) return dev_idx;
     task = get_current_task_ptr();
     if (task && task->ctty_idx >= 0 && task->ctty_idx < NUM_TTYS) return task->ctty_idx;
-    return keyboard_tty;
+    return kbd_tty;
 }
 
-static uint64_t read_tty(void* buf, uint64_t count, uint64_t offset, int dev_idx) {
+static uint64_t read_tty(void* buf, uint64_t count, uint64_t offset, int dev_idx, void *handle) {
+    (void)handle;
     (void)offset;
     spinlock_t *lk = &tty_lock;
     uint64_t irq;
@@ -136,7 +145,8 @@ static uint64_t read_tty(void* buf, uint64_t count, uint64_t offset, int dev_idx
     return (uint64_t)got;
 }
 
-static uint64_t write_tty(const void* buf, uint64_t count, uint64_t offset, int dev_idx) {
+static uint64_t write_tty(const void* buf, uint64_t count, uint64_t offset, int dev_idx, void *handle) {
+    (void)handle;
     (void)offset;
     dev_idx = get_tty_device_index(dev_idx);
     tty_t *t = get_tty(dev_idx);
@@ -147,7 +157,8 @@ static uint64_t write_tty(const void* buf, uint64_t count, uint64_t offset, int 
     return write_terminal_tty(dev_idx, buf, count, do_onlcr);
 }
 
-static uint64_t read_random(void* buf, uint64_t count, uint64_t offset, int dev_idx) {
+static uint64_t read_random(void* buf, uint64_t count, uint64_t offset, int dev_idx, void *handle) {
+    (void)handle;
     (void)offset; (void)dev_idx;
 
     if (count == 0 || buf == NULL) return 0;
@@ -168,34 +179,35 @@ static uint64_t read_random(void* buf, uint64_t count, uint64_t offset, int dev_
     return bytes_read;
 }
 
-static uint64_t write_random(const void* buf, uint64_t count, uint64_t offset, int dev_idx) {
+static uint64_t write_random(const void* buf, uint64_t count, uint64_t offset, int dev_idx, void *handle) {
+    (void)handle;
     (void)offset; (void)dev_idx;
     if (count == 0 || buf == NULL) return 0;
     add_entropy_bytes(buf, count);
     return count;
 }
 
-static uint64_t read_urandom(void* buf, uint64_t count, uint64_t offset, int dev_idx) {
-    return read_random(buf, count, offset, dev_idx);
+static uint64_t read_urandom(void* buf, uint64_t count, uint64_t offset, int dev_idx, void *handle) {
+    return read_random(buf, count, offset, dev_idx, handle);
 }
 
-static uint64_t write_urandom(const void* buf, uint64_t count, uint64_t offset, int dev_idx) {
-    return write_random(buf, count, offset, dev_idx);
+static uint64_t write_urandom(const void* buf, uint64_t count, uint64_t offset, int dev_idx, void *handle) {
+    return write_random(buf, count, offset, dev_idx, handle);
 }
 
-int register_device(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int)) {
+int register_device(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int, void *), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int, void *)) {
     return register_device_info(name, read_fn, write_fn, 0, false, 0, DISK_BUS_NONE);
 }
 
-int register_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index) {
+int register_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int, void *), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int, void *), int index) {
     return register_device_info(name, read_fn, write_fn, index, false, 0, DISK_BUS_NONE);
 }
 
-int register_block_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index, uint64_t size) {
+int register_block_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int, void *), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int, void *), int index, uint64_t size) {
     return register_device_info(name, read_fn, write_fn, index, true, size, DISK_BUS_NONE);
 }
 
-int register_disk_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int), int index, uint64_t size, disk_device_bus_t bus) {
+int register_disk_device_idx(const char *name, uint64_t (*read_fn)(void *, uint64_t, uint64_t, int, void *), uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int, void *), int index, uint64_t size, disk_device_bus_t bus) {
     return register_device_info(name, read_fn, write_fn, index, true, size, bus);
 }
 
@@ -309,6 +321,8 @@ int unregister_device(const char* name) {
             devtmpfs_devices[i].name[0] = '\0';
             devtmpfs_devices[i].read = NULL;
             devtmpfs_devices[i].write = NULL;
+            devtmpfs_devices[i].open = NULL;
+            devtmpfs_devices[i].release = NULL;
             devtmpfs_devices[i].block = false;
             devtmpfs_devices[i].size = 0;
             spin_unlock_irqrestore(&devtmpfs_lock, irq);
@@ -320,7 +334,7 @@ int unregister_device(const char* name) {
     return -ENOENT;
 }
 
-uint64_t read_device(const char *name, void *buf, uint64_t count, uint64_t offset) {
+uint64_t read_device(const char *name, void *buf, uint64_t count, uint64_t offset, void *handle) {
     while (*name == '/') name++;
 
     uint64_t irq;
@@ -330,20 +344,20 @@ uint64_t read_device(const char *name, void *buf, uint64_t count, uint64_t offse
         if (!devtmpfs_devices[i].active) continue;
         if (strcmp(devtmpfs_devices[i].name, name) != 0) continue;
 
-        uint64_t (*read_fn)(void *, uint64_t, uint64_t, int) = devtmpfs_devices[i].read;
+        uint64_t (*read_fn)(void *, uint64_t, uint64_t, int, void *) = devtmpfs_devices[i].read;
         int index = devtmpfs_devices[i].index;
 
         spin_unlock_irqrestore(&devtmpfs_lock, irq);
 
         if (!read_fn) return (uint64_t)-EPERM;
-        return read_fn(buf, count, offset, index);
+        return read_fn(buf, count, offset, index, handle);
     }
 
     spin_unlock_irqrestore(&devtmpfs_lock, irq);
     return (uint64_t)-ENOENT;
 }
 
-uint64_t write_device(const char *name, const void *buf, uint64_t count, uint64_t offset) {
+uint64_t write_device(const char *name, const void *buf, uint64_t count, uint64_t offset, void *handle) {
     while (*name == '/') name++;
 
     uint64_t irq;
@@ -353,17 +367,72 @@ uint64_t write_device(const char *name, const void *buf, uint64_t count, uint64_
         if (!devtmpfs_devices[i].active) continue;
         if (strcmp(devtmpfs_devices[i].name, name) != 0) continue;
 
-        uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int) = devtmpfs_devices[i].write;
+        uint64_t (*write_fn)(const void *, uint64_t, uint64_t, int, void *) = devtmpfs_devices[i].write;
         int index = devtmpfs_devices[i].index;
 
         spin_unlock_irqrestore(&devtmpfs_lock, irq);
 
         if (!write_fn) return (uint64_t)-EPERM;
-        return write_fn(buf, count, offset, index);
+        return write_fn(buf, count, offset, index, handle);
     }
 
     spin_unlock_irqrestore(&devtmpfs_lock, irq);
     return (uint64_t)-ENOENT;
+}
+
+int open_devtmpfs_device(const char *name, void **handle_out) {
+    if (!name || !handle_out) return -EINVAL;
+    while (*name == '/') name++;
+    *handle_out = 0;
+    uint64_t irq;
+    spin_lock_irqsave(&devtmpfs_lock, &irq);
+    for (int i = 0; i < MAX_DEVTMPFS_DEVICES; i++) {
+        if (!devtmpfs_devices[i].active) continue;
+        if (strcmp(devtmpfs_devices[i].name, name) != 0) continue;
+        void *(*open_fn)(int) = devtmpfs_devices[i].open;
+        int index = devtmpfs_devices[i].index;
+        spin_unlock_irqrestore(&devtmpfs_lock, irq);
+        if (!open_fn) return 0;
+        void *handle = open_fn(index);
+        if (!handle) return -ENOMEM;
+        *handle_out = handle;
+        return 0;
+    }
+    spin_unlock_irqrestore(&devtmpfs_lock, irq);
+    return 0;
+}
+
+void release_devtmpfs_device(const char *name, void *handle) {
+    if (!name || !handle) return;
+    while (*name == '/') name++;
+    uint64_t irq;
+    spin_lock_irqsave(&devtmpfs_lock, &irq);
+    for (int i = 0; i < MAX_DEVTMPFS_DEVICES; i++) {
+        if (!devtmpfs_devices[i].active) continue;
+        if (strcmp(devtmpfs_devices[i].name, name) != 0) continue;
+        void (*release_fn)(void *) = devtmpfs_devices[i].release;
+        spin_unlock_irqrestore(&devtmpfs_lock, irq);
+        if (release_fn) release_fn(handle);
+        return;
+    }
+    spin_unlock_irqrestore(&devtmpfs_lock, irq);
+}
+
+int set_devtmpfs_device_hooks(const char *name, void *(*open_fn)(int), void (*release_fn)(void *)) {
+    if (!name) return -EINVAL;
+    while (*name == '/') name++;
+    uint64_t irq;
+    spin_lock_irqsave(&devtmpfs_lock, &irq);
+    for (int i = 0; i < MAX_DEVTMPFS_DEVICES; i++) {
+        if (!devtmpfs_devices[i].active) continue;
+        if (strcmp(devtmpfs_devices[i].name, name) != 0) continue;
+        devtmpfs_devices[i].open = open_fn;
+        devtmpfs_devices[i].release = release_fn;
+        spin_unlock_irqrestore(&devtmpfs_lock, irq);
+        return 0;
+    }
+    spin_unlock_irqrestore(&devtmpfs_lock, irq);
+    return -ENOENT;
 }
 
 void init_devices(void) {
@@ -405,11 +474,11 @@ void init_devices(void) {
         char name[24];
         uint64_t size;
         // release usb disks first so built-in disks claim the lower letters
-        for (int i = 0; i < USB_BOT_MAX_DEVICES; i++) {
-            if (!bot_entries[i].present) continue;
+        for (int i = 0; i < USB_STORAGE_MAX_DEVICES; i++) {
+            if (!storage_entries[i].present) continue;
             remove_gpt_partitions(i, DISK_BUS_USB);
             remove_mbr_partitions(i, DISK_BUS_USB);
-            unregister_device(bot_entries[i].name);
+            unregister_device(storage_entries[i].name);
         }
         if (is_atapi_present) {
             for (int i = 0; i < IDE_MAX_DEVICES; i++) {
@@ -467,22 +536,22 @@ void init_devices(void) {
     }
 
     // re-register usb disks at the next free letters past the built-in disks
-    for (int i = 0; i < USB_BOT_MAX_DEVICES; i++) {
-        if (!bot_entries[i].present) continue;
+    for (int i = 0; i < USB_STORAGE_MAX_DEVICES; i++) {
+        if (!storage_entries[i].present) continue;
         bool named = false;
         for (int j = sd_index; j < 26; j++) {
             char name[16];
-            if (!make_usb_bot_name(name, sizeof(name), j)) continue;
+            if (!make_usb_storage_name(name, sizeof(name), j)) continue;
             uint64_t dummy = 0;
             if (get_block_device_size(name, &dummy) == 0) continue;
-            memcpy(bot_entries[i].name, name, sizeof(bot_entries[i].name));
+            memcpy(storage_entries[i].name, name, sizeof(storage_entries[i].name));
             sd_index = j + 1;
             named = true;
             break;
         }
         if (!named) continue;
-        if (register_disk_device_idx(bot_entries[i].name, read_usb_bot_device, write_usb_bot_device, i, bot_entries[i].total_size, DISK_BUS_USB) < 0) continue;
-        if (!probe_gpt_for_usb_disk(i, bot_entries[i].name, bot_entries[i].total_size)) probe_mbr_for_usb_disk(i, bot_entries[i].name, bot_entries[i].total_size);
+        if (register_disk_device_idx(storage_entries[i].name, read_usb_storage_device, write_usb_storage_device, i, storage_entries[i].total_size, DISK_BUS_USB) < 0) continue;
+        if (!probe_gpt_for_usb_disk(i, storage_entries[i].name, storage_entries[i].total_size)) probe_mbr_for_usb_disk(i, storage_entries[i].name, storage_entries[i].total_size);
     }
     log("devices: initialized devices\n");
 }

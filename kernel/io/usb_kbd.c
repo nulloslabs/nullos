@@ -3,9 +3,9 @@
 #include <stddef.h>
 #include <main/log.h>
 #include <main/string.h>
-#include <io/usb_keyboard.h>
+#include <io/usb_kbd.h>
 #include <io/usb.h>
-#include <io/keyboard.h>
+#include <io/kbd.h>
 #include <io/time.h>
 #include <io/tty.h>
 #include <mm/mm.h>
@@ -102,7 +102,7 @@ static const uint8_t hid_to_scancode[256] = {
     [0xE7] = 0x5C,  // Right GUI
 };
 
-usb_keyboard_entry_t *kbd_list = NULL;
+usb_kbd_entry_t *kbd_list = NULL;
 int kbd_max_total = 0;
 int kbd_total = 0;
 
@@ -114,7 +114,7 @@ int kbd_find_index(usb_device_t *dev) {
     return -1;
 }
 
-void set_usb_keyboard_leds(uint8_t leds) {
+void set_usb_kbd_leds(uint8_t leds) {
     leds &= 0x07;
     for (int i = 0; i < kbd_total; i++) {
         kbd_list[i].pending_leds = leds;
@@ -122,7 +122,7 @@ void set_usb_keyboard_leds(uint8_t leds) {
     }
 }
 
-void usb_keyboard_process_report(uint8_t *report, int kbd_index) {
+void usb_kbd_process_report(uint8_t *report, int kbd_index) {
     if (!report || kbd_index < 0 || kbd_index >= kbd_total) return;
     uint8_t *prev_report = kbd_list[kbd_index].prev_report;
     if (!prev_report) return;
@@ -179,7 +179,7 @@ void usb_keyboard_process_report(uint8_t *report, int kbd_index) {
 
     // Control modifier tracking (same pattern as Shift/Alt).
     // Emits PS/2 set-1 scancode 0x1D on press, 0x9D on release, which is
-    // what keyboard.c watches to set/clear ctrl_pressed.  Without this
+    // what kbd.c watches to set/clear ctrl_pressed.  Without this
     // block, USB keyboards could never produce Ctrl+key combos even though
     // HID_MOD_LCTRL/HID_MOD_RCTRL were defined above.
     {
@@ -214,7 +214,7 @@ void usb_keyboard_process_report(uint8_t *report, int kbd_index) {
                     key_buffer[key_head] = scancode;
                     key_head = next;
                 }
-                handle_keyboard_lock_scancode(scancode);
+                handle_kbd_lock_scancode(scancode);
                 tty_process_scancode(scancode);
             }
         }
@@ -246,7 +246,7 @@ void usb_keyboard_process_report(uint8_t *report, int kbd_index) {
     memcpy(prev_report, report, 8);
 }
 
-void poll_usb_keyboard(void) {
+void poll_usb_kbd(void) {
     for (int k = 0; k < kbd_total; k++) {
         if (!kbd_list[k].hcd || !kbd_list[k].dev)
             continue;
@@ -280,8 +280,8 @@ void poll_usb_keyboard(void) {
             kbd_list[k].repeat_timer++;
             // USB boot keyboards do not generate typematic reports, so use
             // the 250 Hz USB poll to provide a 500 ms delay and ~31 cps rate.
-            if (kbd_list[k].repeat_timer >= USB_KEYBOARD_REPEAT_DELAY_TICKS) {
-                if ((kbd_list[k].repeat_timer - USB_KEYBOARD_REPEAT_DELAY_TICKS) % USB_KEYBOARD_REPEAT_INTERVAL_TICKS == 0) {
+            if (kbd_list[k].repeat_timer >= USB_KBD_REPEAT_DELAY_TICKS) {
+                if ((kbd_list[k].repeat_timer - USB_KBD_REPEAT_DELAY_TICKS) % USB_KBD_REPEAT_INTERVAL_TICKS == 0) {
                     uint8_t scancode = hid_to_scancode[first_key];
                     if (scancode) {
                         uint32_t next = (key_head + 1) & 127;
@@ -301,7 +301,7 @@ void poll_usb_keyboard(void) {
 }
 
 // Find a boot-keyboard interface and its interrupt-IN endpoint.
-static int usb_find_boot_keyboard_interface(uint8_t *buf, uint16_t total_len, uint8_t *endpoint_number, uint16_t *max_packet) {
+static int usb_find_boot_kbd_interface(uint8_t *buf, uint16_t total_len, uint8_t *endpoint_number, uint16_t *max_packet) {
     uint16_t offset = 0;
     int interface_number = -1;
     while (offset + 2 <= total_len) {
@@ -316,7 +316,7 @@ static int usb_find_boot_keyboard_interface(uint8_t *buf, uint16_t total_len, ui
             interface_number = -1;
             if (iface_class    == USB_HID_CLASS             &&
                 iface_subclass == USB_HID_SUBCLASS_BOOT     &&
-                iface_protocol == USB_HID_PROTOCOL_KEYBOARD &&
+                iface_protocol == USB_HID_PROTOCOL_KBD &&
                 buf[offset + 3] == 0)
                 interface_number = buf[offset + 2];
         } else if (interface_number >= 0 &&
@@ -387,11 +387,11 @@ static int usb_control_transfer_retry(usb_hcd_t *hcd, usb_device_t *dev,
 
 static int kbd_list_grow(void) {
     int new_max = kbd_max_total + 32;
-    usb_keyboard_entry_t *new_list = malloc(sizeof(usb_keyboard_entry_t) * new_max);
+    usb_kbd_entry_t *new_list = malloc(sizeof(usb_kbd_entry_t) * new_max);
     if (!new_list) return -1;
-    memset(new_list, 0, sizeof(usb_keyboard_entry_t) * new_max);
+    memset(new_list, 0, sizeof(usb_kbd_entry_t) * new_max);
     if (kbd_list) {
-        memcpy(new_list, kbd_list, sizeof(usb_keyboard_entry_t) * kbd_total);
+        memcpy(new_list, kbd_list, sizeof(usb_kbd_entry_t) * kbd_total);
         free(kbd_list);
     }
     kbd_list      = new_list;
@@ -399,7 +399,7 @@ static int kbd_list_grow(void) {
     return 0;
 }
 
-void remove_usb_keyboard(usb_hcd_t *hcd, uint8_t port_id) {
+void remove_usb_kbd(usb_hcd_t *hcd, uint8_t port_id) {
     for (int i = 0; i < kbd_total; i++) {
         if (kbd_list[i].hcd != hcd || !kbd_list[i].dev) continue;
         if (kbd_list[i].dev->port_id != port_id) continue;
@@ -409,21 +409,21 @@ void remove_usb_keyboard(usb_hcd_t *hcd, uint8_t port_id) {
         free(kbd_list[i].report_buf_next);
         unregister_usb_device(dev);
         kbd_total--;
-        if (i < kbd_total) memmove(&kbd_list[i], &kbd_list[i + 1], (kbd_total - i) * sizeof(usb_keyboard_entry_t));
-        memset(&kbd_list[kbd_total], 0, sizeof(usb_keyboard_entry_t));
+        if (i < kbd_total) memmove(&kbd_list[i], &kbd_list[i + 1], (kbd_total - i) * sizeof(usb_kbd_entry_t));
+        memset(&kbd_list[kbd_total], 0, sizeof(usb_kbd_entry_t));
         return;
     }
 }
 
-void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
+void init_usb_kbd(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
     if (!hcd) return;
 
     // Init kbd_list on first call
     if (!kbd_list) {
         kbd_max_total = 32;
-        kbd_list = malloc(sizeof(usb_keyboard_entry_t) * kbd_max_total);
+        kbd_list = malloc(sizeof(usb_kbd_entry_t) * kbd_max_total);
         if (!kbd_list) return;
-        memset(kbd_list, 0, sizeof(usb_keyboard_entry_t) * kbd_max_total);
+        memset(kbd_list, 0, sizeof(usb_kbd_entry_t) * kbd_max_total);
     }
 
     // Duplicate port check
@@ -434,7 +434,7 @@ void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
 
     usb_device_t *dev = usb_allocate_device();
     if (!dev) {
-        log("usb keyboard: failed to allocate device slot\n");
+        log("usb kbd: failed to allocate device slot\n");
         return;
     }
 
@@ -442,7 +442,7 @@ void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
     uint8_t *rbuf  = malloc(8);
     uint8_t *rbuf2 = malloc(8);
     if (!rbuf || !rbuf2) {
-        log("usb keyboard: failed to allocate report buffers (port %d)\n", port_id);
+        log("usb kbd: failed to allocate report buffers (port %d)\n", port_id);
         if (rbuf)  free(rbuf);
         if (rbuf2) free(rbuf2);
         unregister_usb_device(dev);
@@ -453,7 +453,7 @@ void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
 
     usb_dma_scratch_t dma = {0};
     if (usb_alloc_dma_scratch(&dma) < 0) {
-        log("usb keyboard: failed to allocate dma scratch (port %d)\n", port_id);
+        log("usb kbd: failed to allocate dma scratch (port %d)\n", port_id);
         free(rbuf);
         free(rbuf2);
         unregister_usb_device(dev);
@@ -466,7 +466,7 @@ void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
 
     int new_address = usb_allocate_address(0);
     if (new_address < 0) {
-        log("usb keyboard: no free device addresses left (port %d)\n", port_id);
+        log("usb kbd: no free device addresses left (port %d)\n", port_id);
         goto fail_probe;
     }
 
@@ -562,7 +562,7 @@ void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
 
     uint8_t endpoint_number = 0;
     uint16_t endpoint_max_packet = 0;
-    int interface_number = usb_find_boot_keyboard_interface(cfg_buf, total_len, &endpoint_number, &endpoint_max_packet);
+    int interface_number = usb_find_boot_kbd_interface(cfg_buf, total_len, &endpoint_number, &endpoint_max_packet);
     if (interface_number < 0) {
         goto fail_probe_with_addr;
     }
@@ -574,7 +574,7 @@ void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
     setup->wIndex        = 0;
     setup->wLength       = 0;
     if (hcd->control_transfer(hcd, dev, setup, NULL, 0) < 0) {
-        log("usb keyboard: set_configuration failed (port %d)\n", port_id);
+        log("usb kbd: set_configuration failed (port %d)\n", port_id);
         goto fail_probe_with_addr;
     }
 
@@ -585,13 +585,13 @@ void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
     setup->wIndex        = (uint16_t)interface_number;
     setup->wLength       = 0;
     if (hcd->control_transfer(hcd, dev, setup, NULL, 0) < 0) {
-        log("usb keyboard: set_protocol failed (port %d)\n", port_id);
+        log("usb kbd: set_protocol failed (port %d)\n", port_id);
         goto fail_probe_with_addr;
     }
 
     // ---- Confirmed and configured boot keyboard — commit resources ----
     if (kbd_total >= kbd_max_total && kbd_list_grow() < 0) {
-        log("usb keyboard: kbd_list grow failed, dropping keyboard (port %d)\n", port_id);
+        log("usb kbd: kbd_list grow failed, dropping kbd (port %d)\n", port_id);
         goto fail_probe_with_addr;
     }
 
@@ -605,7 +605,7 @@ void init_usb_keyboard(usb_hcd_t *hcd, uint8_t speed, uint8_t port_id) {
     kbd_list[kbd_total].interface_number = (uint8_t)interface_number;
     kbd_list[kbd_total].endpoint_number  = endpoint_number;
     dev->interrupt_max_packet            = endpoint_max_packet;
-    kbd_list[kbd_total].pending_leds     = get_keyboard_led_state();
+    kbd_list[kbd_total].pending_leds     = get_kbd_led_state();
     kbd_list[kbd_total].applied_leds     = 0;
     kbd_list[kbd_total].leds_dirty       = true;
     kbd_total++;

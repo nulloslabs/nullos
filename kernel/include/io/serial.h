@@ -8,8 +8,8 @@
 #define COM3 0x3E8
 #define COM4 0x2E8
 
-int serial_putchar(uint16_t port, int c);
-int serial_puts(uint16_t port, const char *s);
-int serial_vprintf(uint16_t port, const char *fmt, va_list args);
-int serial_printf(uint16_t port, const char *fmt, ...);
+void putc_serial(uint16_t port, char c);
+void puts_serial(uint16_t port, const char *s);
+int vprintf_serial(uint16_t port, const char *fmt, va_list args);
+int printf_serial(uint16_t port, const char *fmt, ...);
 void init_serial_ports(void);

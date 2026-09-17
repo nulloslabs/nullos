@@ -7,8 +7,8 @@
 #include <io/ohci.h>
 #include <io/pci.h>
 #include <io/usb.h>
-#include <io/usb_bot.h>
-#include <io/usb_keyboard.h>
+#include <io/usb_storage.h>
+#include <io/usb_kbd.h>
 #include <mm/mm.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
@@ -60,13 +60,13 @@ static void cancel_ohci_interrupt(ohci_controller_t *ctrl) {
     ctrl->pending_length = 0;
 }
 
-static void remove_ohci_keyboard(ohci_controller_t *ctrl, uint8_t port) {
+static void remove_ohci_kbd(ohci_controller_t *ctrl, uint8_t port) {
     if (ctrl->pending_dev && ctrl->pending_dev->port_id == port) cancel_ohci_interrupt(ctrl);
-    remove_usb_keyboard(&ctrl->hcd, port);
-    remove_usb_bot(&ctrl->hcd, port);
+    remove_usb_kbd(&ctrl->hcd, port);
+    remove_usb_storage(&ctrl->hcd, port);
 }
 
-static bool check_keyboard_claim_ohci(usb_hcd_t *hcd, uint8_t port) {
+static bool check_kbd_claim_ohci(usb_hcd_t *hcd, uint8_t port) {
     for (int i = 0; i < kbd_total; i++) { if (kbd_list[i].hcd == hcd && kbd_list[i].dev && kbd_list[i].dev->port_id == port) return true; }
     return false;
 }
@@ -74,11 +74,11 @@ static bool check_keyboard_claim_ohci(usb_hcd_t *hcd, uint8_t port) {
 static bool reset_ohci_port(ohci_controller_t *ctrl, uint8_t port);
 
 static void probe_ohci_port(ohci_controller_t *ctrl, uint8_t port, uint8_t speed) {
-    init_usb_keyboard(&ctrl->hcd, speed, port);
-    if (check_keyboard_claim_ohci(&ctrl->hcd, port)) return;
+    init_usb_kbd(&ctrl->hcd, speed, port);
+    if (check_kbd_claim_ohci(&ctrl->hcd, port)) return;
     if (!reset_ohci_port(ctrl, port)) return;
     sleep(100);
-    init_usb_bot(&ctrl->hcd, speed, port);
+    init_usb_storage(&ctrl->hcd, speed, port);
 }
 
 static void clear_ohci_port_changes(ohci_controller_t *ctrl, uint8_t port, uint32_t status) {
@@ -374,7 +374,7 @@ static void finish_ohci_interrupt(ohci_controller_t *ctrl) {
         dev->interrupt_toggle ^= 1;
         int index = kbd_find_index(dev);
         if (index >= 0 && index < kbd_total) {
-            usb_keyboard_process_report(buffer, index);
+            usb_kbd_process_report(buffer, index);
             uint8_t *temporary = kbd_list[index].report_buf;
             kbd_list[index].report_buf = kbd_list[index].report_buf_next;
             kbd_list[index].report_buf_next = temporary;
@@ -386,15 +386,15 @@ static void finish_ohci_interrupt(ohci_controller_t *ctrl) {
     ctrl->pending_length = 0;
 }
 
-static void arm_ohci_keyboard(ohci_controller_t *ctrl) {
+static void arm_ohci_kbd(ohci_controller_t *ctrl) {
     if (ctrl->pending_dev || kbd_total == 0) return;
-    if (ctrl->keyboard_cursor >= kbd_total) ctrl->keyboard_cursor = 0;
+    if (ctrl->kbd_cursor >= kbd_total) ctrl->kbd_cursor = 0;
     for (int step = 0; step < kbd_total; step++) {
-        int i = (ctrl->keyboard_cursor + step) % kbd_total;
+        int i = (ctrl->kbd_cursor + step) % kbd_total;
         if (kbd_list[i].hcd != &ctrl->hcd || !kbd_list[i].dev || !kbd_list[i].report_buf_next) continue;
         int result = submit_ohci_interrupt_transfer(&ctrl->hcd, kbd_list[i].dev, kbd_list[i].endpoint_number, kbd_list[i].report_buf_next, 8);
         if (result == 0) {
-            ctrl->keyboard_cursor = (i + 1) % kbd_total;
+            ctrl->kbd_cursor = (i + 1) % kbd_total;
             return;
         }
     }
@@ -553,7 +553,7 @@ static bool start_ohci_controller(ohci_controller_t *ctrl) {
 
 static void recover_ohci_controller(ohci_controller_t *ctrl) {
     cancel_ohci_interrupt(ctrl);
-    for (uint8_t port = 0; port < ctrl->num_ports; port++) { remove_usb_keyboard(&ctrl->hcd, port); remove_usb_bot(&ctrl->hcd, port); }
+    for (uint8_t port = 0; port < ctrl->num_ports; port++) { remove_usb_kbd(&ctrl->hcd, port); remove_usb_storage(&ctrl->hcd, port); }
     ctrl->present_ports = 0;
     ctrl->control_busy = false;
     ctrl->bulk_busy = false;
@@ -597,20 +597,20 @@ void poll_ohci_ports(void) {
 
             if (!is_present) {
                 if (was_present) {
-                    remove_ohci_keyboard(ctrl, port);
+                    remove_ohci_kbd(ctrl, port);
                     ctrl->present_ports &= (uint16_t)~bit;
                 }
                 continue;
             }
             if (!was_present || needs_reprobe) {
-                remove_ohci_keyboard(ctrl, port);
+                remove_ohci_kbd(ctrl, port);
                 ctrl->present_ports |= bit;
                 enumerate_ohci_port(ctrl, port);
             }
         }
 
         finish_ohci_interrupt(ctrl);
-        arm_ohci_keyboard(ctrl);
+        arm_ohci_kbd(ctrl);
     }
 }
 

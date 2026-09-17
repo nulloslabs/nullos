@@ -14,8 +14,8 @@
 
 // Redirection entry flags
 #define IOAPIC_INT_MASKED   (1 << 16)
-#define IOAPIC_TRIGGER_LEVEL (1 << 15)
 #define IOAPIC_ACTIVE_LOW   (1 << 13)
+#define IOAPIC_TRIGGER_LEVEL (1 << 15)
 
 extern volatile uint32_t *ioapic_base;
 

@@ -29,7 +29,7 @@
 #include <io/devices.h>
 #include <io/devpts.h>
 #include <io/initrd.h>
-#include <io/keyboard.h>
+#include <io/kbd.h>
 #include <io/pty.h>
 #include <io/time.h>
 #include <io/sockets.h>
@@ -959,7 +959,7 @@ void sys_pipe2(syscall_frame_t *frame) {
     r = create_unix_pipe(&read_end, &write_end);
     if (r < 0) { frame->rax = (uint64_t)r; return; }
 
-    fd_flags = flags & O_NONBLOCK;
+    fd_flags = flags & (O_NONBLOCK | O_CLOEXEC);
     fds[0] = alloc_fd_handle(&current_task_ptr->fd_table, "pipe:r", FD_PIPE, O_RDONLY | fd_flags, read_end);
     if (fds[0] < 0) {
         release_unix_handle(read_end);

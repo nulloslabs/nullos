@@ -1,5 +1,4 @@
 #include <stdint.h>
-#include <stdbool.h>
 #include <errno.h>
 #include <main/log.h>
 #include <main/string.h>

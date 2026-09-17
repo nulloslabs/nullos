@@ -21,19 +21,21 @@
 #include <main/elf.h>
 #include <main/hostname.h>
 #include <main/timekeeping.h>
-#include <main/mp.h>
+#include <main/smp.h>
 #include <main/fd.h>
 #include <main/signal.h>
 #include <main/string.h>
 #include <io/fb.h>
 #include <io/devices.h>
 #include <io/devpts.h>
+#include <io/devtmpfs.h>
 #include <io/initrd.h>
-#include <io/keyboard.h>
+#include <io/kbd.h>
 #include <io/pty.h>
 #include <io/power.h>
 #include <io/net.h>
 #include <io/serial.h>
+#include <io/snd_pcm.h>
 #include <io/tmpfs.h>
 #include <io/ext4.h>
 #include <io/iso9660.h>
@@ -94,6 +96,9 @@ void sys_mmap(syscall_frame_t *frame) {
     bool requested_fb = false;
     struct limine_framebuffer *mapped_fb = NULL;
     fd_entry_t *mapping_entry = NULL;
+    bool requested_devmap = false;
+    uint64_t devmap_phys = 0;
+    uint64_t devmap_pages = 0;
     if (!anonymous) {
         mapping_entry = get_current_fd(fd);
         if (!mapping_entry) { frame->rax = (uint64_t)-EBADF; return; }
@@ -114,7 +119,16 @@ void sys_mmap(syscall_frame_t *frame) {
             uint64_t available_pages = offset < fb_size ? (fb_size - offset + PAGE_SIZE - 1) / PAGE_SIZE : 0;
             if (num_pages > available_pages) { frame->rax = (uint64_t)-EINVAL; return; }
         }
-        if (!requested_fb && mapping_entry->type != FD_FILE && mapping_entry->type != FD_TMPFS && mapping_entry->type != FD_EXT4 && mapping_entry->type != FD_ISO9660 && mapping_entry->type != FD_VFAT) {
+        if (!requested_fb && mapping_entry->type == FD_DEV) {
+            char dev_rel[256];
+            if (is_devtmpfs_path(mapping_entry->path, dev_rel) && strncmp(dev_rel, "snd/", 4) == 0) {
+                if (!(flags & MAP_SHARED)) { frame->rax = (uint64_t)-EINVAL; return; }
+                if (!query_snd_pcm_mmap(dev_rel, mapping_entry->handle, offset, &devmap_phys, &devmap_pages)) { frame->rax = (uint64_t)-ENODEV; return; }
+                if (num_pages > devmap_pages) { frame->rax = (uint64_t)-EINVAL; return; }
+                requested_devmap = true;
+            }
+        }
+        if (!requested_fb && !requested_devmap && mapping_entry->type != FD_FILE && mapping_entry->type != FD_TMPFS && mapping_entry->type != FD_EXT4 && mapping_entry->type != FD_ISO9660 && mapping_entry->type != FD_VFAT) {
             frame->rax = (uint64_t)-ENODEV;
             return;
         }
@@ -197,6 +211,22 @@ void sys_mmap(syscall_frame_t *frame) {
         fb_mapped = true;
     }
 
+    bool devmap_mapped = false;
+    if (requested_devmap) {
+        uint64_t map_flags = VMM_USER | VMM_NX | VMM_EXTERNAL;
+        if (prot & PROT_WRITE) map_flags |= VMM_WRITABLE;
+        for (uint64_t i = 0; i < num_pages; i++) {
+            uint64_t vaddr = (uint64_t)ptr + i * PAGE_SIZE;
+            if (get_vmm_phys(current_task_ptr->ctx, vaddr) != 0) unmap_vmm(current_task_ptr->ctx, vaddr);
+            if (!map_vmm(current_task_ptr->ctx, vaddr, devmap_phys + i * PAGE_SIZE, map_flags)) {
+                rollback_mmap(ptr, num_pages, retained_pages);
+                frame->rax = (uint64_t)-ENOMEM;
+                return;
+            }
+        }
+        devmap_mapped = true;
+    }
+
     // Record the VMA so /proc/<pid>/maps can describe this mapping.
     {
         int vprot = 0;
@@ -222,7 +252,7 @@ void sys_mmap(syscall_frame_t *frame) {
 
     // File-backed mapping: copy data if not anonymous
     if (!anonymous) {
-        if (fb_mapped) { frame->rax = (uint64_t)ptr; return; }
+        if (fb_mapped || devmap_mapped) { frame->rax = (uint64_t)ptr; return; }
         fd_entry_t *entry = mapping_entry;
 
         if (entry->type == FD_EXT4) {

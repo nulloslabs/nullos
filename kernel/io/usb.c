@@ -1,15 +1,15 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <main/halt.h>
-#include <main/mp.h>
+#include <main/smp.h>
 #include <main/string.h>
 #include <io/time.h>
 #include <io/usb.h>
 #include <io/ehci.h>
 #include <io/uhci.h>
 #include <io/ohci.h>
-#include <io/usb_keyboard.h>
-#include <io/ps2_keyboard.h>
+#include <io/usb_kbd.h>
+#include <io/ps2_kbd.h>
 #include <mm/mm.h>
 
 usb_device_t *usb_devices_head = NULL;
@@ -67,5 +67,5 @@ void poll_usb_hcds(void) {
     poll_uhci_ports();
     poll_ohci_ports();
     poll_ehci_ports();
-    poll_usb_keyboard();
+    poll_usb_kbd();
 }

@@ -1,8 +1,10 @@
 #include <stdbool.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <main/elf.h>
+#include <main/fd.h>
 #include <main/msr.h>
 #include <main/spinlocks.h>
 #include <main/rng.h>
@@ -533,6 +535,13 @@ int execve_elf(const char *path, char **argv, char **envp, void* raw_frame) {
     frame->rip = entry;
     frame->rdx = 0;
     frame->rsp = v_rsp;
+
+    // close-on-exec fds die with the old image now that exec is guaranteed
+    // to succeed
+    for (int fd = 0; fd < FD_MAX; fd++) {
+        fd_entry_t *e = current_task_ptr->fd_table.entries[fd];
+        if (e && e->open && (e->fd_flags & FD_CLOEXEC)) free_fd(&current_task_ptr->fd_table, fd);
+    }
 
     for (int i = 0; i < MAX_TASKS; i++) {
         if (tasks[i]->waiting_for == current_task_ptr->pid) {

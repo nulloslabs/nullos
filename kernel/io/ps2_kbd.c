@@ -1,8 +1,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <main/log.h>
-#include <io/ps2_keyboard.h>
-#include <io/keyboard.h>
+#include <io/ps2_kbd.h>
+#include <io/kbd.h>
 #include <io/io.h>
 #include <io/tty.h>
 
@@ -17,7 +17,7 @@ static uint8_t ps2_led_retries = 0;
 static bool ps2_leds_applied = false;
 static bool ps2_controller_present = true;
 
-void set_ps2_keyboard_leds(uint8_t leds) {
+void set_ps2_kbd_leds(uint8_t leds) {
     ps2_pending_leds = 0;
     if (leds & KBD_LED_SCROLL_LOCK) ps2_pending_leds |= 1u << 0;
     if (leds & KBD_LED_NUM_LOCK)    ps2_pending_leds |= 1u << 1;
@@ -79,22 +79,22 @@ void handle_ps2_scancode(uint8_t sc) {
         ps2_repeat_timer = 0;
         uint32_t next = (key_head + 1) & 127;
         if (next != key_tail) { key_buffer[key_head] = sc; key_head = next; }
-        if (!was_held) handle_keyboard_lock_scancode(sc);
+        if (!was_held) handle_kbd_lock_scancode(sc);
     }
     // Feed the active TTY's ring buffer with the ASCII character
     tty_process_scancode(sc);
-    set_ps2_keyboard_leds(get_keyboard_led_state());
+    set_ps2_kbd_leds(get_kbd_led_state());
 }
 
-void init_ps2_keyboard(void) {
+void init_ps2_kbd(void) {
     uint8_t status = inb(0x64);
     if (status == 0xFF) {
         ps2_controller_present = false;
-        log("ps2 keyboard: no controller found\n");
+        log("ps2 kbd: no controller found\n");
         return;
     }
 
     for (int i = 0; i < 256 && (inb(0x64) & 1); i++) inb(0x60);
-    set_ps2_keyboard_leds(get_keyboard_led_state());
-    log("ps2 keyboard: initialized ps2 keyboard\n");
+    set_ps2_kbd_leds(get_kbd_led_state());
+    log("ps2 kbd: initialized ps2 kbd\n");
 }

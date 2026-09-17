@@ -18,7 +18,8 @@ initrd:
 	else \
 		printf "  %-7s %s\n" "INFO" "$(SUBDIR)/$(OUTFILE) is already up to date"; exit 0; \
 	fi; \
-	resolved_packages="$$(../scripts/resolve_packages.sh $(PACKAGE_NAMES) | sed '/^core\/filesystem$$/d; /^core\/linux-api-headers$$/d')" || exit $$?; \
+	resolved_packages="$$(../scripts/resolve_packages.sh $(PACKAGE_NAMES))" || exit $$?; \
+	resolved_packages="$$(printf '%s\n' "$$resolved_packages" | sed '/^core\/filesystem$$/d; /^core\/linux-api-headers$$/d')"; \
 	current_names="$$(for p in $$resolved_packages; do basename $$p; done)"; \
 	cached_names="$$(ls packages/*.pkg.tar.zst 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.pkg\.tar\.zst$$//')"; \
 	missing="$$(for n in $$current_names; do echo "$$cached_names" | grep -qxF "$$n" || echo missing_$$n; done)"; \

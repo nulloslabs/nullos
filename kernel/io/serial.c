@@ -35,37 +35,33 @@ static void int_to_str(uint64_t value, char *buf, size_t buf_size, int base, boo
     buf[j] = '\0';
 }
 
-static int serial_putchar_unlocked(uint16_t port, int c) {
-    unsigned char ch = (unsigned char)c;
+static void putc_serial_unlocked(uint16_t port, char c) {
     // Just in case if terminal dosen't support just "\n" for newlines but needs "\r\n" instead
-    if (ch == '\n') serial_putchar_unlocked(port, '\r');
+    if (c == '\n') putc_serial_unlocked(port, '\r');
     while (!(inb(port + 5) & 0x20));
-    outb(port, ch);
-    return ch;
+    outb(port, c);
 }
 
-int serial_putchar(uint16_t port, int c) {
+void putc_serial(uint16_t port, char c) {
     uint64_t rflags;
     spin_lock_irqsave(&serial_lock, &rflags);
-    int ret = serial_putchar_unlocked(port, c);
+    putc_serial_unlocked(port, c);
     spin_unlock_irqrestore(&serial_lock, rflags);
-    return ret;
 }
 
-int serial_puts(uint16_t port, const char *s) {
+void puts_serial(uint16_t port, const char *s) {
     uint64_t rflags;
     spin_lock_irqsave(&serial_lock, &rflags);
-    while (*s) { serial_putchar_unlocked(port, *s); s++; }
+    while (*s) { putc_serial_unlocked(port, *s); s++; }
     spin_unlock_irqrestore(&serial_lock, rflags);
-    return 0;
 }
 
-int serial_vprintf(uint16_t port, const char *fmt, va_list args) {
+int vprintf_serial(uint16_t port, const char *fmt, va_list args) {
     int total_written = 0;
     uint64_t rflags;
     spin_lock_irqsave(&serial_lock, &rflags);
 
-    #define PUTC(c) do { serial_putchar_unlocked(port, c); total_written++; } while(0)
+    #define PUTC(c) do { putc_serial_unlocked(port, c); total_written++; } while(0)
 
     for (const char *p = fmt; *p != '\0'; p++) {
         if (*p != '%') {
@@ -187,11 +183,11 @@ int serial_vprintf(uint16_t port, const char *fmt, va_list args) {
     return total_written;
 }
 
-int serial_printf(uint16_t port, const char *fmt, ...) {
-    // No spinlocks here since vprintf already has spinlocks
+int printf_serial(uint16_t port, const char *fmt, ...) {
+    // No spinlocks here since vprintf already has spinlocks.
     va_list args;
     va_start(args, fmt);
-    int ret = serial_vprintf(port, fmt, args);
+    int ret = vprintf_serial(port, fmt, args);
     va_end(args);
     return ret;
 }

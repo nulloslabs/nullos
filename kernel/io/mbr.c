@@ -8,7 +8,7 @@
 #include <io/nvme.h>
 #include <io/pata.h>
 #include <io/sata.h>
-#include <io/usb_bot.h>
+#include <io/usb_storage.h>
 
 static mbr_partition_t mbr_partitions[MBR_MAX_PARTITIONS];
 static int mbr_partition_count;
@@ -20,7 +20,7 @@ static uint64_t get_sector_size(disk_device_bus_t bus, int disk_index) {
         case DISK_BUS_NVME: return NVME_BLOCK_SIZE;
         case DISK_BUS_PATA: return PATA_SECTOR_SIZE;
         case DISK_BUS_SATA: return SATA_SECTOR_SIZE;
-        case DISK_BUS_USB: return get_usb_bot_block_size(disk_index);
+        case DISK_BUS_USB: return get_usb_storage_block_size(disk_index);
         default: return 0;
     }
 }
@@ -56,35 +56,35 @@ static bool make_nvme_mbr_partition_name(char *name, uint64_t name_size, const c
     return true;
 }
 
-static uint64_t read_mbr_partition(void *data, uint64_t count, uint64_t offset, int index) {
+static uint64_t read_mbr_partition(void *data, uint64_t count, uint64_t offset, int index, void *handle) {
     if (index < 0 || index >= mbr_partition_count || !mbr_partitions[index].active) return (uint64_t)-ENODEV;
     mbr_partition_t *partition = &mbr_partitions[index];
     if (offset >= partition->size) return 0;
     if (count > partition->size - offset) count = partition->size - offset;
     if (partition->bus == DISK_BUS_NVME) {
-        return read_nvme_device(data, count, partition->offset + offset, partition->disk_index);
+        return read_nvme_device(data, count, partition->offset + offset, partition->disk_index, handle);
     } else if (partition->bus == DISK_BUS_PATA) {
-        return read_pata_device(data, count, partition->offset + offset, partition->disk_index);
+        return read_pata_device(data, count, partition->offset + offset, partition->disk_index, handle);
     } else if (partition->bus == DISK_BUS_USB) {
-        return read_usb_bot_device(data, count, partition->offset + offset, partition->disk_index);
+        return read_usb_storage_device(data, count, partition->offset + offset, partition->disk_index, handle);
     } else {
-        return read_sata_device(data, count, partition->offset + offset, partition->disk_index);
+        return read_sata_device(data, count, partition->offset + offset, partition->disk_index, handle);
     }
 }
 
-static uint64_t write_mbr_partition(const void *data, uint64_t count, uint64_t offset, int index) {
+static uint64_t write_mbr_partition(const void *data, uint64_t count, uint64_t offset, int index, void *handle) {
     if (index < 0 || index >= mbr_partition_count || !mbr_partitions[index].active) return (uint64_t)-ENODEV;
     mbr_partition_t *partition = &mbr_partitions[index];
     if (offset >= partition->size) return (uint64_t)-ENOSPC;
     if (count > partition->size - offset) count = partition->size - offset;
     if (partition->bus == DISK_BUS_NVME) {
-        return write_nvme_device(data, count, partition->offset + offset, partition->disk_index);
+        return write_nvme_device(data, count, partition->offset + offset, partition->disk_index, handle);
     } else if (partition->bus == DISK_BUS_PATA) {
-        return write_pata_device(data, count, partition->offset + offset, partition->disk_index);
+        return write_pata_device(data, count, partition->offset + offset, partition->disk_index, handle);
     } else if (partition->bus == DISK_BUS_USB) {
-        return write_usb_bot_device(data, count, partition->offset + offset, partition->disk_index);
+        return write_usb_storage_device(data, count, partition->offset + offset, partition->disk_index, handle);
     } else {
-        return write_sata_device(data, count, partition->offset + offset, partition->disk_index);
+        return write_sata_device(data, count, partition->offset + offset, partition->disk_index, handle);
     }
 }
 
@@ -138,9 +138,9 @@ static bool scan_mbr_extended(int disk_index, const char *disk_name, uint64_t ba
         if (sector_size > sizeof(sector)) return found;
         uint64_t result = 0;
         switch (bus) {
-            case DISK_BUS_PATA: result = read_pata_device(sector, sector_size, ebr_lba * sector_size, disk_index); break;
-            case DISK_BUS_USB: result = read_usb_bot_device(sector, sector_size, ebr_lba * sector_size, disk_index); break;
-            default: result = read_sata_device(sector, sector_size, ebr_lba * sector_size, disk_index); break;
+            case DISK_BUS_PATA: result = read_pata_device(sector, sector_size, ebr_lba * sector_size, disk_index, 0); break;
+            case DISK_BUS_USB: result = read_usb_storage_device(sector, sector_size, ebr_lba * sector_size, disk_index, 0); break;
+            default: result = read_sata_device(sector, sector_size, ebr_lba * sector_size, disk_index, 0); break;
         }
         if (result != sector_size || *(uint16_t *)(sector + 510) != MBR_SIGNATURE) return found;
         mbr_entry_t *entries = (mbr_entry_t *)(sector + MBR_PARTITION_OFFSET);
@@ -160,7 +160,7 @@ static bool scan_mbr_extended(int disk_index, const char *disk_name, uint64_t ba
 bool probe_mbr_for_pata_disk(int disk_index, const char *disk_name, uint64_t disk_size) {
     if (!disk_name || disk_size < PATA_SECTOR_SIZE) return false;
     uint8_t sector[PATA_SECTOR_SIZE];
-    if (read_pata_device(sector, sizeof(sector), 0, disk_index) != sizeof(sector)) return false;
+    if (read_pata_device(sector, sizeof(sector), 0, disk_index, 0) != sizeof(sector)) return false;
     if (*(uint16_t *)(sector + 510) != MBR_SIGNATURE) return false;
     mbr_entry_t *entries = (mbr_entry_t *)(sector + MBR_PARTITION_OFFSET);
     bool found = false;
@@ -184,7 +184,7 @@ bool probe_mbr_for_pata_disk(int disk_index, const char *disk_name, uint64_t dis
 bool probe_mbr_for_sata_disk(int disk_index, const char *disk_name, uint64_t disk_size) {
     if (!disk_name || disk_size < SATA_SECTOR_SIZE) return false;
     uint8_t sector[SATA_SECTOR_SIZE];
-    if (read_sata_device(sector, sizeof(sector), 0, disk_index) != sizeof(sector)) return false;
+    if (read_sata_device(sector, sizeof(sector), 0, disk_index, 0) != sizeof(sector)) return false;
     if (*(uint16_t *)(sector + 510) != MBR_SIGNATURE) return false;
     mbr_entry_t *entries = (mbr_entry_t *)(sector + MBR_PARTITION_OFFSET);
     bool found = false;
@@ -208,7 +208,7 @@ bool probe_mbr_for_sata_disk(int disk_index, const char *disk_name, uint64_t dis
 bool probe_mbr_for_nvme_disk(int disk_index, const char *disk_name, uint64_t disk_size) {
     if (!disk_name || disk_size < NVME_BLOCK_SIZE) return false;
     uint8_t sector[NVME_BLOCK_SIZE];
-    if (read_nvme_device(sector, sizeof(sector), 0, disk_index) != sizeof(sector)) return false;
+    if (read_nvme_device(sector, sizeof(sector), 0, disk_index, 0) != sizeof(sector)) return false;
     if (*(uint16_t *)(sector + 510) != MBR_SIGNATURE) return false;
     mbr_entry_t *entries = (mbr_entry_t *)(sector + MBR_PARTITION_OFFSET);
     bool found = false;
@@ -228,12 +228,12 @@ bool probe_mbr_for_nvme_disk(int disk_index, const char *disk_name, uint64_t dis
 
 bool probe_mbr_for_usb_disk(int disk_index, const char *disk_name, uint64_t disk_size) {
     if (!disk_name || disk_size < 512) return false;
-    uint32_t blen = get_usb_bot_block_size(disk_index);
+    uint32_t blen = get_usb_storage_block_size(disk_index);
     if (blen == 0) return false;
     if (disk_size < blen) return false;
     uint8_t sector[4096];
     if (blen > sizeof(sector)) return false;
-    if (read_usb_bot_device(sector, blen, 0, disk_index) != blen) return false;
+    if (read_usb_storage_device(sector, blen, 0, disk_index, 0) != blen) return false;
     if (*(uint16_t *)(sector + 510) != MBR_SIGNATURE) return false;
     mbr_entry_t *entries = (mbr_entry_t *)(sector + MBR_PARTITION_OFFSET);
     bool found = false;

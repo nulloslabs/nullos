@@ -24,7 +24,7 @@
 #include <main/elf.h>
 #include <main/hostname.h>
 #include <main/timekeeping.h>
-#include <main/mp.h>
+#include <main/smp.h>
 #include <main/fd.h>
 #include <main/signal.h>
 #include <main/string.h>
@@ -33,13 +33,18 @@
 #include <io/devices.h>
 #include <io/devpts.h>
 #include <io/initrd.h>
-#include <io/keyboard.h>
+#include <io/kbd.h>
 #include <io/pty.h>
 #include <io/time.h>
 #include <io/sockets.h>
 #include <io/net.h>
 #include <io/unix_sockets.h>
 #include <io/procfs.h>
+#include <io/snd.h>
+#include <io/snd_control.h>
+#include <io/snd_pcm.h>
+#include <io/snd_timer.h>
+#include <sound/asound.h>
 #include <io/ext4.h>
 #include <io/vfat.h>
 #include <io/mbr.h>
@@ -64,6 +69,20 @@ void sys_write(syscall_frame_t *frame) {
     size_t count = (size_t)frame->rdx;
 
     frame->rax = do_write(fd, buf, count);
+}
+
+static int parse_snd_card(const char *p);
+
+// POLLOUT gate for poll(): PCM devices report real ring readiness,
+// everything else is always writable.
+static bool poll_out_ready(fd_entry_t *entry) {
+    char rel[256];
+    if (entry && entry->type == FD_DEV && is_devtmpfs_path(entry->path, rel) &&
+        strncmp(rel, "snd/pcmC", 8) == 0) {
+        int card = parse_snd_card(rel + 8);
+        return card >= 0 && snd_pcm_poll_ready(card, entry->handle);
+    }
+    return true;
 }
 
 void sys_poll(syscall_frame_t *frame) {
@@ -121,7 +140,7 @@ void sys_poll(syscall_frame_t *frame) {
                     k_fds[i].revents |= POLLIN; \
                 } \
             } \
-            if (k_fds[i].events & POLLOUT) k_fds[i].revents |= POLLOUT; \
+            if ((k_fds[i].events & POLLOUT) && poll_out_ready(entry)) k_fds[i].revents |= POLLOUT; \
             if (k_fds[i].revents) (events)++; \
         } \
     } while (0)
@@ -158,6 +177,37 @@ void sys_poll(syscall_frame_t *frame) {
     frame->rax = (uint64_t)events;
 }
 
+
+static int parse_snd_card(const char *p) {
+    int card = 0;
+    if (!p || *p < '0' || *p > '9') return -EINVAL;
+    while (*p >= '0' && *p <= '9') { card = card * 10 + (*p - '0'); p++; }
+    return card;
+}
+
+static int writei_snd_pcm(fd_entry_t *entry, int card, struct snd_xferi *xfer) {
+    if (!xfer || !xfer->buf || xfer->frames == 0) return -EINVAL;
+    size_t fb = get_snd_pcm_frame_bytes(card);
+    if (fb == 0) return -EBADFD;
+    uint8_t *kbuf = malloc(SND_WRITEI_CHUNK_BYTES);
+    if (!kbuf) return -ENOMEM;
+    snd_pcm_uframes_t done = 0;
+    int rc = 0;
+    while (done < xfer->frames) {
+        snd_pcm_uframes_t n = xfer->frames - done;
+        size_t cap = SND_WRITEI_CHUNK_BYTES / fb;
+        if (n > cap) n = (snd_pcm_uframes_t)cap;
+        if (copy_from_user(kbuf, (const uint8_t *)xfer->buf + done * fb, n * fb) < 0) { rc = done == 0 ? -EFAULT : 0; break; }
+        snd_pcm_sframes_t w = snd_pcm_write_frames(card, entry ? entry->handle : 0, kbuf, n);
+        if (w < 0) { rc = done == 0 ? (int)w : 0; break; }
+        if (w == 0) break;
+        done += (snd_pcm_uframes_t)w;
+    }
+    free(kbuf);
+    xfer->result = (snd_pcm_sframes_t)done;
+    return rc;
+}
+
 void sys_ioctl(syscall_frame_t *frame) {
     int fd = (int)frame->rdi;
     unsigned long req = (unsigned long)frame->rsi;
@@ -165,28 +215,58 @@ void sys_ioctl(syscall_frame_t *frame) {
 
     fd_entry_t *entry = get_current_fd(fd);
 
-    if (entry && entry->type == FD_SOCKET) {
-        static short interface_flags = IFF_UP | IFF_BROADCAST | IFF_RUNNING | IFF_MULTICAST;
-        static int interface_mtu = 1500;
-        static int interface_tx_queue_length = 1000;
-
-        bool network_admin_request = req == SIOCADDRT || req == SIOCDELRT || req == SIOCSIFFLAGS || req == SIOCSIFADDR || req == SIOCSIFNETMASK || req == SIOCSIFBRDADDR || req == SIOCSIFMTU || req == SIOCSIFTXQLEN;
-        if (network_admin_request && (!current_task_ptr || current_task_ptr->euid != 0)) {
-            frame->rax = (uint64_t)-EPERM;
-            return;
+    
+    int is_tty = (fd == 0 || fd == 1 || fd == 2);
+    if (!is_tty) {
+        if (entry && entry->type == FD_DEV) {
+            char rel[256];
+            if (is_devpts_path(entry->path, rel)) {
+                is_tty = 1;
+            } else if (is_devtmpfs_path(entry->path, rel)) {
+                if (strncmp(rel, "tty", 3) == 0 || strcmp(rel, "console") == 0) is_tty = 1;
+            }
         }
+    }
 
-        if (req == SIOCADDRT || req == SIOCDELRT) {
-            struct rtentry route;
-            if (copy_from_user(&route, (const void *)argp, sizeof(route)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
-            if (req == SIOCADDRT && (route.rt_flags & RTF_GATEWAY)) memcpy(&net_gateway_ip, route.rt_gateway.sa_data + 2, sizeof(net_gateway_ip));
-            if (req == SIOCDELRT) net_gateway_ip = 0;
-            frame->rax = 0;
-            return;
-        }
+    switch (req) {
+        /* SOCKET IOCTLS */
+        case SIOCADDRT:
+        case SIOCDELRT:
+        case SIOCGIFNAME:
+        case SIOCGIFINDEX:
+        case SIOCGIFHWADDR:
+        case SIOCGIFFLAGS:
+        case SIOCSIFFLAGS:
+        case SIOCGIFADDR:
+        case SIOCSIFADDR:
+        case SIOCGIFNETMASK:
+        case SIOCSIFNETMASK:
+        case SIOCGIFBRDADDR:
+        case SIOCSIFBRDADDR:
+        case SIOCGIFMTU:
+        case SIOCSIFMTU:
+        case SIOCGIFTXQLEN:
+        case SIOCSIFTXQLEN: {
+            if (!entry || entry->type != FD_SOCKET) { frame->rax = (uint64_t)-ENOTTY; return; }
+            static short interface_flags = IFF_UP | IFF_BROADCAST | IFF_RUNNING | IFF_MULTICAST;
+            static int interface_mtu = 1500;
+            static int interface_tx_queue_length = 1000;
 
-        bool interface_query = req == SIOCGIFNAME || req == SIOCGIFINDEX || req == SIOCGIFHWADDR || req == SIOCGIFFLAGS || req == SIOCSIFFLAGS || req == SIOCGIFADDR || req == SIOCSIFADDR || req == SIOCGIFNETMASK || req == SIOCSIFNETMASK || req == SIOCGIFBRDADDR || req == SIOCSIFBRDADDR || req == SIOCGIFMTU || req == SIOCSIFMTU || req == SIOCGIFTXQLEN || req == SIOCSIFTXQLEN;
-        if (interface_query) {
+            bool network_admin_request = req == SIOCADDRT || req == SIOCDELRT || req == SIOCSIFFLAGS || req == SIOCSIFADDR || req == SIOCSIFNETMASK || req == SIOCSIFBRDADDR || req == SIOCSIFMTU || req == SIOCSIFTXQLEN;
+            if (network_admin_request && (!current_task_ptr || current_task_ptr->euid != 0)) {
+                frame->rax = (uint64_t)-EPERM;
+                return;
+            }
+
+            if (req == SIOCADDRT || req == SIOCDELRT) {
+                struct rtentry route;
+                if (copy_from_user(&route, (const void *)argp, sizeof(route)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                if (req == SIOCADDRT && (route.rt_flags & RTF_GATEWAY)) memcpy(&net_gateway_ip, route.rt_gateway.sa_data + 2, sizeof(net_gateway_ip));
+                if (req == SIOCDELRT) net_gateway_ip = 0;
+                frame->rax = 0;
+                return;
+            }
+
             struct ifreq ifr;
             if (copy_from_user(&ifr, (const void *)argp, sizeof(ifr)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
             ifr.ifr_name[IFNAMSIZ - 1] = '\0';
@@ -240,117 +320,382 @@ void sys_ioctl(syscall_frame_t *frame) {
             frame->rax = 0;
             return;
         }
-    }
 
-    // Handle framebuffer ioctl requests
-    if (entry && entry->type == FD_DEV) {
-        char rel[256];
-        if (is_devtmpfs_path(entry->path, rel)) {
-            if (strncmp(rel, "fb", 2) == 0) {
-                int idx = rel[2] - '0';
-                if (fb_req.response && idx >= 0 && idx < (int)fb_req.response->framebuffer_count) {
-                    struct limine_framebuffer *fb = fb_req.response->framebuffers[idx];
-                    if (req == FBIOGET_VSCREENINFO) {
-                        struct fb_var_screeninfo vinfo;
-                        memset(&vinfo, 0, sizeof(vinfo));
-                        vinfo.xres = fb->width;
-                        vinfo.yres = fb->height;
-                        vinfo.xres_virtual = idx == 0 && fb_xres_virtual ? fb_xres_virtual : fb->width;
-                        vinfo.yres_virtual = idx == 0 && fb_yres_virtual ? fb_yres_virtual : fb->height;
-                        vinfo.xoffset = idx == 0 ? fb_xoffset : 0;
-                        vinfo.yoffset = idx == 0 ? fb_yoffset : 0;
-                        vinfo.bits_per_pixel = fb->bpp;
-                        // Set RGB bitfield layout.  Prefer limine's mask sizes
-                        // but fall back to safe defaults when they are zero
-                        // (e.g. some firmware framebuffers don't fill them in).
-                        if (fb->bpp == 32) {
-                            if (fb->red_mask_size) {
-                                vinfo.red.offset   = fb->red_mask_shift;
-                                vinfo.red.length   = fb->red_mask_size;
-                                vinfo.green.offset = fb->green_mask_shift;
-                                vinfo.green.length = fb->green_mask_size;
-                                vinfo.blue.offset  = fb->blue_mask_shift;
-                                vinfo.blue.length  = fb->blue_mask_size;
-                            } else {
-                                // BGRA8 by default (QEMU/Bochs layout)
-                                vinfo.blue.offset  = 0;  vinfo.blue.length  = 8;
-                                vinfo.green.offset = 8;  vinfo.green.length = 8;
-                                vinfo.red.offset   = 16; vinfo.red.length   = 8;
-                            }
-                        } else if (fb->bpp == 24) {
-                            vinfo.red.offset   = 16; vinfo.red.length   = 8;
-                            vinfo.green.offset = 8;  vinfo.green.length = 8;
-                            vinfo.blue.offset  = 0;  vinfo.blue.length  = 8;
-                        } else if (fb->bpp == 16) {
-                            vinfo.red.offset   = 11; vinfo.red.length   = 5;
-                            vinfo.green.offset = 5;  vinfo.green.length = 6;
-                            vinfo.blue.offset  = 0;  vinfo.blue.length  = 5;
-                        }
-                        vinfo.activate = 0; // FB_ACTIVATE_NOW
-                        if (copy_to_user((void *)argp, &vinfo, sizeof(vinfo)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
-                        frame->rax = 0;
-                        return;
-                    } else if (req == FBIOGET_FSCREENINFO) {
-                        struct fb_fix_screeninfo finfo;
-                        memset(&finfo, 0, sizeof(finfo));
-                        strncpy(finfo.id, "limine-fb", 15);
-                        finfo.smem_start = virt_to_phys((void *)fb->address);
-                        finfo.smem_len = (idx == 0 && fb_yres_virtual ? fb_yres_virtual : fb->height) * fb->pitch;
-                        finfo.type = FB_TYPE_PACKED_PIXELS;
-                        finfo.visual = FB_VISUAL_TRUECOLOR;
-                        finfo.line_length = fb->pitch;
-                        if (copy_to_user((void *)argp, &finfo, sizeof(finfo)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
-                        frame->rax = 0;
-                        return;
-                    } else if (req == FBIOPUT_VSCREENINFO) {
-                        if (idx != 0) { frame->rax = (uint64_t)-ENOTSUP; return; }
-                        struct fb_var_screeninfo vinfo;
-                        if (copy_from_user(&vinfo, (const void *)argp, sizeof(vinfo)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
-                        uint64_t xres_virtual = vinfo.xres_virtual ? vinfo.xres_virtual : vinfo.xres;
-                        uint64_t yres_virtual = vinfo.yres_virtual ? vinfo.yres_virtual : vinfo.yres;
-                        int status = set_fb_resolution(vinfo.xres, vinfo.yres, xres_virtual, yres_virtual, vinfo.xoffset, vinfo.yoffset, (uint16_t)vinfo.bits_per_pixel);
-                        if (status < 0) { frame->rax = (uint64_t)status; return; }
-                        vinfo.xres = fb->width;
-                        vinfo.yres = fb->height;
-                        vinfo.xres_virtual = fb_xres_virtual;
-                        vinfo.yres_virtual = fb_yres_virtual;
-                        vinfo.xoffset = fb_xoffset;
-                        vinfo.yoffset = fb_yoffset;
-                        vinfo.bits_per_pixel = fb->bpp;
-                        vinfo.red.offset = fb->red_mask_shift;
-                        vinfo.red.length = fb->red_mask_size;
+        /* FRAMEBUFFER IOCTLS */
+        case FBIOGET_VSCREENINFO:
+        case FBIOGET_FSCREENINFO:
+        case FBIOPUT_VSCREENINFO:
+        case FBIOPAN_DISPLAY: {
+            if (!entry || entry->type != FD_DEV) { frame->rax = (uint64_t)-ENOTTY; return; }
+            char rel[256];
+            if (!is_devtmpfs_path(entry->path, rel) || strncmp(rel, "fb", 2) != 0) { frame->rax = (uint64_t)-ENOTTY; return; }
+            int idx = rel[2] - '0';
+            if (!fb_req.response || idx < 0 || idx >= (int)fb_req.response->framebuffer_count) { frame->rax = (uint64_t)-ENODEV; return; }
+            struct limine_framebuffer *fb = fb_req.response->framebuffers[idx];
+            if (req == FBIOGET_VSCREENINFO) {
+                struct fb_var_screeninfo vinfo;
+                memset(&vinfo, 0, sizeof(vinfo));
+                vinfo.xres = fb->width;
+                vinfo.yres = fb->height;
+                vinfo.xres_virtual = idx == 0 && fb_xres_virtual ? fb_xres_virtual : fb->width;
+                vinfo.yres_virtual = idx == 0 && fb_yres_virtual ? fb_yres_virtual : fb->height;
+                vinfo.xoffset = idx == 0 ? fb_xoffset : 0;
+                vinfo.yoffset = idx == 0 ? fb_yoffset : 0;
+                vinfo.bits_per_pixel = fb->bpp;
+                if (fb->bpp == 32) {
+                    if (fb->red_mask_size) {
+                        vinfo.red.offset   = fb->red_mask_shift;
+                        vinfo.red.length   = fb->red_mask_size;
                         vinfo.green.offset = fb->green_mask_shift;
                         vinfo.green.length = fb->green_mask_size;
-                        vinfo.blue.offset = fb->blue_mask_shift;
-                        vinfo.blue.length = fb->blue_mask_size;
-                        if (copy_to_user((void *)argp, &vinfo, sizeof(vinfo)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
-                        frame->rax = 0;
-                        return;
-                    } else if (req == FBIOPAN_DISPLAY) {
-                        // Pan/offset — accept as no-op (no virtual screen pan).
-                        frame->rax = 0;
-                        return;
+                        vinfo.blue.offset  = fb->blue_mask_shift;
+                        vinfo.blue.length  = fb->blue_mask_size;
+                    } else {
+                        vinfo.blue.offset  = 0;  vinfo.blue.length  = 8;
+                        vinfo.green.offset = 8;  vinfo.green.length = 8;
+                        vinfo.red.offset   = 16; vinfo.red.length   = 8;
+                    }
+                } else if (fb->bpp == 24) {
+                    vinfo.red.offset   = 16; vinfo.red.length   = 8;
+                    vinfo.green.offset = 8;  vinfo.green.length = 8;
+                    vinfo.blue.offset  = 0;  vinfo.blue.length  = 8;
+                } else if (fb->bpp == 16) {
+                    vinfo.red.offset   = 11; vinfo.red.length   = 5;
+                    vinfo.green.offset = 5;  vinfo.green.length = 6;
+                    vinfo.blue.offset  = 0;  vinfo.blue.length  = 5;
+                }
+                vinfo.activate = 0; // FB_ACTIVATE_NOW
+                if (copy_to_user((void *)argp, &vinfo, sizeof(vinfo)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0;
+                return;
+            } else if (req == FBIOGET_FSCREENINFO) {
+                struct fb_fix_screeninfo finfo;
+                memset(&finfo, 0, sizeof(finfo));
+                strncpy(finfo.id, "limine-fb", 15);
+                finfo.smem_start = virt_to_phys((void *)fb->address);
+                finfo.smem_len = (idx == 0 && fb_yres_virtual ? fb_yres_virtual : fb->height) * fb->pitch;
+                finfo.type = FB_TYPE_PACKED_PIXELS;
+                finfo.visual = FB_VISUAL_TRUECOLOR;
+                finfo.line_length = fb->pitch;
+                if (copy_to_user((void *)argp, &finfo, sizeof(finfo)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0;
+                return;
+            } else if (req == FBIOPUT_VSCREENINFO) {
+                if (idx != 0) { frame->rax = (uint64_t)-ENOTSUP; return; }
+                struct fb_var_screeninfo vinfo;
+                if (copy_from_user(&vinfo, (const void *)argp, sizeof(vinfo)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                uint64_t xres_virtual = vinfo.xres_virtual ? vinfo.xres_virtual : vinfo.xres;
+                uint64_t yres_virtual = vinfo.yres_virtual ? vinfo.yres_virtual : vinfo.yres;
+                int status = set_fb_resolution(vinfo.xres, vinfo.yres, xres_virtual, yres_virtual, vinfo.xoffset, vinfo.yoffset, (uint16_t)vinfo.bits_per_pixel);
+                if (status < 0) { frame->rax = (uint64_t)status; return; }
+                vinfo.xres = fb->width;
+                vinfo.yres = fb->height;
+                vinfo.xres_virtual = fb_xres_virtual;
+                vinfo.yres_virtual = fb_yres_virtual;
+                vinfo.xoffset = fb_xoffset;
+                vinfo.yoffset = fb_yoffset;
+                vinfo.bits_per_pixel = fb->bpp;
+                vinfo.red.offset = fb->red_mask_shift;
+                vinfo.red.length = fb->red_mask_size;
+                vinfo.green.offset = fb->green_mask_shift;
+                vinfo.green.length = fb->green_mask_size;
+                vinfo.blue.offset = fb->blue_mask_shift;
+                vinfo.blue.length = fb->blue_mask_size;
+                if (copy_to_user((void *)argp, &vinfo, sizeof(vinfo)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0;
+                return;
+            } else if (req == FBIOPAN_DISPLAY) {
+                frame->rax = 0;
+                return;
+            }
+            break;
+        }
+
+        /* SND CONTROL IOCTLS */
+        case SNDRV_CTL_IOCTL_PVERSION:
+        case SNDRV_CTL_IOCTL_CARD_INFO:
+        case SNDRV_CTL_IOCTL_ELEM_LIST:
+        case SNDRV_CTL_IOCTL_ELEM_INFO:
+        case SNDRV_CTL_IOCTL_ELEM_READ:
+        case SNDRV_CTL_IOCTL_ELEM_WRITE:
+        case SNDRV_CTL_IOCTL_PCM_INFO:
+        case SNDRV_CTL_IOCTL_PCM_PREFER_SUBDEVICE:
+        case SNDRV_CTL_IOCTL_PCM_NEXT_DEVICE: {
+            if (!entry || entry->type != FD_DEV) { frame->rax = (uint64_t)-ENOTTY; return; }
+            char rel[256];
+            if (!is_devtmpfs_path(entry->path, rel) || strncmp(rel, "snd/controlC", 12) != 0) { frame->rax = (uint64_t)-ENOTTY; return; }
+            int card = parse_snd_card(rel + 12);
+            if (card < 0) { frame->rax = (uint64_t)card; return; }
+            if (req == SNDRV_CTL_IOCTL_PVERSION) {
+                int version = SNDRV_CTL_VERSION;
+                if (copy_to_user((void *)argp, &version, sizeof(version)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_CTL_IOCTL_CARD_INFO) {
+                struct snd_ctl_card_info info;
+                int rc = get_snd_card_info(card, &info);
+                if (rc < 0) { frame->rax = (uint64_t)rc; return; }
+                if (copy_to_user((void *)argp, &info, sizeof(info)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_CTL_IOCTL_ELEM_LIST) {
+                struct snd_ctl_elem_list list;
+                if (copy_from_user(&list, (const void *)argp, sizeof(list)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                struct snd_ctl_elem_id ids[SND_CTL_ELEM_COUNT];
+                uint32_t n = 0;
+                for (uint32_t i = list.offset; i < list.offset + list.space && i < SND_CTL_ELEM_COUNT; i++) {
+                    if (get_snd_elem_id(card, i, &ids[n]) < 0) break;
+                    n++;
+                }
+                list.used = n;
+                list.count = SND_CTL_ELEM_COUNT;
+                struct snd_ctl_elem_id *upids = list.pids;
+                if (copy_to_user((void *)argp, &list, sizeof(list)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                if (upids && n > 0 && copy_to_user(upids, ids, n * sizeof(ids[0])) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_CTL_IOCTL_ELEM_INFO) {
+                struct snd_ctl_elem_info info;
+                if (copy_from_user(&info, (const void *)argp, sizeof(info)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                int rc = get_snd_elem_info(card, &info);
+                if (rc < 0) { frame->rax = (uint64_t)rc; return; }
+                if (copy_to_user((void *)argp, &info, sizeof(info)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_CTL_IOCTL_ELEM_READ) {
+                struct snd_ctl_elem_value value;
+                if (copy_from_user(&value, (const void *)argp, sizeof(value)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                int rc = read_snd_elem(card, &value);
+                if (rc < 0) { frame->rax = (uint64_t)rc; return; }
+                if (copy_to_user((void *)argp, &value, sizeof(value)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_CTL_IOCTL_ELEM_WRITE) {
+                struct snd_ctl_elem_value value;
+                if (copy_from_user(&value, (const void *)argp, sizeof(value)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                int rc = write_snd_elem(card, &value);
+                if (rc < 0) { frame->rax = (uint64_t)rc; return; }
+                if (copy_to_user((void *)argp, &value, sizeof(value)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_CTL_IOCTL_PCM_INFO) {
+                struct snd_pcm_info info;
+                if (copy_from_user(&info, (const void *)argp, sizeof(info)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                if (info.stream != SNDRV_PCM_STREAM_PLAYBACK) { frame->rax = (uint64_t)-ENOENT; return; }
+                int rc = get_snd_pcm_info(card, &info);
+                if (rc < 0) { frame->rax = (uint64_t)rc; return; }
+                if (copy_to_user((void *)argp, &info, sizeof(info)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_CTL_IOCTL_PCM_PREFER_SUBDEVICE) {
+                int sub = 0;
+                if (copy_from_user(&sub, (const void *)argp, sizeof(sub)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_CTL_IOCTL_PCM_NEXT_DEVICE) {
+                int next = -1;
+                if (copy_from_user(&next, (const void *)argp, sizeof(next)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                for (int i = next + 1; i < SND_MAX_CARDS; i++) {
+                    if (get_snd_card(i)) {
+                        if (copy_to_user((void *)argp, &i, sizeof(i)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                        frame->rax = 0; return;
                     }
                 }
+                frame->rax = (uint64_t)-ENOENT; return;
             }
+            break;
         }
-    }
 
-    int is_tty = (fd == 0 || fd == 1 || fd == 2);
-
-    // Also treat devtmpfs tty devices as ttys
-    if (!is_tty) {
-        if (entry && entry->type == FD_DEV) {
+        /* SND PCM IOCTLS */
+        case SNDRV_PCM_IOCTL_PVERSION:
+        case SNDRV_PCM_IOCTL_INFO:
+        case SNDRV_PCM_IOCTL_TSTAMP:
+        case SNDRV_PCM_IOCTL_TTSTAMP:
+        case SNDRV_PCM_IOCTL_USER_PVERSION:
+        case SNDRV_PCM_IOCTL_HW_REFINE:
+        case SNDRV_PCM_IOCTL_HW_PARAMS:
+        case SNDRV_PCM_IOCTL_HW_FREE:
+        case SNDRV_PCM_IOCTL_SW_PARAMS:
+        case SNDRV_PCM_IOCTL_STATUS:
+        case SNDRV_PCM_IOCTL_DELAY:
+        case SNDRV_PCM_IOCTL_HWSYNC:
+        case SNDRV_PCM_IOCTL_SYNC_PTR:
+        case SNDRV_PCM_IOCTL_PREPARE:
+        case SNDRV_PCM_IOCTL_RESET:
+        case SNDRV_PCM_IOCTL_START:
+        case SNDRV_PCM_IOCTL_DROP:
+        case SNDRV_PCM_IOCTL_DRAIN:
+        case SNDRV_PCM_IOCTL_WRITEI_FRAMES: {
+            if (!entry || entry->type != FD_DEV) { frame->rax = (uint64_t)-ENOTTY; return; }
             char rel[256];
-            if (is_devtmpfs_path(entry->path, rel)) {
-                if (strncmp(rel, "tty", 3) == 0 || strncmp(rel, "pts/", 4) == 0 || strcmp(rel, "console") == 0) is_tty = 1;
-            } else if (is_devpts_path(entry->path, rel)) {
-                is_tty = 1;
+            if (!is_devtmpfs_path(entry->path, rel) || strncmp(rel, "snd/pcmC", 8) != 0) { frame->rax = (uint64_t)-ENOTTY; return; }
+            int card = parse_snd_card(rel + 8);
+            if (card < 0) { frame->rax = (uint64_t)card; return; }
+            void *handle = entry->handle;
+            
+            if (req == SNDRV_PCM_IOCTL_PVERSION) {
+                int version = SNDRV_PCM_VERSION;
+                if (copy_to_user((void *)argp, &version, sizeof(version)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_PCM_IOCTL_INFO) {
+                struct snd_pcm_info info;
+                int rc = get_snd_pcm_info(card, &info);
+                if (rc < 0) { frame->rax = (uint64_t)rc; return; }
+                if (copy_to_user((void *)argp, &info, sizeof(info)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_PCM_IOCTL_TSTAMP || req == SNDRV_PCM_IOCTL_TTSTAMP || req == SNDRV_PCM_IOCTL_USER_PVERSION) {
+                int val = 0;
+                if (copy_from_user(&val, (const void *)argp, sizeof(val)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_PCM_IOCTL_HW_REFINE) {
+                struct snd_pcm_hw_params params;
+                if (copy_from_user(&params, (const void *)argp, sizeof(params)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                int rc = refine_snd_pcm(card, &params);
+                if (rc < 0) { frame->rax = (uint64_t)rc; return; }
+                if (copy_to_user((void *)argp, &params, sizeof(params)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_PCM_IOCTL_HW_PARAMS) {
+                struct snd_pcm_hw_params params;
+                if (copy_from_user(&params, (const void *)argp, sizeof(params)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                int rc = set_snd_pcm_params(card, handle, &params);
+                if (rc < 0) { frame->rax = (uint64_t)rc; return; }
+                if (copy_to_user((void *)argp, &params, sizeof(params)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_PCM_IOCTL_HW_FREE) {
+                frame->rax = (uint64_t)free_snd_pcm(card, handle); return;
+            } else if (req == SNDRV_PCM_IOCTL_SW_PARAMS) {
+                struct snd_pcm_sw_params params;
+                if (copy_from_user(&params, (const void *)argp, sizeof(params)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                if (handle) {
+                    int rc = set_snd_pcm_sw(handle, &params);
+                    if (rc < 0) { frame->rax = (uint64_t)rc; return; }
+                }
+                if (copy_to_user((void *)argp, &params, sizeof(params)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_PCM_IOCTL_STATUS) {
+                struct snd_pcm_status status;
+                int rc = get_snd_pcm_status(card, handle, &status);
+                if (rc < 0) { frame->rax = (uint64_t)rc; return; }
+                if (copy_to_user((void *)argp, &status, sizeof(status)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_PCM_IOCTL_DELAY) {
+                snd_pcm_sframes_t delay = get_snd_pcm_delay(card, handle);
+                if (delay < 0) { frame->rax = (uint64_t)delay; return; }
+                if (copy_to_user((void *)argp, &delay, sizeof(delay)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_PCM_IOCTL_HWSYNC) {
+                frame->rax = (uint64_t)snd_pcm_hw_sync_ioctl(card, handle); return;
+            } else if (req == SNDRV_PCM_IOCTL_SYNC_PTR) {
+                struct snd_pcm_sync_ptr sync;
+                if (!handle) { frame->rax = (uint64_t)-EBADFD; return; }
+                if (copy_from_user(&sync, (const void *)argp, sizeof(sync)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                int rc = sync_snd_pcm(handle, &sync);
+                if (copy_to_user((void *)argp, &sync, sizeof(sync)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = (uint64_t)rc; return;
+            } else if (req == SNDRV_PCM_IOCTL_PREPARE) {
+                frame->rax = (uint64_t)prepare_snd_pcm(card, handle); return;
+            } else if (req == SNDRV_PCM_IOCTL_RESET) {
+                frame->rax = (uint64_t)reset_snd_pcm(card, handle); return;
+            } else if (req == SNDRV_PCM_IOCTL_START) {
+                frame->rax = (uint64_t)start_snd_pcm(card, handle); return;
+            } else if (req == SNDRV_PCM_IOCTL_DROP) {
+                frame->rax = (uint64_t)drop_snd_pcm(card, handle); return;
+            } else if (req == SNDRV_PCM_IOCTL_DRAIN) {
+                frame->rax = (uint64_t)drain_snd_pcm(card, handle); return;
+            } else if (req == SNDRV_PCM_IOCTL_WRITEI_FRAMES) {
+                struct snd_xferi xfer;
+                if (copy_from_user(&xfer, (const void *)argp, sizeof(xfer)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                xfer.result = 0;
+                int rc = writei_snd_pcm(entry, card, &xfer);
+                if (copy_to_user((void *)argp, &xfer, sizeof(xfer)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = (uint64_t)rc; return;
             }
+            break;
         }
-    }
 
-    switch (req) {
+        /* SND TIMER IOCTLS */
+        case SNDRV_TIMER_IOCTL_PVERSION:
+        case SNDRV_TIMER_IOCTL_NEXT_DEVICE:
+        case SNDRV_TIMER_IOCTL_GINFO:
+        case SNDRV_TIMER_IOCTL_GPARAMS:
+        case SNDRV_TIMER_IOCTL_GSTATUS:
+        case SNDRV_TIMER_IOCTL_SELECT:
+        case SNDRV_TIMER_IOCTL_INFO:
+        case SNDRV_TIMER_IOCTL_PARAMS:
+        case SNDRV_TIMER_IOCTL_STATUS:
+        case SNDRV_TIMER_IOCTL_TREAD:
+        case SNDRV_TIMER_IOCTL_START:
+        case SNDRV_TIMER_IOCTL_STOP:
+        case SNDRV_TIMER_IOCTL_CONTINUE:
+        case SNDRV_TIMER_IOCTL_PAUSE: {
+            if (!entry || entry->type != FD_DEV) { frame->rax = (uint64_t)-ENOTTY; return; }
+            char rel[256];
+            if (!is_devtmpfs_path(entry->path, rel) || strcmp(rel, "snd/timer") != 0) { frame->rax = (uint64_t)-ENOTTY; return; }
+            void *handle = entry->handle;
+            if (req == SNDRV_TIMER_IOCTL_PVERSION) {
+                int version = SNDRV_TIMER_VERSION;
+                if (copy_to_user((void *)argp, &version, sizeof(version)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_TIMER_IOCTL_NEXT_DEVICE) {
+                struct snd_timer_id tid;
+                if (copy_from_user(&tid, (const void *)argp, sizeof(tid)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                int rc = next_snd_timer(&tid);
+                if (rc < 0) { frame->rax = (uint64_t)rc; return; }
+                if (copy_to_user((void *)argp, &tid, sizeof(tid)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_TIMER_IOCTL_GINFO) {
+                struct snd_timer_ginfo info;
+                int rc = get_snd_timer_ginfo(&info);
+                if (rc < 0) { frame->rax = (uint64_t)rc; return; }
+                if (copy_to_user((void *)argp, &info, sizeof(info)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_TIMER_IOCTL_GPARAMS) {
+                struct snd_timer_gparams params;
+                if (copy_from_user(&params, (const void *)argp, sizeof(params)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = (uint64_t)set_snd_timer_gparams(&params); return;
+            } else if (req == SNDRV_TIMER_IOCTL_GSTATUS) {
+                struct snd_timer_gstatus status;
+                int rc = get_snd_timer_gstatus(&status);
+                if (rc < 0) { frame->rax = (uint64_t)rc; return; }
+                if (copy_to_user((void *)argp, &status, sizeof(status)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_TIMER_IOCTL_SELECT) {
+                struct snd_timer_select sel;
+                if (!handle) { frame->rax = (uint64_t)-EBADFD; return; }
+                if (copy_from_user(&sel, (const void *)argp, sizeof(sel)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = (uint64_t)select_snd_timer(handle, &sel); return;
+            } else if (req == SNDRV_TIMER_IOCTL_INFO) {
+                struct snd_timer_info info;
+                if (!handle) { frame->rax = (uint64_t)-EBADFD; return; }
+                int rc = get_snd_timer_info(handle, &info);
+                if (rc < 0) { frame->rax = (uint64_t)rc; return; }
+                if (copy_to_user((void *)argp, &info, sizeof(info)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_TIMER_IOCTL_PARAMS) {
+                struct snd_timer_params params;
+                if (!handle) { frame->rax = (uint64_t)-EBADFD; return; }
+                if (copy_from_user(&params, (const void *)argp, sizeof(params)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = (uint64_t)set_snd_timer_params(handle, &params); return;
+            } else if (req == SNDRV_TIMER_IOCTL_STATUS) {
+                struct snd_timer_status status;
+                if (!handle) { frame->rax = (uint64_t)-EBADFD; return; }
+                int rc = get_snd_timer_status(handle, &status);
+                if (rc < 0) { frame->rax = (uint64_t)rc; return; }
+                if (copy_to_user((void *)argp, &status, sizeof(status)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = 0; return;
+            } else if (req == SNDRV_TIMER_IOCTL_TREAD) {
+                int enable = 0;
+                if (!handle) { frame->rax = (uint64_t)-EBADFD; return; }
+                if (copy_from_user(&enable, (const void *)argp, sizeof(enable)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+                frame->rax = (uint64_t)set_snd_timer_tread(handle, enable); return;
+            } else if (req == SNDRV_TIMER_IOCTL_START) {
+                if (!handle) { frame->rax = (uint64_t)-EBADFD; return; }
+                frame->rax = (uint64_t)start_snd_timer(handle); return;
+            } else if (req == SNDRV_TIMER_IOCTL_STOP) {
+                if (!handle) { frame->rax = (uint64_t)-EBADFD; return; }
+                frame->rax = (uint64_t)stop_snd_timer(handle); return;
+            } else if (req == SNDRV_TIMER_IOCTL_CONTINUE) {
+                if (!handle) { frame->rax = (uint64_t)-EBADFD; return; }
+                frame->rax = (uint64_t)continue_snd_timer(handle); return;
+            } else if (req == SNDRV_TIMER_IOCTL_PAUSE) {
+                if (!handle) { frame->rax = (uint64_t)-EBADFD; return; }
+                frame->rax = (uint64_t)pause_snd_timer(handle); return;
+            }
+            break;
+        }
+
         case HDIO_GETGEO: {
             if (!entry || entry->type != FD_DEV) { frame->rax = (uint64_t)-ENOTTY; return; }
             uint64_t size;
@@ -536,6 +881,9 @@ void sys_ioctl(syscall_frame_t *frame) {
         }
 
         case TIOCGWINSZ: {
+            // a pipe or socket must answer ENOTTY so isatty() stays honest
+            int idx = ioctl_tty_idx(entry);
+            if (idx < 0) { frame->rax = (uint64_t)-ENOTTY; return; }
             winsize_t ws = { .ws_row = 25, .ws_col = 80, .ws_xpixel = 0, .ws_ypixel = 0 };
             if (fb_req.response && fb_req.response->framebuffer_count > 0) {
                 struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
@@ -551,15 +899,15 @@ void sys_ioctl(syscall_frame_t *frame) {
             return;
         }
 
-        case TIOCSWINSZ:
+        case TIOCSWINSZ: {
+            int idx = ioctl_tty_idx(entry);
+            if (idx < 0) { frame->rax = (uint64_t)-ENOTTY; return; }
             frame->rax = 0;
             return;
+        }
 
         case TCSBRK:
         case TCXONC:
-            frame->rax = 0;
-            return;
-
         case TCFLSH:
             if (entry && entry->type == FD_DEV) {
                 char rel[256];
@@ -611,15 +959,11 @@ void sys_ioctl(syscall_frame_t *frame) {
                     tidx = 0;
                 } else if (entry->type == FD_DEV) {
                     char rel[256];
-                    if (is_devtmpfs_path(entry->path, rel)) {
-                        tidx = tty_rel_to_idx(rel);
-                        if (tidx < 0 && strncmp(rel, "pts/", 4) == 0) {
-                            int pidx = pty_rel_to_idx(rel + 4);
-                            if (pidx >= 0) tidx = 100 + pidx;
-                        }
-                    } else if (is_devpts_path(entry->path, rel)) {
+                    if (is_devpts_path(entry->path, rel)) {
                         int pidx = pty_rel_to_idx(rel);
                         if (pidx >= 0) tidx = 100 + pidx;
+                    } else if (is_devtmpfs_path(entry->path, rel)) {
+                        tidx = tty_rel_to_idx(rel);
                     }
                 }
             }
@@ -774,7 +1118,7 @@ void sys_ioctl(syscall_frame_t *frame) {
             return;
         }
 
-        default:
+                default:
             frame->rax = (uint64_t)-EINVAL;
             return;
     }
@@ -867,6 +1211,8 @@ void sys_dup(syscall_frame_t *frame) {
             if (!e) { frame->rax = (uint64_t)-ENOMEM; return; }
             *e = *src;
             e->open = true;
+            // the duplicate never inherits FD_CLOEXEC
+            e->fd_flags &= ~FD_CLOEXEC;
             table->entries[i] = e;
             retain_fd_entry(e);
             frame->rax = (uint64_t)i;
@@ -896,6 +1242,8 @@ void sys_dup2(syscall_frame_t *frame) {
     if (!e) { frame->rax = (uint64_t)-ENOMEM; return; }
     *e = *src;
     e->open = true;
+    // the duplicate never inherits FD_CLOEXEC
+    e->fd_flags &= ~FD_CLOEXEC;
     table->entries[newfd] = e;
     retain_fd_entry(e);
     frame->rax = (uint64_t)newfd;

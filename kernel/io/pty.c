@@ -11,7 +11,7 @@
 #include <io/tty.h>
 
 pty_t ptys[NUM_PTYS];
-int keyboard_pty = -1;
+int kbd_pty = -1;
 spinlock_t pty_lock = SPINLOCK_INIT;
 
 pty_t *get_pty(int idx) { if (idx < 0 || idx >= NUM_PTYS) return NULL; return &ptys[idx]; }
@@ -71,7 +71,7 @@ void retain_pty_master(int idx) {
 void release_pty_master(int idx) {
     if (idx < 0 || idx >= NUM_PTYS) return;
 
-    clear_keyboard_pty(idx);
+    clear_kbd_pty(idx);
 
     bool destroy = false;
     uint64_t irq;
@@ -218,15 +218,15 @@ int write_pty_master(int idx, const char *buf, int len) {
     return w;
 }
 
-void set_keyboard_pty(int pty_idx) {
+void set_kbd_pty(int pty_idx) {
     if (pty_idx >= 0 && pty_idx < NUM_PTYS) {
-        keyboard_pty = pty_idx;
+        kbd_pty = pty_idx;
     }
 }
 
-void clear_keyboard_pty(int pty_idx) {
-    if (keyboard_pty == pty_idx) {
-        keyboard_pty = -1;
+void clear_kbd_pty(int pty_idx) {
+    if (kbd_pty == pty_idx) {
+        kbd_pty = -1;
     }
 }
 

@@ -23,7 +23,7 @@ fetch_db() {
             return 0
         fi
     done
-    echo "error: failed to download $repo.db from all mirrors" >&2
+    printf "  %-7s %s\n" "ERROR" "Failed to download $repo.db" >&2
     return 1
 }
 
@@ -55,7 +55,7 @@ function resolve(name, file, dependency, count, i) {
         file = providers[name]
 
     if (file == "") {
-        print "error: unable to resolve dependency: " name > "/dev/stderr"
+        print "  ERROR   Failed to resolve dependency \047" name "\047" | "cat >&2"
         failed = 1
         return
     }

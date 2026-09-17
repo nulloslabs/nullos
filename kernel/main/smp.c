@@ -2,7 +2,7 @@
 #include <main/assert.h>
 #include <main/log.h>
 #include <main/rng.h>
-#include <main/mp.h>
+#include <main/smp.h>
 #include <main/idt.h>
 #include <main/gdt.h>
 #include <main/halt.h>
@@ -56,9 +56,7 @@ static void ap_entry(struct limine_mp_info *info) {
 uint32_t hash_cpu_index(uint32_t lapic_id) {
     static uint64_t seed;
     if (!seed) get_random_bytes(&seed, sizeof(seed));
-    #define GOLDEN_RATIO 0x9E3779B97F4A7C15ULL
-    return (((uint64_t)lapic_id ^ seed) * GOLDEN_RATIO) % CPU_INDEX_MAP_SIZE;
-    #undef GOLDEN_RATIO
+    return ((uint64_t)lapic_id ^ seed) % CPU_INDEX_MAP_SIZE;
 }
 
 void clear_cpu_index_map(void) {
@@ -101,7 +99,7 @@ cpu_t *get_cpu(void) {
     return &cpus[get_cpu_index()];
 }
 
-void init_mp(void) {
+void init_smp(void) {
     clear_cpu_index_map();
 
     if (current_apic_mode == APIC_NONE) {
@@ -115,11 +113,11 @@ void init_mp(void) {
         cpus[0].rq_head = NULL;
         cpus[0].rq_count = 0;
         map_cpu_index(0, 0);
-        log("mp: no apic, running single cpu\n");
+        log("smp: no apic, running single cpu\n");
         return;
     }
 
-    if (!mp_req.response) {
+    if (!smp_req.response) {
         cpu_count = 1;
         cpus[0].lapic_id = get_apic_id();
         cpus[0].task_index = current_task;
@@ -132,8 +130,8 @@ void init_mp(void) {
         return;
     }
 
-    struct limine_mp_response *mp = mp_req.response;
-    cpu_count = mp->cpu_count;
+    struct limine_mp_response *smp = smp_req.response;
+    cpu_count = smp->cpu_count;
     if (cpu_count > MAX_CPUS) cpu_count = MAX_CPUS;
 
     uint32_t bsp_id = get_apic_id();
@@ -142,7 +140,7 @@ void init_mp(void) {
 
     // Initialize CPU array
     for (int i = 0; i < cpu_count; i++) {
-        cpus[i].lapic_id = mp->cpus[i]->lapic_id;
+        cpus[i].lapic_id = smp->cpus[i]->lapic_id;
         cpus[i].task_index = -1;
         cpus[i].task = NULL;
         cpus[i].idle_task = -1;
@@ -168,12 +166,12 @@ void init_mp(void) {
         if (cpus[i].lapic_id != bsp_id) prepare_scheduler_cpu(i);
     }
 
-    // Start APs via Limine MP
-    for (int i = 0; i < (int)mp->cpu_count && i < MAX_CPUS; i++) {
-        if (mp->cpus[i]->lapic_id == bsp_id) continue;
+    // Start APs via Limine SMP
+    for (int i = 0; i < (int)smp->cpu_count && i < MAX_CPUS; i++) {
+        if (smp->cpus[i]->lapic_id == bsp_id) continue;
         
         // The goto_address field is used to boot the AP
-        __atomic_store_n(&mp->cpus[i]->goto_address, ap_entry, __ATOMIC_SEQ_CST);
+        __atomic_store_n(&smp->cpus[i]->goto_address, ap_entry, __ATOMIC_SEQ_CST);
     }
 
     // Wait for all APs to come online (with timeout)
@@ -181,9 +179,9 @@ void init_mp(void) {
     for (volatile int timeout = 0; timeout < 100000000 && ap_ready_count < expected; timeout++) __asm__ volatile ("pause");
 
     if (ap_ready_count < expected) {
-        log("mp: only %d/%d aps came online\n", ap_ready_count, expected);
+        log("smp: only %d/%d aps came online\n", ap_ready_count, expected);
         return;
     }
 
-    log("mp: initialized mp\n");
+    log("smp: initialized smp\n");
 }

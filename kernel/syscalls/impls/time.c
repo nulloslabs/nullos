@@ -22,7 +22,7 @@
 #include <main/halt.h>
 #include <main/domainname.h>
 #include <main/timekeeping.h>
-#include <main/mp.h>
+#include <main/smp.h>
 #include <main/fd.h>
 #include <main/signal.h>
 #include <main/rng.h>

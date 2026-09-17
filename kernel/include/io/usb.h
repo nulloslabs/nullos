@@ -52,7 +52,7 @@
 
 #define USB_HID_CLASS             3
 #define USB_HID_SUBCLASS_BOOT     1
-#define USB_HID_PROTOCOL_KEYBOARD 1
+#define USB_HID_PROTOCOL_KBD 1
 #define USB_HID_PROTOCOL_MOUSE    2
 
 typedef struct {

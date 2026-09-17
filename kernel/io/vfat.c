@@ -55,7 +55,7 @@ static int read_checked(const vfat_mount_t *mnt, void *buf, uint64_t count, uint
     if (!mnt || !buf) return -EINVAL;
     uint64_t abs = mnt->partition_offset + offset;
     if (abs + count > mnt->device_size || abs < mnt->partition_offset) return -EIO;
-    uint64_t got = read_device(mnt->device, buf, count, abs);
+    uint64_t got = read_device(mnt->device, buf, count, abs, 0);
     if ((int64_t)got < 0) return (int)(int64_t)got;
     return got == count ? 0 : -EIO;
 }
@@ -64,7 +64,7 @@ static int write_checked(const vfat_mount_t *mnt, const void *buf, uint64_t coun
     if (!mnt || !buf) return -EINVAL;
     uint64_t abs = mnt->partition_offset + offset;
     if (abs + count > mnt->device_size || abs < mnt->partition_offset) return -EIO;
-    uint64_t got = write_device(mnt->device, buf, count, abs);
+    uint64_t got = write_device(mnt->device, buf, count, abs, 0);
     if ((int64_t)got < 0) return (int)(int64_t)got;
     return got == count ? 0 : -EIO;
 }
@@ -969,7 +969,7 @@ static bool match_gpt_fat32(const uint8_t *type_guid) {
 
 static int find_fat32_partition(const char *dev, uint8_t *boot, uint64_t *part_off) {
     uint8_t mbr[512];
-    if (read_device(dev, mbr, 512, 0) != 512) return -EIO;
+    if (read_device(dev, mbr, 512, 0, 0) != 512) return -EIO;
     if (mbr[510] != 0x55 || mbr[511] != 0xAA) return -EINVAL;
     for (int i = 0; i < 4; i++) {
         uint8_t *entry = mbr + 446 + i * 16;
@@ -979,12 +979,12 @@ static int find_fat32_partition(const char *dev, uint8_t *boot, uint64_t *part_o
         uint32_t secs = read_le32(entry + 12);
         if (!lba || !secs) continue;
         uint64_t off = (uint64_t)lba * 512;
-        if (read_device(dev, boot, 512, off) != 512) continue;
+        if (read_device(dev, boot, 512, off, 0) != 512) continue;
         if (probe_fat32_boot(boot)) { *part_off = off; return 0; }
     }
     if (mbr[446 + 4] == 0xEE) {
         uint8_t gpt_sec[512];
-        if (read_device(dev, gpt_sec, 512, 512) != 512) return -EINVAL;
+        if (read_device(dev, gpt_sec, 512, 512, 0) != 512) return -EINVAL;
         uint64_t sig;
         memcpy(&sig, gpt_sec, 8);
         if (sig != 0x5452415020494645ULL) return -EINVAL;
@@ -998,7 +998,7 @@ static int find_fat32_partition(const char *dev, uint8_t *boot, uint64_t *part_o
         uint8_t *entries = malloc(total_bytes);
         if (!entries) return -ENOMEM;
         uint64_t entries_off = entry_lba * 512;
-        if (read_device(dev, entries, total_bytes, entries_off) != total_bytes) { free(entries); return -EINVAL; }
+        if (read_device(dev, entries, total_bytes, entries_off, 0) != total_bytes) { free(entries); return -EINVAL; }
         for (uint32_t i = 0; i < max_entries; i++) {
             uint8_t *e = entries + (uint64_t)i * entry_sz;
             bool empty = true;
@@ -1009,8 +1009,8 @@ static int find_fat32_partition(const char *dev, uint8_t *boot, uint64_t *part_o
             memcpy(&first_lba, e + 32, 8);
             if (first_lba < 2) continue;
             uint64_t off = first_lba * 512;
-            if (read_device(dev, e, 512, off) != 512) {
-                if (read_device(dev, boot, 512, off) != 512) continue;
+            if (read_device(dev, e, 512, off, 0) != 512) {
+                if (read_device(dev, boot, 512, off, 0) != 512) continue;
             } else memcpy(boot, e, 512);
             if (probe_fat32_boot(boot)) { free(entries); *part_off = off; return 0; }
         }
@@ -1028,7 +1028,7 @@ int mount_vfat(const char *source, const char *target, unsigned long flags, cons
     if (status < 0) return status;
     if (device_size < 512) return -EINVAL;
     uint8_t boot[512];
-    uint64_t got = read_device(dev, boot, 512, 0);
+    uint64_t got = read_device(dev, boot, 512, 0, 0);
     if (got != 512) return -EIO;
     uint64_t part_off = 0;
     if (!probe_fat32_boot(boot)) {

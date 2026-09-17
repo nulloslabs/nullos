@@ -9,7 +9,7 @@
 #include <io/nvme.h>
 #include <io/pata.h>
 #include <io/sata.h>
-#include <io/usb_bot.h>
+#include <io/usb_storage.h>
 
 static gpt_partition_t gpt_partitions[GPT_MAX_PARTITIONS];
 static int gpt_partition_count;
@@ -34,7 +34,7 @@ static uint64_t get_sector_size(disk_device_bus_t bus, int disk_index) {
         case DISK_BUS_NVME: return NVME_BLOCK_SIZE;
         case DISK_BUS_PATA: return PATA_SECTOR_SIZE;
         case DISK_BUS_SATA: return SATA_SECTOR_SIZE;
-        case DISK_BUS_USB: return get_usb_bot_block_size(disk_index);
+        case DISK_BUS_USB: return get_usb_storage_block_size(disk_index);
         default: return 0;
     }
 }
@@ -71,35 +71,35 @@ static bool make_nvme_gpt_partition_name(char *name, uint64_t name_size, const c
     return true;
 }
 
-static uint64_t read_gpt_partition(void *data, uint64_t count, uint64_t offset, int index) {
+static uint64_t read_gpt_partition(void *data, uint64_t count, uint64_t offset, int index, void *handle) {
     if (index < 0 || index >= gpt_partition_count || !gpt_partitions[index].active) return (uint64_t)-ENODEV;
     gpt_partition_t *partition = &gpt_partitions[index];
     if (offset >= partition->size) return 0;
     if (count > partition->size - offset) count = partition->size - offset;
     if (partition->bus == DISK_BUS_NVME) {
-        return read_nvme_device(data, count, partition->offset + offset, partition->disk_index);
+        return read_nvme_device(data, count, partition->offset + offset, partition->disk_index, handle);
     } else if (partition->bus == DISK_BUS_PATA) {
-        return read_pata_device(data, count, partition->offset + offset, partition->disk_index);
+        return read_pata_device(data, count, partition->offset + offset, partition->disk_index, handle);
     } else if (partition->bus == DISK_BUS_USB) {
-        return read_usb_bot_device(data, count, partition->offset + offset, partition->disk_index);
+        return read_usb_storage_device(data, count, partition->offset + offset, partition->disk_index, handle);
     } else {
-        return read_sata_device(data, count, partition->offset + offset, partition->disk_index);
+        return read_sata_device(data, count, partition->offset + offset, partition->disk_index, handle);
     }
 }
 
-static uint64_t write_gpt_partition(const void *data, uint64_t count, uint64_t offset, int index) {
+static uint64_t write_gpt_partition(const void *data, uint64_t count, uint64_t offset, int index, void *handle) {
     if (index < 0 || index >= gpt_partition_count || !gpt_partitions[index].active) return (uint64_t)-ENODEV;
     gpt_partition_t *partition = &gpt_partitions[index];
     if (offset >= partition->size) return (uint64_t)-ENOSPC;
     if (count > partition->size - offset) count = partition->size - offset;
     if (partition->bus == DISK_BUS_NVME) {
-        return write_nvme_device(data, count, partition->offset + offset, partition->disk_index);
+        return write_nvme_device(data, count, partition->offset + offset, partition->disk_index, handle);
     } else if (partition->bus == DISK_BUS_PATA) {
-        return write_pata_device(data, count, partition->offset + offset, partition->disk_index);
+        return write_pata_device(data, count, partition->offset + offset, partition->disk_index, handle);
     } else if (partition->bus == DISK_BUS_USB) {
-        return write_usb_bot_device(data, count, partition->offset + offset, partition->disk_index);
+        return write_usb_storage_device(data, count, partition->offset + offset, partition->disk_index, handle);
     } else {
-        return write_sata_device(data, count, partition->offset + offset, partition->disk_index);
+        return write_sata_device(data, count, partition->offset + offset, partition->disk_index, handle);
     }
 }
 
@@ -108,8 +108,8 @@ static bool read_gpt_header(int disk_index, uint64_t header_lba, uint64_t disk_s
     uint64_t sector_size = is_pata ? PATA_SECTOR_SIZE : SATA_SECTOR_SIZE;
     if (header_lba >= disk_sectors) return false;
     uint8_t sector[SATA_SECTOR_SIZE];
-    uint64_t result = is_pata ? read_pata_device(sector, sizeof(sector), header_lba * sector_size, disk_index)
-                              : read_sata_device(sector, sizeof(sector), header_lba * sector_size, disk_index);
+    uint64_t result = is_pata ? read_pata_device(sector, sizeof(sector), header_lba * sector_size, disk_index, 0)
+                              : read_sata_device(sector, sizeof(sector), header_lba * sector_size, disk_index, 0);
     if (result != sizeof(sector)) return false;
     memcpy(header, sector, sizeof(*header));
     if (header->signature != GPT_SIGNATURE || header->header_size < GPT_MIN_HEADER_SIZE || header->header_size > SATA_SECTOR_SIZE) return false;
@@ -131,8 +131,8 @@ static uint8_t *read_gpt_entries(int disk_index, uint64_t disk_sectors, const gp
     if (header->entry_lba >= disk_sectors || entry_sectors > disk_sectors - header->entry_lba) return NULL;
     uint8_t *entries = malloc(*entries_size);
     if (!entries) return NULL;
-    uint64_t result = is_pata ? read_pata_device(entries, *entries_size, header->entry_lba * sector_size, disk_index)
-                              : read_sata_device(entries, *entries_size, header->entry_lba * sector_size, disk_index);
+    uint64_t result = is_pata ? read_pata_device(entries, *entries_size, header->entry_lba * sector_size, disk_index, 0)
+                              : read_sata_device(entries, *entries_size, header->entry_lba * sector_size, disk_index, 0);
     if (result == *entries_size && compute_gpt_crc32(entries, *entries_size) == header->entry_crc32) return entries;
     free(entries);
     return NULL;
@@ -228,7 +228,7 @@ static bool read_gpt_header_nvme(int disk_index, uint64_t header_lba, uint64_t d
     uint64_t sector_size = NVME_BLOCK_SIZE;
     uint8_t sector[512];
     if (header_lba >= disk_sectors) return false;
-    uint64_t result = read_nvme_device(sector, sizeof(sector), header_lba * sector_size, disk_index);
+    uint64_t result = read_nvme_device(sector, sizeof(sector), header_lba * sector_size, disk_index, 0);
     if (result != sizeof(sector)) return false;
     memcpy(header, sector, sizeof(*header));
     if (header->signature != GPT_SIGNATURE || header->header_size < GPT_MIN_HEADER_SIZE || header->header_size > 512) return false;
@@ -249,7 +249,7 @@ static uint8_t *read_gpt_entries_nvme(int disk_index, uint64_t disk_sectors, con
     if (header->entry_lba >= disk_sectors || entry_sectors > disk_sectors - header->entry_lba) return 0;
     uint8_t *entries = malloc(*entries_size);
     if (!entries) return 0;
-    uint64_t result = read_nvme_device(entries, *entries_size, header->entry_lba * sector_size, disk_index);
+    uint64_t result = read_nvme_device(entries, *entries_size, header->entry_lba * sector_size, disk_index, 0);
     if (result == *entries_size && compute_gpt_crc32(entries, *entries_size) == header->entry_crc32) return entries;
     free(entries);
     return 0;
@@ -284,12 +284,12 @@ bool probe_gpt_for_nvme_disk(int disk_index, const char *disk_name, uint64_t dis
 }
 
 static bool read_gpt_header_usb(int disk_index, uint64_t header_lba, uint64_t disk_sectors, gpt_header_t *header) {
-    uint32_t blen = get_usb_bot_block_size(disk_index);
+    uint32_t blen = get_usb_storage_block_size(disk_index);
     if (blen == 0) return false;
     if (header_lba >= disk_sectors) return false;
     uint8_t sector[4096];
     if (blen > sizeof(sector)) return false;
-    if (read_usb_bot_device(sector, blen, header_lba * blen, disk_index) != blen) return false;
+    if (read_usb_storage_device(sector, blen, header_lba * blen, disk_index, 0) != blen) return false;
     memcpy(header, sector, sizeof(*header));
     if (header->signature != GPT_SIGNATURE || header->header_size < GPT_MIN_HEADER_SIZE || header->header_size > blen) return false;
     if (header->current_lba != header_lba || header->backup_lba >= disk_sectors || header->first_usable_lba > header->last_usable_lba || header->last_usable_lba >= disk_sectors) return false;
@@ -300,7 +300,7 @@ static bool read_gpt_header_usb(int disk_index, uint64_t header_lba, uint64_t di
 }
 
 static uint8_t *read_gpt_entries_usb(int disk_index, uint64_t disk_sectors, const gpt_header_t *header, uint64_t *entries_size) {
-    uint32_t blen = get_usb_bot_block_size(disk_index);
+    uint32_t blen = get_usb_storage_block_size(disk_index);
     if (blen == 0) return 0;
     if (header->entry_size < GPT_MIN_ENTRY_SIZE || header->entry_size % 8 || !header->entry_count) return 0;
     if (header->entry_count > UINT64_MAX / header->entry_size) return 0;
@@ -310,14 +310,14 @@ static uint8_t *read_gpt_entries_usb(int disk_index, uint64_t disk_sectors, cons
     if (header->entry_lba >= disk_sectors || entry_sectors > disk_sectors - header->entry_lba) return 0;
     uint8_t *entries = malloc(*entries_size);
     if (!entries) return 0;
-    uint64_t result = read_usb_bot_device(entries, *entries_size, header->entry_lba * blen, disk_index);
+    uint64_t result = read_usb_storage_device(entries, *entries_size, header->entry_lba * blen, disk_index, 0);
     if (result == *entries_size && compute_gpt_crc32(entries, *entries_size) == header->entry_crc32) return entries;
     free(entries);
     return 0;
 }
 
 bool probe_gpt_for_usb_disk(int disk_index, const char *disk_name, uint64_t disk_size) {
-    uint32_t blen = get_usb_bot_block_size(disk_index);
+    uint32_t blen = get_usb_storage_block_size(disk_index);
     if (!disk_name || blen == 0) return false;
     if (disk_size < (uint64_t)blen * 2) return false;
     uint64_t disk_sectors = disk_size / blen;

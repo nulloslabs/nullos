@@ -26,15 +26,16 @@ typedef struct {
     uint64_t next;
 } pmm_buddy_links_t;
 
-void* pmalloc(void);
-void* pmalloc_dma32(void);
-void* prealloc(uint64_t count);
-void* prealloc_dma32(uint64_t count);
-void pfree(void *phys_addr);
-void pfree_range(void *phys_addr, uint64_t size);
-bool pref(void *phys_addr);
 uint64_t get_total_pmm_memory(void);
 uint64_t get_free_pmm_memory(void);
 uint64_t get_used_pmm_memory(void);
+void *pmalloc(void);
+void *pmalloc_dma32(void);
+void *prealloc(uint64_t count);
+void *prealloc_dma32(uint64_t count);
+void *pcalloc(uint64_t count);
+void pfree(void *phys_addr);
+void pfree_range(void *phys_addr, uint64_t size);
+bool pref(void *phys_addr);
 void init_pmm(void);
 #endif

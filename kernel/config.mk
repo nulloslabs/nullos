@@ -42,29 +42,29 @@ UACPI_OUTFILE = uacpi/build/libuacpi.a
 
 SUBDIR = kernel
 
-# Only top-level kernel invocation checks DEBUG mismatch; subdirs inherit via export
-ifeq ($(notdir $(CURDIR)),kernel)
-CHECK_OBJ := $(firstword $(wildcard main/*.o io/*.o mm/*.o syscalls/*.o))
-ifneq ($(CHECK_OBJ),)
-	DEBUG_VAL := $(DEBUG)
-	ifneq ($(DEBUG_VAL),$(shell $(OBJDUMP) $(OBJDUMP_FLAGS) -h $(CHECK_OBJ) 2>/dev/null | grep -q '\.debug' && printf 1 || printf 0))
-		FORCE_REBUILD := FORCE
-	endif
+CONFIG_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
+CHECK_OBJ := $(foreach group,main io mm syscalls syscalls/impls,$(firstword $(wildcard $(CONFIG_DIR)/$(group)/*.o)))
+DEBUG_MISMATCH := $(shell \
+	wanted=$(DEBUG); \
+	for obj in $(CHECK_OBJ); do \
+		if $(OBJDUMP) $(OBJDUMP_FLAGS) -h "$$obj" 2>/dev/null | grep -q '\.debug'; then got=1; else got=0; fi; \
+		if [ "$$got" != "$$wanted" ]; then echo FORCE; break; fi; \
+	done)
+ifneq ($(DEBUG_MISMATCH),)
+	FORCE_REBUILD := FORCE
 endif
 
-UACPI_CHECK_OBJ := $(firstword $(wildcard uacpi/build/*.o))
+UACPI_CHECK_OBJ := $(firstword $(wildcard $(CONFIG_DIR)/uacpi/build/*.o))
 ifneq ($(UACPI_CHECK_OBJ),)
 	UACPI_DEBUG_VAL := $(DEBUG)
 	ifneq ($(UACPI_DEBUG_VAL),$(shell $(OBJDUMP) $(OBJDUMP_FLAGS) -h $(UACPI_CHECK_OBJ) 2>/dev/null | grep -q '\.debug' && printf 1 || printf 0))
 		UACPI_FORCE_REBUILD := FORCE
 	endif
 endif
-endif
-export FORCE_REBUILD
-export UACPI_FORCE_REBUILD
 
+undefine CONFIG_DIR
 undefine CHECK_OBJ
-undefine DEBUG_VAL
+undefine DEBUG_MISMATCH
 undefine UACPI_CHECK_OBJ
 undefine UACPI_DEBUG_VAL
 undefine KERNEL_RELEASE

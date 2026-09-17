@@ -33,7 +33,7 @@ static const char *get_iso9660_device_name(const char *source) {
 static int read_iso9660_checked(const iso9660_mount_t *mnt, void *buf, uint64_t count, uint64_t offset) {
     if (!mnt || !buf) return -EINVAL;
     if (offset > mnt->device_size || count > mnt->device_size - offset) return -EIO;
-    uint64_t got = read_device(mnt->device, buf, count, offset);
+    uint64_t got = read_device(mnt->device, buf, count, offset, 0);
     if ((int64_t)got < 0) return (int)(int64_t)got;
     return got == count ? 0 : -EIO;
 }

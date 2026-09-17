@@ -27,7 +27,7 @@
 #include <uacpi/status.h>
 
 static void (*msi_handlers[256])(void) = {0};
-static intx_chain_t intx_chains[16] = {0};
+static intx_chain_t intx_chains[LEGACY_IRQ_COUNT] = {0};
 static uint8_t next_msi_vector = MSI_VECTOR_BASE;
 static volatile uint8_t *g_ecam_virt = 0;
 static uint64_t g_ecam_phys = 0;
@@ -55,7 +55,7 @@ static volatile uint8_t* get_ecam_ptr(uint8_t bus, uint8_t dev, uint8_t func, ui
     return g_ecam_virt + total;
 }
 
-static uint8_t pci_find_cap(pci_device_t *dev, uint8_t cap_id) {
+static uint8_t find_pci_cap(pci_device_t *dev, uint8_t cap_id) {
     uint32_t status_cmd = read_pci(dev->bus, dev->dev, dev->func, 0x04);
     if (!(status_cmd & (1 << 20))) return 0;
     uint8_t ptr = read_pci(dev->bus, dev->dev, dev->func, 0x34) & 0xFC;
@@ -171,7 +171,7 @@ uint16_t find_pcie_ext_cap(uint8_t bus, uint8_t dev, uint8_t func, uint16_t cap_
 }
 
 void dispatch_pci(uint8_t vector) {
-    if (vector >= LEGACY_IRQ_BASE && vector < LEGACY_IRQ_BASE + 16) {
+    if (vector >= LEGACY_IRQ_BASE && vector < LEGACY_IRQ_BASE + LEGACY_IRQ_COUNT) {
         intx_chain_t *c = &intx_chains[vector - LEGACY_IRQ_BASE];
         for (int i = 0; i < c->count; i++) {
             if (c->fns[i]) c->fns[i]();
@@ -187,7 +187,7 @@ void register_pci_msi_handler(uint8_t vector, void (*handler)(void)) {
 }
 
 void register_pci_intx_handler(uint8_t irq_line, void (*handler)(void)) {
-    if (irq_line >= 16) return;
+    if (irq_line >= LEGACY_IRQ_COUNT) return;
     intx_chain_t *c = &intx_chains[irq_line];
     if (c->count < MAX_INTX_SHARED) c->fns[c->count++] = handler;
 }
@@ -260,7 +260,7 @@ pci_device_t* find_pci_class(uint8_t class, uint8_t subclass, uint8_t progif) {
 }
 
 void set_pci_d0(pci_device_t *dev) {
-    uint8_t cap = pci_find_cap(dev, 0x01);
+    uint8_t cap = find_pci_cap(dev, 0x01);
     if (!cap) return;
     uint32_t pmcsr = read_pci(dev->bus, dev->dev, dev->func, cap + 4);
     if ((pmcsr & 0x03) != 0) {
@@ -270,15 +270,15 @@ void set_pci_d0(pci_device_t *dev) {
     }
 }
 
-uint8_t pci_get_intx_vector(pci_device_t *dev) {
+uint8_t get_pci_intx_vector(pci_device_t *dev) {
     uint32_t r = read_pci(dev->bus, dev->dev, dev->func, 0x3C);
     uint8_t line = r & 0xFF;
     if (line == 0xFF) return 0;
     return LEGACY_IRQ_BASE + line;
 }
 
-uint8_t pci_enable_msi(pci_device_t *dev) {
-    uint8_t cap = pci_find_cap(dev, 0x05);
+uint8_t enable_pci_msi(pci_device_t *dev) {
+    uint8_t cap = find_pci_cap(dev, 0x05);
     if (!cap) return 0;
     if (next_msi_vector >= MSI_VECTOR_END) {
         log("pci: out of msi vectors\n");
@@ -306,13 +306,18 @@ uint8_t pci_enable_msi(pci_device_t *dev) {
     return vector;
 }
 
-uint8_t pci_request_irq(pci_device_t *dev, void (*handler)(void)) {
-    uint8_t v = pci_enable_msi(dev);
+uint8_t request_pci_irq(pci_device_t *dev, void (*handler)(void)) {
+    uint8_t v = enable_pci_msi(dev);
     if (v) { register_pci_msi_handler(v, handler); return v; }
     set_pci_intx_disable(dev, 0);
-    uint32_t r = read_pci(dev->bus, dev->dev, dev->func, 0x3C);
-    uint8_t line = r & 0xFF;
+    uint8_t pin = read_pci(dev->bus, dev->dev, dev->func, 0x3D) & 0xFF;
+    uint8_t line = read_pci(dev->bus, dev->dev, dev->func, 0x3C) & 0xFF;
     if (line == 0xFF) return 0;
+    // q35/ICH9 wires INTx of slot S pin P to GSI 20 + (S + P - 1) % 4, and
+    // devices like QEMU's ac97 leave the line register at 0
+    if (line == 0 || line >= LEGACY_IRQ_COUNT) {
+        line = 20 + (dev->dev + (pin ? pin - 1 : 0)) % 4;
+    }
     register_pci_intx_handler(line, handler);
     return LEGACY_IRQ_BASE + line;
 }

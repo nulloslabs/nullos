@@ -241,7 +241,7 @@ void init_e1000(pci_device_t *dev) {
     write_mmio32(E1000_IMS, 0xFF & ~4);
     read_mmio32(E1000_ICR); // clear pending
 
-    pci_request_irq(dev, poll_e1000);
+    request_pci_irq(dev, poll_e1000);
 
     log("e1000: initialized e1000\n");
 

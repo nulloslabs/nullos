@@ -14,7 +14,7 @@ CURL = curl
 CURLFLAGS = --retry 3 --retry-delay 2 --retry-all-errors
 
 # TODO: Use my own packages instead of Arch packages
-PACKAGE_NAMES := core/glibc core/ncurses core/readline core/bash core/nano extra/busybox
+PACKAGE_NAMES := core/glibc core/ncurses core/readline core/bash core/nano extra/busybox extra/alsa-utils
 
 SUBDIR = initrd
 OUTFILE = initrd.cpio.gz

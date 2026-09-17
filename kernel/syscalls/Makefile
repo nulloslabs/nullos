@@ -34,3 +34,6 @@ clean:
 mrproper: clean
 
 .PHONY: all clean mrproper
+
+FORCE:
+.PHONY: FORCE

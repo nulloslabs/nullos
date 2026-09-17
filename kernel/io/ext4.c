@@ -30,7 +30,7 @@ static uint64_t combine_u32s(uint32_t lo, uint32_t hi) {
 static int read_checked_device(const ext4_mount_t *mnt, void *buf, uint64_t count, uint64_t offset) {
     if (!mnt || !buf) return -EINVAL;
     if (offset > mnt->device_size || count > mnt->device_size - offset) return -EIO;
-    uint64_t got = read_device(mnt->device, buf, count, offset);
+    uint64_t got = read_device(mnt->device, buf, count, offset, 0);
     if ((int64_t)got < 0) return (int)(int64_t)got;
     return got == count ? 0 : -EIO;
 }

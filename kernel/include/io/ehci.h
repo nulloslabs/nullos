@@ -159,7 +159,7 @@ typedef struct {
     void *interrupt_buf;
     uint16_t interrupt_len;
     bool interrupt_busy;
-    int keyboard_cursor;
+    int kbd_cursor;
     usb_hcd_t hcd;
     uint16_t present_ports;
     uint8_t num_ports;

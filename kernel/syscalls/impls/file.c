@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <signal.h>
+#include <fcntl.h>
 #include <flock.h>
 #include <time.h>
 #include <wait.h>
@@ -21,15 +22,16 @@
 #include <main/elf.h>
 #include <main/hostname.h>
 #include <main/timekeeping.h>
-#include <main/mp.h>
+#include <main/smp.h>
 #include <main/fd.h>
 #include <main/signal.h>
 #include <main/string.h>
 #include <io/fb.h>
 #include <io/devices.h>
 #include <io/devpts.h>
+#include <io/devtmpfs.h>
 #include <io/initrd.h>
-#include <io/keyboard.h>
+#include <io/kbd.h>
 #include <io/pty.h>
 #include <io/power.h>
 #include <io/net.h>
@@ -117,7 +119,7 @@ void sys_open(syscall_frame_t *frame) {
         frame->rax = (uint64_t)fd;
         return;
     } else if (is_devtmpfs_path(abs_path, rel_path)) {
-        if (rel_path[0] != '\0' && !device_exists_on_devtmpfs(rel_path)) {
+        if (rel_path[0] != '\0' && !device_exists_on_devtmpfs(rel_path) && !devtmpfs_is_dir(rel_path)) {
             initrd_file_t file = read_initrd(abs_path);
             if (!S_ISDIR(file.mode)) {
                 frame->rax = (uint64_t)-ENOENT;
@@ -146,15 +148,21 @@ void sys_open(syscall_frame_t *frame) {
             else          { ptm_path[4]='1'; ptm_path[5]='0'+(idx-10); ptm_path[6]='\0'; }
             int fd = alloc_fd(&current_task_ptr->fd_table, ptm_path, FD_PTY_MASTER, flags);
             if (fd < 0) { release_pty_master(idx); frame->rax = (uint64_t)fd; return; }
-            set_keyboard_pty(idx);
+            set_kbd_pty(idx);
             frame->rax = (uint64_t)fd;
             return;
         }
 
         int pty_idx = pty_slave_path_idx(rel_path);
         if (pty_idx >= 0) { int r = open_pty_slave(pty_idx); if (r < 0) { frame->rax = (uint64_t)r; return; } }
-        int fd = alloc_fd(&current_task_ptr->fd_table, abs_path, FD_DEV, flags);
+        void *dev_handle = 0;
+        if (open_devtmpfs_device(rel_path, &dev_handle) < 0) {
+            frame->rax = (uint64_t)-ENOMEM;
+            return;
+        }
+        int fd = alloc_fd_handle(&current_task_ptr->fd_table, abs_path, FD_DEV, flags, dev_handle);
         if (fd < 0 && pty_idx >= 0) release_pty_slave(pty_idx);
+        if (fd < 0 && dev_handle) release_devtmpfs_device(rel_path, dev_handle);
 
         if (fd >= 0 && pty_idx < 0) {
             int open_tty = tty_rel_to_idx(rel_path);
@@ -764,6 +772,8 @@ void sys_fcntl(syscall_frame_t *frame) {
                     if (!e) { frame->rax = (uint64_t)-ENOMEM; return; }
                     *e = *entry;
                     e->open = true;
+                    // the duplicate never inherits FD_CLOEXEC
+                    e->fd_flags &= ~FD_CLOEXEC;
                     table->entries[i] = e;
                     retain_fd_entry(e);
                     frame->rax = (uint64_t)i;
@@ -774,11 +784,33 @@ void sys_fcntl(syscall_frame_t *frame) {
             return;
         }
         case F_GETFD:
-            frame->rax = 0;
+            frame->rax = (uint64_t)entry->fd_flags;
             return;
         case F_SETFD:
+            entry->fd_flags = (uint32_t)arg & (FD_CLOEXEC | FD_CLOEXEC_EXEC);
             frame->rax = 0;
             return;
+        case F_DUPFD_CLOEXEC: {
+            int start = (int)arg;
+            if (start < 0 || start >= FD_MAX) { frame->rax = (uint64_t)-EINVAL; return; }
+            fd_table_t *table = &current_task_ptr->fd_table;
+            for (int i = start; i < FD_MAX; i++) {
+                if (!table->entries[i]) {
+                    fd_entry_t *e = malloc(sizeof(*e));
+                    if (!e) { frame->rax = (uint64_t)-ENOMEM; return; }
+                    *e = *entry;
+                    e->open = true;
+                    // unlike F_DUPFD, the duplicate is close-on-exec
+                    e->fd_flags = (e->fd_flags & ~FD_CLOEXEC) | FD_CLOEXEC;
+                    table->entries[i] = e;
+                    retain_fd_entry(e);
+                    frame->rax = (uint64_t)i;
+                    return;
+                }
+            }
+            frame->rax = (uint64_t)-EMFILE;
+            return;
+        }
         case F_GETFL:
             frame->rax = (uint64_t)entry->flags;
             return;
@@ -1086,21 +1118,26 @@ void sys_getdents(syscall_frame_t *frame) {
             index = 2;
             entry->offset = index;
         }
-        // Count total devices so sub-mount indexing is stable across calls
-        int total_devs = 0;
-        while (get_devtmpfs_device_name(total_devs)) total_devs++;
-        // Emit registered devices
-        int dev_idx = index - 2;
-        while (dev_idx < total_devs) {
-            const char *devname = get_devtmpfs_device_name(dev_idx);
-            if (!devname) break;
-            if (!emit_dirent(bufp, &written, buflen, (uint64_t)(index + 1), (uint64_t)(index + 1), DT_CHR, devname)) break;
-            dev_idx++;
+        // Count listed children so sub-mount indexing is stable across calls
+        int total_kids = 0;
+        {
+            char kid_name[65];
+            bool kid_dir = false;
+            while (get_devtmpfs_dirent(rel, total_kids, kid_name, sizeof(kid_name), &kid_dir) == 0) total_kids++;
+        }
+        // Emit this directory's children (synthesized subdirs as DT_DIR)
+        int kid_idx = index - 2;
+        while (kid_idx < total_kids) {
+            char kid_name[65];
+            bool kid_dir = false;
+            if (get_devtmpfs_dirent(rel, kid_idx, kid_name, sizeof(kid_name), &kid_dir) < 0) break;
+            if (!emit_dirent(bufp, &written, buflen, (uint64_t)(index + 1), (uint64_t)(index + 1), kid_dir ? DT_DIR : DT_CHR, kid_name)) break;
+            kid_idx++;
             index++;
             entry->offset = index;
         }
         // Emit sub-mount directories (e.g. /dev/pts under /dev)
-        int sub_idx = (index - 2) - total_devs;
+        int sub_idx = (index - 2) - total_kids;
         if (sub_idx < 0) sub_idx = 0;
         while (1) {
             char sub_name[64];
@@ -2007,21 +2044,26 @@ void sys_getdents64(syscall_frame_t *frame) {
             index = 2;
             entry->offset = index;
         }
-        // Count total devices so sub-mount indexing is stable across calls
-        int total_devs = 0;
-        while (get_devtmpfs_device_name(total_devs)) total_devs++;
-        // Emit registered devices
-        int dev_idx = index - 2;
-        while (dev_idx < total_devs) {
-            const char *devname = get_devtmpfs_device_name(dev_idx);
-            if (!devname) break;
-            if (!emit_dirent64(bufp, &written, buflen, (uint64_t)(index + 1), (uint64_t)(index + 1), DT_CHR, devname)) break;
-            dev_idx++;
+        // Count listed children so sub-mount indexing is stable across calls
+        int total_kids = 0;
+        {
+            char kid_name[65];
+            bool kid_dir = false;
+            while (get_devtmpfs_dirent(rel, total_kids, kid_name, sizeof(kid_name), &kid_dir) == 0) total_kids++;
+        }
+        // Emit this directory's children (synthesized subdirs as DT_DIR)
+        int kid_idx = index - 2;
+        while (kid_idx < total_kids) {
+            char kid_name[65];
+            bool kid_dir = false;
+            if (get_devtmpfs_dirent(rel, kid_idx, kid_name, sizeof(kid_name), &kid_dir) < 0) break;
+            if (!emit_dirent64(bufp, &written, buflen, (uint64_t)(index + 1), (uint64_t)(index + 1), kid_dir ? DT_DIR : DT_CHR, kid_name)) break;
+            kid_idx++;
             index++;
             entry->offset = index;
         }
         // Emit sub-mount directories (e.g. /dev/pts under /dev)
-        int sub_idx = (index - 2) - total_devs;
+        int sub_idx = (index - 2) - total_kids;
         if (sub_idx < 0) sub_idx = 0;
         while (1) {
             char sub_name[64];
@@ -2134,7 +2176,7 @@ void sys_openat(syscall_frame_t *frame) {
 
     char rel_path[256];
     if (is_devtmpfs_path(abs_path, rel_path)) {
-        if (rel_path[0] != '\0' && !device_exists_on_devtmpfs(rel_path)) {
+        if (rel_path[0] != '\0' && !device_exists_on_devtmpfs(rel_path) && !devtmpfs_is_dir(rel_path)) {
             initrd_file_t file = read_initrd(abs_path);
             if (!S_ISDIR(file.mode)) {
                 frame->rax = (uint64_t)-ENOENT;
@@ -2166,9 +2208,15 @@ void sys_openat(syscall_frame_t *frame) {
         }
         int pty_idx = pty_slave_path_idx(rel_path);
         if (pty_idx >= 0) { int r = open_pty_slave(pty_idx); if (r < 0) { frame->rax = (uint64_t)r; return; } }
-        int fd = alloc_fd(&current_task_ptr->fd_table, abs_path, FD_DEV, flags);
-        if (fd < 0 && pty_idx >= 0)
+        void *dev_handle = 0;
+        if (open_devtmpfs_device(rel_path, &dev_handle) < 0) {
+            frame->rax = (uint64_t)-ENOMEM;
+            return;
+        }
+        int fd = alloc_fd_handle(&current_task_ptr->fd_table, abs_path, FD_DEV, flags, dev_handle);
+        if (fd < 0 && pty_idx >= 0 && pty_idx < NUM_PTYS)
             release_pty_slave(pty_idx);
+        if (fd < 0 && dev_handle) release_devtmpfs_device(rel_path, dev_handle);
         frame->rax = (uint64_t)fd;
         return;
     } else if (is_devpts_path(abs_path, rel_path)) {

@@ -133,7 +133,8 @@ static int read_atapi_index(int index, void *data, uint64_t count, uint64_t offs
 
 int read_atapi(void *data, uint64_t count, uint64_t offset) { return read_atapi_index(first_atapi, data, count, offset); }
 
-uint64_t read_atapi_device(void *data, uint64_t count, uint64_t offset, int index) {
+uint64_t read_atapi_device(void *data, uint64_t count, uint64_t offset, int index, void *handle) {
+    (void)handle;
     if (index < 0 || index >= IDE_MAX_DEVICES || !atapi_ready[index]) return (uint64_t)-ENODEV;
     uint64_t size = atapi_sectors[index] * ATAPI_SECTOR_SIZE;
     if (offset >= size) return 0;
@@ -142,7 +143,8 @@ uint64_t read_atapi_device(void *data, uint64_t count, uint64_t offset, int inde
     return status < 0 ? (uint64_t)status : count;
 }
 
-uint64_t write_atapi_device(const void *data, uint64_t count, uint64_t offset, int index) {
+uint64_t write_atapi_device(const void *data, uint64_t count, uint64_t offset, int index, void *handle) {
+    (void)handle;
     (void)data;
     (void)count;
     (void)offset;

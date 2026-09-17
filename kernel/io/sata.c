@@ -27,7 +27,8 @@ bool make_sata_disk_name(char *name, uint64_t name_size, int index) {
     return true;
 }
 
-uint64_t read_sata_device(void *data, uint64_t count, uint64_t offset, int index) {
+uint64_t read_sata_device(void *data, uint64_t count, uint64_t offset, int index, void *handle) {
+    (void)handle;
     if (index < 0 || index >= sata_devices_found || !sata_sizes[index]) return (uint64_t)-ENODEV;
     if (!count) return 0;
     if (!data) return (uint64_t)-EINVAL;
@@ -61,7 +62,8 @@ uint64_t read_sata_device(void *data, uint64_t count, uint64_t offset, int index
     return count;
 }
 
-uint64_t write_sata_device(const void *data, uint64_t count, uint64_t offset, int index) {
+uint64_t write_sata_device(const void *data, uint64_t count, uint64_t offset, int index, void *handle) {
+    (void)handle;
     if (index < 0 || index >= sata_devices_found || !sata_sizes[index]) return (uint64_t)-ENODEV;
     if (!count) return 0;
     if (!data) return (uint64_t)-EINVAL;

@@ -5,8 +5,9 @@
 
 #define MAX_PCI_DEVICES 256
 #define LEGACY_IRQ_BASE 32
-#define MSI_VECTOR_BASE 48
-#define MSI_VECTOR_END 96
+#define LEGACY_IRQ_COUNT 32
+#define MSI_VECTOR_BASE 64
+#define MSI_VECTOR_END 112
 #define MAX_INTX_SHARED 8
 #define PCIE_CFG_SIZE 4096
 #define PCIE_ECAM_BYTES_PER_BUS 1048576
@@ -52,8 +53,8 @@ uint16_t vendor_pci(uint8_t bus, uint8_t dev, uint8_t func);
 pci_device_t* find_pci(uint16_t vendor, uint16_t device);
 pci_device_t* find_pci_class(uint8_t class, uint8_t subclass, uint8_t progif);
 void set_pci_d0(pci_device_t *dev);
-uint8_t pci_get_intx_vector(pci_device_t *dev);
-uint8_t pci_enable_msi(pci_device_t *dev);
-uint8_t pci_request_irq(pci_device_t *dev, void (*handler)(void));
+uint8_t get_pci_intx_vector(pci_device_t *dev);
+uint8_t enable_pci_msi(pci_device_t *dev);
+uint8_t request_pci_irq(pci_device_t *dev, void (*handler)(void));
 void init_pci(void);
 void init_pci_drivers(void);

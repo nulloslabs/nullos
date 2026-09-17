@@ -9,12 +9,12 @@
 #include <main/sched.h>
 #include <main/signal.h>
 #include <io/tty.h>
-#include <io/keyboard.h>
+#include <io/kbd.h>
 #include <io/pty.h>
 #include <io/terminal.h>
 
 tty_t ttys[NUM_TTYS];
-int keyboard_tty = 1;
+int kbd_tty = 1;
 spinlock_t tty_lock = SPINLOCK_INIT;
 
 static bool extended_pending = false;
@@ -47,10 +47,10 @@ tty_t *get_tty(int idx) {
 // Write a string directly into the active TTY's input ring.
 // Used to inject multi-byte ANSI escape sequences for special keys.
 static void write_tty_input_str(const char *s) {
-    if (keyboard_pty >= 0) {
-        write_tty_ring(&ptys[keyboard_pty].s2m, s, (int)strlen(s));
+    if (kbd_pty >= 0) {
+        write_tty_ring(&ptys[kbd_pty].s2m, s, (int)strlen(s));
     } else {
-        tty_t *t = &ttys[keyboard_tty];
+        tty_t *t = &ttys[kbd_tty];
         while (*s) {
             write_tty_ring(&t->input, s, 1);
             s++;
@@ -78,9 +78,9 @@ int set_tty_keymap(int table, int key, uint16_t value) {
 }
 
 void tty_process_scancode(uint8_t sc) {
-    handle_keyboard_cad_scancode(sc);
+    handle_kbd_cad_scancode(sc);
 
-    tty_t *t = &ttys[keyboard_tty];
+    tty_t *t = &ttys[kbd_tty];
     if (t->kb_mode == K_RAW || t->kb_mode == K_MEDIUMRAW) {
         uint64_t irq;
         spin_lock_irqsave(&tty_lock, &irq);
@@ -159,7 +159,7 @@ void tty_process_scancode(uint8_t sc) {
         const char *fseq = NULL;
         int table = (kbd_alt_pressed() ? 8 : 0) | (kbd_ctrl_pressed() ? 4 : 0);
         uint16_t keymap_value = get_tty_keymap(table, sc);
-        if ((keymap_value & 0xFF00) == KBD_KEY_CONSOLE && (keymap_value & 0xFF) < NUM_TTYS - 1) { set_keyboard_tty((keymap_value & 0xFF) + 1); return; }
+        if ((keymap_value & 0xFF00) == KBD_KEY_CONSOLE && (keymap_value & 0xFF) < NUM_TTYS - 1) { set_kbd_tty((keymap_value & 0xFF) + 1); return; }
         switch (sc) {
             case 0x3B: fseq = "\033OP";  break; // F1
             case 0x3C: fseq = "\033OQ";  break; // F2
@@ -188,10 +188,10 @@ void tty_process_scancode(uint8_t sc) {
     if (c == 0) return;  // modifier press/release, caps lock, etc.
 
     // --- Alt+key: prefix with ESC (vim-style meta) ---
-    // keyboard.c tracks alt_pressed; we read it via extern below.
+    // kbd.c tracks alt_pressed; we read it via extern below.
     uint64_t irq;
     spin_lock_irqsave(&tty_lock, &irq);
-    t = &ttys[keyboard_tty];
+    t = &ttys[kbd_tty];
     tcflag_t lflags = t->termios.c_lflag;
     cc_t vintr = t->termios.c_cc[VINTR];
     cc_t vsusp = t->termios.c_cc[VSUSP];
@@ -200,25 +200,25 @@ void tty_process_scancode(uint8_t sc) {
     else if ((lflags & ISIG) && vsusp && c == (char)vsusp) sig = SIGTSTP;
     int echo = 0;
 
-    if (keyboard_pty >= 0) {
+    if (kbd_pty >= 0) {
         // Keyboard input goes to the PTY master's s2m ring (simulates a
         // terminal emulator writing to the master side).
         if (sig) {
-            signal_pty_pgrp(keyboard_pty, sig);
+            signal_pty_pgrp(kbd_pty, sig);
             if (!(lflags & NOFLSH)) {
-                ptys[keyboard_pty].m2s.head = ptys[keyboard_pty].m2s.tail = 0;
+                ptys[kbd_pty].m2s.head = ptys[kbd_pty].m2s.tail = 0;
             }
             echo = (lflags & ECHO) != 0;
         } else {
             if (kbd_alt_pressed()) {
                 char esc = '\033';
-                write_tty_ring(&ptys[keyboard_pty].s2m, &esc, 1);
+                write_tty_ring(&ptys[kbd_pty].s2m, &esc, 1);
             }
-            write_tty_ring(&ptys[keyboard_pty].s2m, &c, 1);
+            write_tty_ring(&ptys[kbd_pty].s2m, &c, 1);
             echo = (lflags & ECHO) != 0;
         }
     } else if (sig) {
-        signal_tty_pgrp(keyboard_tty, sig);
+        signal_tty_pgrp(kbd_tty, sig);
         if (!(lflags & NOFLSH)) {
             t->input.head = t->input.tail = 0;
         }
@@ -271,10 +271,10 @@ int signal_tty_pgrp(int tty_idx, int sig) {
     return delivered;
 }
 
-void set_keyboard_tty(int tty_idx) {
+void set_kbd_tty(int tty_idx) {
     if (tty_idx >= 0 && tty_idx < NUM_TTYS) {
-        keyboard_tty = tty_idx;
-        keyboard_pty = -1;  // Switching to a real TTY disables PTY keyboard
+        kbd_tty = tty_idx;
+        kbd_pty = -1;  // Switching to a real TTY disables PTY keyboard
         switch_terminal_tty(tty_idx);
     }
 }

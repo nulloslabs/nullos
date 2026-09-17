@@ -16,16 +16,16 @@ static void process_power_button(void *context) {
 
 static uacpi_interrupt_ret handle_power_button(uacpi_handle context) {
     (void)context;
-    if (!queue_kernel_work(process_power_button, NULL)) log("acpi: power button work queue is full\n");
+    if (!queue_kernel_work(process_power_button, NULL)) log("power button: power button work queue is full\n");
     return UACPI_INTERRUPT_HANDLED;
 }
 
 void init_power_button(void) {
     uacpi_status status = uacpi_install_fixed_event_handler(UACPI_FIXED_EVENT_POWER_BUTTON, handle_power_button, NULL);
     if (uacpi_unlikely_error(status)) {
-        log("acpi: power button initialization failed: %s\n", uacpi_status_to_string(status));
+        log("power button: power button initialization failed: %s\n", uacpi_status_to_string(status));
         return;
     }
 
-    log("acpi: initialized power button\n");
+    log("power button: initialized power button\n");
 }

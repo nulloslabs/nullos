@@ -152,7 +152,7 @@ typedef struct {
     uint8_t *pending_buffer;
     uint16_t pending_length;
     uint16_t present_ports;
-    int keyboard_cursor;
+    int kbd_cursor;
     uint8_t num_ports;
     bool control_busy;
     bool initialized;

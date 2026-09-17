@@ -20,7 +20,7 @@ typedef struct {
 } pty_t;
 
 extern pty_t ptys[NUM_PTYS];
-extern int keyboard_pty;
+extern int kbd_pty;
 extern spinlock_t pty_lock;
 
 int alloc_pty(void);
@@ -35,6 +35,6 @@ pty_t *get_pty(int idx);
 int signal_pty_pgrp(int pty_idx, int sig);
 int read_pty_master(int idx, char *buf, int len);
 int write_pty_master(int idx, const char *buf, int len);
-void set_keyboard_pty(int pty_idx);
-void clear_keyboard_pty(int pty_idx);
+void set_kbd_pty(int pty_idx);
+void clear_kbd_pty(int pty_idx);
 void init_pty(void);

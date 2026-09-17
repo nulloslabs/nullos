@@ -39,20 +39,19 @@
 // APIC modes detected via CPUID
 enum apic_mode {
     APIC_NONE = 0, // No APIC, use 8259 PIC
-    APIC_XAPIC, // xAPIC (MMIO-based)
-    APIC_X2APIC // x2APIC (MSR-based)
+    APIC_XAPIC,    // xAPIC (MMIO-based)
+    APIC_X2APIC    // x2APIC (MSR-based)
 };
 
 extern enum apic_mode current_apic_mode;
 extern volatile uint8_t *lapic_base;
 
-// Common API (dispatches based on current_apic_mode)
 void eoi_apic(void);
 uint32_t get_apic_id(void);
-void init_apic_timer(uint32_t hz);
-void start_apic_timer_for_cpu(void);
 void send_apic_ipi(uint32_t apic_id, uint32_t vector);
 void send_init_apic(uint32_t apic_id);
 enum apic_mode detect_apic(void);
+void start_apic_timer_for_cpu(void);
 void init_apic_for_cpu(void);
+void init_apic_timer(uint32_t hz);
 void init_apic(void);

@@ -31,7 +31,7 @@
 #include <io/devtmpfs.h>
 #include <io/pts_devices.h>
 #include <io/terminal.h>
-#include <io/keyboard.h>
+#include <io/kbd.h>
 #include <io/pty.h>
 #include <io/time.h>
 #include <io/power.h>
@@ -229,11 +229,11 @@ void sys_reboot(syscall_frame_t *frame) {
             __builtin_unreachable();
         }
         case LINUX_REBOOT_CMD_CAD_ON:
-            set_keyboard_cad_reboot(true);
+            set_kbd_cad_reboot(true);
             frame->rax = 0;
             return;
         case LINUX_REBOOT_CMD_CAD_OFF:
-            set_keyboard_cad_reboot(false);
+            set_kbd_cad_reboot(false);
             frame->rax = 0;
             return;
         default:

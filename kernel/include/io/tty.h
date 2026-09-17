@@ -29,7 +29,7 @@ typedef struct {
 } tty_t;
 
 extern tty_t ttys[NUM_TTYS];
-extern int keyboard_tty;
+extern int kbd_tty;
 extern spinlock_t tty_lock;
 
 tty_t *get_tty(int idx);
@@ -39,7 +39,7 @@ void inject_tty_input(const char *s);
 int get_tty_ring_count(tty_ring_t *r);
 void tty_process_scancode(uint8_t sc);
 int signal_tty_pgrp(int tty_idx, int sig);
-void set_keyboard_tty(int tty_idx);
+void set_kbd_tty(int tty_idx);
 uint16_t get_tty_keymap(int table, int key);
 int set_tty_keymap(int table, int key, uint16_t value);
 void init_tty(void);

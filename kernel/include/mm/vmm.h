@@ -39,8 +39,8 @@ typedef struct {
 
 extern vmm_context_t kernel_context;
 
-void* phys_to_virt(uint64_t phys);
-uint64_t virt_to_phys(void* virt);
+void *phys_to_virt(uint64_t phys);
+uint64_t virt_to_phys(void *virt);
 void set_vmm_user(vmm_context_t* ctx, uint64_t virt);
 bool map_vmm(vmm_context_t* ctx, uint64_t virt, uint64_t phys, uint64_t flags);
 void unmap_vmm(vmm_context_t* ctx, uint64_t virt);
@@ -48,8 +48,8 @@ uint64_t get_vmm_phys(vmm_context_t* ctx, uint64_t virt);
 bool vmm_user_range_valid(vmm_context_t *ctx, uint64_t addr, size_t size, bool write);
 
 // Context-aware memory access
-int read_vmm(vmm_context_t* ctx, void* dest, uint64_t virt_src, size_t size);
-int write_vmm(vmm_context_t* ctx, uint64_t virt_dest, const void* src, size_t size);
+int read_vmm(vmm_context_t* ctx, void *dest, uint64_t virt_src, size_t size);
+int write_vmm(vmm_context_t* ctx, uint64_t virt_dest, const void *src, size_t size);
 int memset_vmm(vmm_context_t* ctx, uint64_t virt_dest, int val, size_t size);
 
 void switch_vmm_context(vmm_context_t* ctx);
@@ -57,20 +57,21 @@ vmm_context_t* create_vmm_context(void);
 bool retain_vmm_context(vmm_context_t* ctx);
 void destroy_vmm_context(vmm_context_t* ctx);
 vmm_context_t* clone_vmm_context(vmm_context_t* parent);
-void* vmalloc_ex(vmm_context_t* ctx, size_t size, uint64_t flags);
-void* vmalloc_user_ex(vmm_context_t* ctx, size_t size);
+void *vmalloc_ex(vmm_context_t* ctx, size_t size, uint64_t flags);
+void *vmalloc_user_ex(vmm_context_t* ctx, size_t size);
 
-void* vmap_mmio(uint64_t phys, size_t num_pages);
-void vunmap_mmio(void* addr, size_t num_pages);
+void *vmap_mmio(uint64_t phys, size_t num_pages);
+void vunmap_mmio(void *addr, size_t num_pages);
 
-void* vmap_user_at(vmm_context_t* ctx, uint64_t virt, size_t size, uint64_t flags);
-void* vmap_user_range(vmm_context_t* ctx, size_t size, uint64_t flags);
-void* vmap_user_range_32(vmm_context_t* ctx, size_t size, uint64_t flags);
+void *vmap_user_at(vmm_context_t* ctx, uint64_t virt, size_t size, uint64_t flags);
+void *vmap_user_range(vmm_context_t* ctx, size_t size, uint64_t flags);
+void *vmap_user_range_32(vmm_context_t* ctx, size_t size, uint64_t flags);
 bool  reserve_vmm(vmm_context_t* ctx, uint64_t virt, uint64_t flags);
 uint64_t get_vmm_pte(vmm_context_t* ctx, uint64_t virt);
 
-void* vmalloc(size_t size);
-void* vmalloc_user(size_t size);
-void* vrealloc(void* ptr, size_t size);
-void vfree(void* ptr);
+void *vmalloc(size_t size);
+void *vmalloc_user(size_t size);
+void *vrealloc(void *ptr, size_t size);
+void *vcalloc(size_t nmemb, size_t size);
+void vfree(void *ptr);
 void init_vmm(void);

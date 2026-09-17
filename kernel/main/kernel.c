@@ -11,7 +11,7 @@
 #include <main/sse.h>
 #include <main/machine_info.h>
 #include <main/halt.h>
-#include <main/mp.h>
+#include <main/smp.h>
 #include <main/elf.h>
 #include <main/string.h>
 #include <main/madt.h>
@@ -28,6 +28,7 @@
 #include <io/dhcp.h>
 #include <io/hpet.h>
 #include <io/rtc.h>
+#include <io/snd.h>
 #include <io/fonts.h>
 #include <io/pci.h>
 #include <io/pic.h>
@@ -39,7 +40,7 @@
 #include <io/pty.h>
 #include <io/serial.h>
 #include <io/tmpfs.h>
-#include <io/ps2_keyboard.h>
+#include <io/ps2_kbd.h>
 #include <mm/mm.h>
 #include <mm/kstack.h>
 #include <mm/pmm.h>
@@ -80,8 +81,9 @@ __attribute__((noreturn)) void kmain(void) {
     cache_utsname();
     init_tty();
     init_pty();
-    init_ps2_keyboard();
+    init_ps2_kbd();
     init_devices();
+    init_snd();
     init_tmpfs();
     init_sched();
     init_syscalls();
@@ -89,7 +91,7 @@ __attribute__((noreturn)) void kmain(void) {
 
     if (current_apic_mode != APIC_NONE) {
         init_apic_timer(250);
-        init_mp();
+        init_smp();
     }
 
     init_initrd();

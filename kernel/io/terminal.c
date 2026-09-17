@@ -3,6 +3,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <signal.h>
+#include <limine.h>
 #include <main/log.h>
 #include <main/string.h>
 #include <main/limine_req.h>
@@ -500,7 +501,7 @@ static void serial_replay_screen(void) {
     if (!cell_buffer || !cell_columns || !cell_rows) return;
 
     // Clear the serial terminal and move cursor to home
-    serial_puts(COM1, "\033[2J\033[H");
+    puts_serial(COM1, "\033[2J\033[H");
 
     for (uint64_t row = 0; row < cell_rows; row++) {
         // Find the last non-empty cell in this row to avoid trailing spaces
@@ -514,9 +515,9 @@ static void serial_replay_screen(void) {
             terminal_cell_t *cell = &cell_buffer[row * cell_columns + col];
             unsigned char ch = cell->character;
             if (ch < 0x20 || ch == 0x7F) ch = ' '; // sanitize control chars
-            serial_putchar(COM1, ch);
+            putc_serial(COM1, ch);
         }
-        serial_putchar(COM1, '\n');
+        putc_serial(COM1, '\n');
     }
 }
 
@@ -679,7 +680,7 @@ static void put_pixel_backbuffer(uint32_t x, uint32_t y, uint32_t color) {
     back_buffer[y * back_buffer_width + x] = color;
 }
 
-static void putchar_backbuffer(char c, int x, int y, uint32_t fg, uint32_t bg) {
+static void putc_backbuffer(char c, int x, int y, uint32_t fg, uint32_t bg) {
     if (!current_font_w || !current_font_h) return;
     if (!back_buffer_initialized || !back_buffer || !back_buffer_available) return;
 
@@ -797,12 +798,10 @@ static void int_to_str(uint64_t value, char *buf, size_t buf_size, int base, boo
     buf[j] = '\0';
 }
 
-static int putchar_unlocked(int c) {
-    unsigned char ch = (unsigned char)c;
-
-    if (ch == '\0' || ch == 0x7F || ch >= 0x80) return 0;
-    if (ch < 0x20) {
-        switch (ch) {
+static void putc_unlocked(char c) {
+    if (c == '\0' || c == 0x7F || (unsigned char)c >= 0x80) return;
+    if (c < 0x20) {
+        switch (c) {
             case '\a':
             case '\b':
             case '\t':
@@ -815,21 +814,21 @@ static int putchar_unlocked(int c) {
             case '\033':
                 break;
             default:
-                return 0;
+                return;
         }
     }
 
-    if (!font_pending_replaying) serial_putchar(COM1, ch);
+    if (!font_pending_replaying) putc_serial(COM1, c);
 
     if (!current_font_w || !current_font_h) {
         if (!font_pending_replaying) {
             if (font_pending_len < FONT_PENDING_BUFFER_SIZE) {
-                font_pending_buffer[font_pending_len++] = ch;
+                font_pending_buffer[font_pending_len++] = c;
             } else {
                 font_pending_overflowed = true;
             }
         }
-        return EOF;
+        return;
     }
 
     if (font_pending_len > 0 && !font_pending_replaying) {
@@ -838,14 +837,14 @@ static int putchar_unlocked(int c) {
         if (font_pending_overflowed) font_pending_overflowed = false;
 
         for (size_t i = 0; i < font_pending_len; i++) {
-            putchar_unlocked(font_pending_buffer[i]);
+            putc_unlocked(font_pending_buffer[i]);
         }
         font_pending_len = 0;
 
         font_pending_replaying = false;
     }
 
-    if (!fb_req.response || fb_req.response->framebuffer_count < 1) return EOF;
+    if (!fb_req.response || fb_req.response->framebuffer_count < 1) return;
     struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
 
     show_cursor(false);
@@ -856,7 +855,7 @@ static int putchar_unlocked(int c) {
         if (c == '0') acs_active = true;       // DEC Special Graphics
         else if (c == 'B') acs_active = false; // US ASCII
         if (cursor_enabled) show_cursor(true);
-        return ch; // designator byte itself is never drawn
+        return;
     }
 
     if (state == STATE_NORMAL) {
@@ -904,10 +903,10 @@ static int putchar_unlocked(int c) {
                     cell->background = eff_bg;
                 }
                 if (back_buffer_available) {
-                    putchar_backbuffer(draw_c, cursor_x, cursor_y, eff_fg, eff_bg);
+                    putc_backbuffer(draw_c, cursor_x, cursor_y, eff_fg, eff_bg);
                     flush_region_backbuffer(fb, cursor_x, cursor_y, current_font_w, current_font_h);
                 } else {
-                    putchar_fb(draw_c, cursor_x, cursor_y, eff_fg, eff_bg);
+                    putc_fb(draw_c, cursor_x, cursor_y, eff_fg, eff_bg);
                 }
                 last_printable_char = draw_c;
 
@@ -1449,7 +1448,7 @@ static int putchar_unlocked(int c) {
                 if (last_printable_char != 0) {
                     state = STATE_NORMAL;
                     for (int i = 0; i < n; i++) {
-                        putchar_unlocked(last_printable_char);
+                        putc_unlocked(last_printable_char);
                     }
                 }
             } else if (c == 'S') {
@@ -1579,7 +1578,7 @@ static int putchar_unlocked(int c) {
                         // DA: Primary Device Attributes query -> reply VT100 with AVO
                         const char *da_reply = "\033[?1;2c";
                         inject_tty_input(da_reply);
-                        serial_puts(COM1, da_reply);
+                        puts_serial(COM1, da_reply);
                     }
                 }
             }
@@ -1589,7 +1588,40 @@ static int putchar_unlocked(int c) {
         } else if (ansi_idx < 15) ansi_buffer[ansi_idx++] = c;
     }
     if (cursor_enabled) show_cursor(true);
-    return ch;
+}
+
+uint64_t write_terminal(const char *buf, uint64_t count, bool onlcr) {
+    if (!buf) return 0;
+    uint64_t rflags;
+    spin_lock_irqsave(&term_lock, &rflags);
+    begin_fb_batch();
+    for (uint64_t i = 0; i < count; i++) {
+        if (onlcr && buf[i] == '\n') putc_unlocked('\r');
+        putc_unlocked(buf[i]);
+    }
+    end_fb_batch();
+    spin_unlock_irqrestore(&term_lock, rflags);
+    return count;
+}
+
+uint64_t write_terminal_tty(int tty_idx, const char *buf, uint64_t count, bool onlcr) {
+    int previous_tty = active_terminal_tty;
+    if (tty_idx < 0 || tty_idx >= NUM_TTYS) tty_idx = previous_tty;
+    if (tty_idx != previous_tty) {
+        select_terminal_vt(tty_idx, false);
+        terminal_display_enabled = false;
+    }
+    uint64_t result = write_terminal(buf, count, onlcr);
+    if (tty_idx != previous_tty) {
+        terminal_display_enabled = true;
+        select_terminal_vt(previous_tty, true);
+    }
+    return result;
+}
+
+void switch_terminal_tty(int tty_idx) {
+    select_terminal_vt(tty_idx, true);
+    serial_replay_screen();
 }
 
 void sync_terminal(void) {
@@ -1765,7 +1797,7 @@ void sync_terminal(void) {
             for (uint64_t y = 0; y < fb->height; y++) for (uint64_t x = 0; x < fb->width; x++) put_pixel_fb(x, y, bg_color);
             for (uint64_t row = 0; row < cell_rows; row++) for (uint64_t col = 0; col < cell_columns; col++) {
                 terminal_cell_t *cell = &cell_buffer[row * cell_columns + col];
-                putchar_fb(cell->character, col * current_font_w, row * current_font_h, cell->foreground, cell->background);
+                putc_fb(cell->character, col * current_font_w, row * current_font_h, cell->foreground, cell->background);
             }
         }
         rendered_font_generation = current_font_generation;
@@ -1920,73 +1952,39 @@ void clear_screen(void) {
     spin_unlock_irqrestore(&term_lock, rflags);
 }
 
-int putchar(int c) {
+void putc(char c) {
     uint64_t rflags;
     spin_lock_irqsave(&term_lock, &rflags);
-    int ret = putchar_unlocked(c);
+    putc_unlocked(c);
     spin_unlock_irqrestore(&term_lock, rflags);
-    return ret;
 }
 
-uint64_t write_terminal(const char *buf, uint64_t count, bool onlcr) {
-    if (!buf) return 0;
-    uint64_t rflags;
-    spin_lock_irqsave(&term_lock, &rflags);
-    begin_fb_batch();
-    for (uint64_t i = 0; i < count; i++) {
-        if (onlcr && buf[i] == '\n') putchar_unlocked('\r');
-        putchar_unlocked(buf[i]);
-    }
-    end_fb_batch();
-    spin_unlock_irqrestore(&term_lock, rflags);
-    return count;
-}
-
-uint64_t write_terminal_tty(int tty_idx, const char *buf, uint64_t count, bool onlcr) {
-    int previous_tty = active_terminal_tty;
-    if (tty_idx < 0 || tty_idx >= NUM_TTYS) tty_idx = previous_tty;
-    if (tty_idx != previous_tty) {
-        select_terminal_vt(tty_idx, false);
-        terminal_display_enabled = false;
-    }
-    uint64_t result = write_terminal(buf, count, onlcr);
-    if (tty_idx != previous_tty) {
-        terminal_display_enabled = true;
-        select_terminal_vt(previous_tty, true);
-    }
-    return result;
-}
-
-void switch_terminal_tty(int tty_idx) {
-    select_terminal_vt(tty_idx, true);
-    serial_replay_screen();
-}
-
-int puts(const char *s) {
-    if (!s) return EOF;
+void puts(const char *s) {
+    if (!s) return;
 
     uint64_t rflags;
     spin_lock_irqsave(&term_lock, &rflags);
     begin_fb_batch();
 
     while (*s) { 
-        putchar_unlocked(*s); 
+        putc_unlocked(*s); 
         s++; 
     }
 
     end_fb_batch();
     spin_unlock_irqrestore(&term_lock, rflags);
-
-    return 0;
 }
 
-int vprintf(const char *fmt, va_list args) {
+int vprintf(const char *fmt, va_list ap) {
     int total_written = 0;
     uint64_t rflags;
     spin_lock_irqsave(&term_lock, &rflags);
     begin_fb_batch();
 
-    #define PUTC(c) do { putchar_unlocked(c); total_written++; } while(0)
+    #define PUTC(c) do { \
+                        putc_unlocked(c); \
+                        total_written++; \
+                    } while(0)
 
     for (const char *p = fmt; *p != '\0'; p++) {
         if (*p != '%') {
@@ -2030,16 +2028,12 @@ int vprintf(const char *fmt, va_list args) {
 
         switch (*p) {
             case 's': {
-                const char *s = va_arg(args, const char *);
+                const char *s = va_arg(ap, const char *);
                 if (!s) s = "(null)";
                 int len = strlen(s);
-                if (!left_align)
-                    while (width > len) { PUTC(pad_char); width--; }
-
+                if (!left_align) while (width > len) { PUTC(pad_char); width--; }
                 while (*s) { PUTC(*s); s++; }
-
-                if (left_align)
-                    while (width > len) { PUTC(' '); width--; }
+                if (left_align) while (width > len) { PUTC(' '); width--; }
                 break;
             }
             case 'o':
@@ -2052,17 +2046,17 @@ int vprintf(const char *fmt, va_list args) {
                 uint64_t val = 0;
                 if (is_signed) {
                     int64_t signed_val;
-                    if (length_modifier == 2) signed_val = va_arg(args, long long);
-                    else if (length_modifier == 1) signed_val = va_arg(args, long);
-                    else if (length_modifier == 3) signed_val = va_arg(args, ptrdiff_t);
-                    else signed_val = va_arg(args, int);
+                    if (length_modifier == 2) signed_val = va_arg(ap, long long);
+                    else if (length_modifier == 1) signed_val = va_arg(ap, long);
+                    else if (length_modifier == 3) signed_val = va_arg(ap, ptrdiff_t);
+                    else signed_val = va_arg(ap, int);
                     is_neg = signed_val < 0;
                     val = is_neg ? (uint64_t)(-(signed_val + 1)) + 1 : (uint64_t)signed_val;
                 } else {
-                    if (length_modifier == 2) val = va_arg(args, unsigned long long);
-                    else if (length_modifier == 1) val = va_arg(args, unsigned long);
-                    else if (length_modifier == 3) val = va_arg(args, size_t);
-                    else val = va_arg(args, unsigned int);
+                    if (length_modifier == 2) val = va_arg(ap, unsigned long long);
+                    else if (length_modifier == 1) val = va_arg(ap, unsigned long);
+                    else if (length_modifier == 3) val = va_arg(ap, size_t);
+                    else val = va_arg(ap, unsigned int);
                 }
                 int base = (*p == 'x' || *p == 'X') ? 16 : *p == 'o' ? 8 : 10;
                 char buf[64];
@@ -2079,7 +2073,7 @@ int vprintf(const char *fmt, va_list args) {
                 break;
             }
             case 'p': {
-                uint64_t x = (uint64_t)(uintptr_t)va_arg(args, void *);
+                uint64_t x = (uint64_t)(uintptr_t)va_arg(ap, void *);
                 char buf[64];
                 int_to_str(x, buf, 64, 16, false);
                 PUTC('0'); PUTC('x');
@@ -2091,7 +2085,7 @@ int vprintf(const char *fmt, va_list args) {
                 break;
             }
             case 'c':
-                PUTC((char)va_arg(args, int));
+                PUTC((char)va_arg(ap, int));
                 break;
             case '%':
                 PUTC('%');
@@ -2112,10 +2106,10 @@ int vprintf(const char *fmt, va_list args) {
 
 int printf(const char *fmt, ...) {
     // No spinlocks here since vprintf already has spinlocks
-    va_list args;
-    va_start(args, fmt);
-    int ret = vprintf(fmt, args);
-    va_end(args);
+    va_list ap;
+    va_start(ap, fmt);
+    int ret = vprintf(fmt, ap);
+    va_end(ap);
     return ret;
 }
 

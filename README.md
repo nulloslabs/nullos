@@ -14,7 +14,7 @@ A secure, fast and privacy-focused hobby OS.
 
 | Status | Feature |
 | :--- | :--- |
-| Done | AC'97 support |
+| Done | AC'97 and ALSA-like audio stack support |
 | Done | ACPI support |
 | Done | ATAPI, PATA, SATA and NVMe support |
 | Done | ext2/3/4, FAT16/32 and ISO9660 support |
@@ -25,12 +25,14 @@ A secure, fast and privacy-focused hobby OS.
 | Done | IDE and AHCI support |
 | Done | Initrd support |
 | Done | Modular font system |
-| Done | MP support |
 | Done | PCI(e) support |
+| Done | PS/2 keyboard support |
 | Done | Serial port support |
+| Done | SMAP, SMEP, NX-bit support |
+| Done | SMP support |
 | Done | Syscall support |
 | Done | UHCI, OHCI and EHCI USB support |
-| Done | USB keyboards and USB BOT |
+| Done | USB keyboard and USB storage support |
 
 ## 🖥️ System Requirements
 

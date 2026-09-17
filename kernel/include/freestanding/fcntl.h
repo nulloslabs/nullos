@@ -35,8 +35,14 @@
 #define F_GETLK     5
 #define F_SETLK     6
 #define F_SETLKW    7
+#define F_DUPFD_CLOEXEC 1030
 
-#define F_SETFL_MASK (O_APPEND | O_NONBLOCK | O_CLOEXEC)
+// Per-fd descriptor flags (F_GETFD/F_SETFD), separate from the file status
+// flags in entry->flags (F_GETFL/F_SETFL).
+#define FD_CLOEXEC      1
+#define FD_CLOEXEC_EXEC 2
+
+#define F_SETFL_MASK (O_APPEND | O_NONBLOCK)
 
 #define F_RDLCK  0
 #define F_WRLCK  1

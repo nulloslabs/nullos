@@ -12,7 +12,7 @@
 #include <sys/resource.h>
 #include <main/fd.h>
 #include <main/spinlocks.h>
-#include <main/mp.h>
+#include <main/smp.h>
 #include <mm/vmm.h>
 #include <mm/vma.h>
 #include <syscalls/syscalls.h>
@@ -126,15 +126,23 @@ extern spinlock_t sched_lock;
 #define current_task_ptr (get_cpu()->task)
 
 bool is_sched_ready(void);
+uint64_t get_idle_time_us(void);
+uint64_t get_context_switch_count(void);
+uint64_t get_processes_created(void);
+uint64_t get_timer_interrupt_count(void);
+uint32_t get_runnable_task_count(void);
+pid_t get_last_created_pid(void);
+uint16_t get_process_count(void);
+void get_load_averages(unsigned long loads[3]);
+task_t *get_current_task_ptr(void);
 pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_t initial_rsp);
 pid_t clone_task(syscall_frame_t *frame, vmm_context_t *child_ctx);
 pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *child_ctx, uint64_t clone_flags, uint64_t new_stack, int *parent_tidptr, int *child_tidptr, uint64_t new_tls);
-void schedule(void);
-task_t *get_current_task_ptr(void);
 void prepare_scheduler_cpu(int cpu_index);
 void let_current_task_sleep(uint64_t duration_us);
 int get_task_nice(task_t *task);
 int set_task_nice(task_t *task, int nice);
+void wake_waiting_parent(pid_t child_pid, pid_t parent_pid);
 void exit_task(int status);
 const vma_table_t *task_vma_table(int pid_idx);
 task_t *task_by_pid(pid_t pid);
@@ -142,15 +150,8 @@ int task_index_by_pid(pid_t pid);
 void release_task_slot(int task_idx);
 bool signal_pending(void);
 void update_interval_timers(void);
-uint64_t get_idle_time_us(void);
-uint64_t get_context_switch_count(void);
-uint64_t get_processes_created(void);
-uint64_t get_timer_interrupt_count(void);
-uint32_t get_runnable_task_count(void);
-pid_t get_last_created_pid(void);
 void record_timer_interrupt(void);
-uint16_t get_process_count(void);
-void get_load_averages(unsigned long loads[3]);
+void schedule(void);
 void yield_sched(void);
 void init_sched(void);
 #endif

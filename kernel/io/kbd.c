@@ -5,11 +5,11 @@
 #include <main/halt.h>
 #include <main/sched.h>
 #include <main/signal.h>
-#include <io/keyboard.h>
+#include <io/kbd.h>
 #include <io/power.h>
-#include <io/ps2_keyboard.h>
+#include <io/ps2_kbd.h>
 #include <io/tty.h>
-#include <io/usb_keyboard.h>
+#include <io/usb_kbd.h>
 
 uint8_t key_buffer[128] = {0};
 volatile uint32_t key_head = 0;
@@ -28,9 +28,9 @@ static uint8_t lock_leds = 0;
 bool kbd_alt_pressed(void) { return alt_pressed; }
 bool kbd_ctrl_pressed(void) { return ctrl_pressed; }
 
-void set_keyboard_cad_reboot(bool enabled) { cad_reboot_enabled = enabled; }
+void set_kbd_cad_reboot(bool enabled) { cad_reboot_enabled = enabled; }
 
-void handle_keyboard_cad_scancode(uint8_t sc) {
+void handle_kbd_cad_scancode(uint8_t sc) {
     if (sc == 0xE0) { cad_extended_pending = true; return; }
     bool released = (sc & 0x80) != 0;
     uint8_t key = sc & 0x7F;
@@ -48,9 +48,9 @@ void handle_keyboard_cad_scancode(uint8_t sc) {
     }
 }
 
-uint8_t get_keyboard_led_state(void) { return lock_leds; }
+uint8_t get_kbd_led_state(void) { return lock_leds; }
 
-void handle_keyboard_lock_scancode(uint8_t sc) {
+void handle_kbd_lock_scancode(uint8_t sc) {
     if (sc & 0x80) return;
 
     if (sc == 0x3A) {
@@ -62,8 +62,8 @@ void handle_keyboard_lock_scancode(uint8_t sc) {
         return;
     }
 
-    set_ps2_keyboard_leds(lock_leds);
-    set_usb_keyboard_leds(lock_leds);
+    set_ps2_kbd_leds(lock_leds);
+    set_usb_kbd_leds(lock_leds);
 }
 
 uint8_t get_scancode(void) {
@@ -161,7 +161,7 @@ char getc(void) {
         }
         cli();
         if (*(volatile uint32_t*)(&key_head) == *(volatile uint32_t*)(&key_tail)) {
-            wfi();
+            __asm__ volatile ("sti; pause; hlt" : : : "memory");
         }
         sti();
     }

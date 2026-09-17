@@ -40,6 +40,7 @@ typedef struct {
     char path[256];
     uint64_t offset;   // current read/write position
     uint32_t flags;    // O_RDONLY, O_WRONLY, O_RDWR
+    uint32_t fd_flags; // per-fd descriptor flags (FD_CLOEXEC)
     void *handle;
 } fd_entry_t;
 

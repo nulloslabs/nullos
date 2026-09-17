@@ -22,13 +22,14 @@
 #include <main/elf.h>
 #include <main/hostname.h>
 #include <main/timekeeping.h>
-#include <main/mp.h>
+#include <main/smp.h>
 #include <main/fd.h>
 #include <main/signal.h>
 #include <main/string.h>
 #include <io/fb.h>
 #include <io/devices.h>
 #include <io/devpts.h>
+#include <io/devtmpfs.h>
 #include <io/pts_devices.h>
 #include <io/terminal.h>
 #include <io/tty.h>
@@ -457,6 +458,9 @@ bool stat_virtual_device(const char *abs_path, struct stat *kst) {
             kst->st_nlink = 2;
         } else if (get_device_mode(rel_path, &kst->st_mode) == 0) {
             kst->st_nlink = 1;
+        } else if (devtmpfs_is_dir(rel_path)) {
+            kst->st_mode = S_IFDIR | 0755;
+            kst->st_nlink = 2;
         } else {
             return false; // let initrd handle it
         }
@@ -548,6 +552,11 @@ static int check_directory_access(const char *path, bool write) {
         if (!stat_vfat_to_kst(path, &st, true)) return -ENOENT;
     } else if (is_tmpfs_dir(path)) {
         if (!stat_tmpfs_to_kst(path, &st, true)) return -ENOENT;
+    } else if (is_devtmpfs_dir_path(path)) {
+        memset(&st, 0, sizeof(st));
+        st.st_mode = S_IFDIR | 0755;
+        st.st_uid = 0;
+        st.st_gid = 0;
     } else {
         initrd_file_t dir = read_initrd(path);
         if (!dir.mode) return -ENOENT;
@@ -1014,7 +1023,7 @@ int tty_rel_to_idx(const char *rel) {
         return (idx >= 0) ? idx : 1;
     }
     /* "/dev/tty0" is the foreground virtual terminal. */
-    if (rel[3] == '0' && rel[4] == '\0') return keyboard_tty;
+    if (rel[3] == '0' && rel[4] == '\0') return kbd_tty;
     /* "/dev/ttyN" */
     if (rel[3] >= '1' && rel[3] <= '7' && rel[4] == '\0')
         return rel[3] - '0';
@@ -1035,13 +1044,12 @@ int pty_rel_to_idx(const char *rel) {
 }
 
 int ioctl_tty_idx(fd_entry_t *entry) {
-    if (current_task_ptr->ctty_idx >= 0) return current_task_ptr->ctty_idx;
+    // only tty-backed fds may resolve to the controlling terminal; a pipe or
+    // socket on fd 0/1/2 must answer ENOTTY so isatty() stays honest
+    if (entry && entry->type == FD_STREAM) return current_task_ptr->ctty_idx >= 0 ? current_task_ptr->ctty_idx : 1;
 
-    if (entry && (entry->type == FD_DEV || entry->type == FD_STREAM)) {
+    if (entry && entry->type == FD_DEV) {
         char rel[256];
-        if (entry->type == FD_STREAM) {
-            return 1;
-        }
         if (is_devtmpfs_path(entry->path, rel)) {
             int idx = tty_rel_to_idx(rel);
             if (idx >= 0) return idx;
@@ -1054,11 +1062,51 @@ int ioctl_tty_idx(fd_entry_t *entry) {
     return -1;
 }
 
+static bool tty_current_pgrp_orphaned(void) {
+    pid_t my_pgid = current_task_ptr->pgid;
+    pid_t my_sid = current_task_ptr->sid;
+    for (int i = 0; i < MAX_TASKS; i++) {
+        task_t *m = tasks[i];
+        if (!m || m->state == TASK_DEAD) continue;
+        if (m->pgid != my_pgid) continue;
+        if (m->sid != my_sid) continue;
+        task_t *parent = task_by_pid(m->ppid);
+        if (!parent || parent->state == TASK_DEAD) continue;
+        if (parent->sid == my_sid && parent->pgid != my_pgid) return false;
+    }
+    return true;
+}
+
+static bool tty_sigttin_blocked_or_ignored(void) {
+    uint64_t handler = current_task_ptr->sigactions[SIGTTIN * 4];
+    if (handler == (uint64_t)SIG_IGN) return true;
+    if (current_task_ptr->blocked_signals & (1ULL << (SIGTTIN - 1))) return true;
+    return false;
+}
+
+static void tty_signal_current_pgrp(int sig) {
+    pid_t my_pgid = current_task_ptr->pgid;
+    for (int i = 0; i < MAX_TASKS; i++) {
+        task_t *m = tasks[i];
+        if (!m || m->state == TASK_DEAD) continue;
+        if (m->pgid != my_pgid) continue;
+        send_task_signal(i, sig);
+    }
+}
+
 static int64_t read_dev_tty(char *kbuf, uint64_t count, int tty_idx) {
     tty_t *t = get_tty(tty_idx);
     if (!t) return (int64_t)-ENODEV;
-    if (t->fg_pgrp > 0 && current_task_ptr->pgid != t->fg_pgrp) {
-        signal_tty_pgrp(tty_idx, SIGTTIN);
+    if (t->fg_pgrp > 0 && current_task_ptr->pgid != t->fg_pgrp &&
+        current_task_ptr->ctty_idx == tty_idx) {
+        // Background read from the controlling terminal.
+        // POSIX: orphaned groups or readers blocking/ignoring SIGTTIN get
+        // EIO instead of a signal (avoids an unresolvable stop loop).
+        // Otherwise the signal goes to the READER's group (us), not the
+        // foreground group — signalling fg would stop the shell itself.
+        if (tty_current_pgrp_orphaned() || tty_sigttin_blocked_or_ignored())
+            return (int64_t)-EIO;
+        tty_signal_current_pgrp(SIGTTIN);
         return (int64_t)-EINTR;
     }
 
@@ -1171,14 +1219,14 @@ static int64_t read_dev_tty(char *kbuf, uint64_t count, int tty_idx) {
             if (iflags & ICRNL) c = '\n';
         }
         if (c == '\n' || c == '\r') {
-            if (lflags & ECHO) putchar(c);
+            if (lflags & ECHO) putc(c);
             if (*sbuf_len < TASK_STDIN_BUF_SIZE) sbuf[(*sbuf_len)++] = c;
             spin_unlock_irqrestore(&stdin_lock, irq);
             break;
         }
 
         if (*sbuf_len < TASK_STDIN_BUF_SIZE - 1) {
-            if (lflags & ECHO) putchar(c);
+            if (lflags & ECHO) putc(c);
             sbuf[(*sbuf_len)++] = c;
         }
         spin_unlock_irqrestore(&stdin_lock, irq);
@@ -1633,7 +1681,7 @@ uint64_t do_read(int fd, void *buf, size_t count) {
             char local_buf[4096];
             uint8_t *kbuf = (count <= sizeof(local_buf)) ? (uint8_t*)local_buf : malloc(count);
             if (!kbuf) { return (uint64_t)-ENOMEM; }
-            res = read_device(rel, kbuf, count, entry->offset);
+            res = read_device(rel, kbuf, count, entry->offset, entry->handle);
             if ((int64_t)res >= 0 && write_vmm(current_task_ptr->ctx, (uint64_t)buf, kbuf, res) < 0) { res = (uint64_t)-EFAULT; } else if ((int64_t)res >= 0) entry->offset += res;
             if (kbuf != (uint8_t*)local_buf) free(kbuf);
         } else if (is_devpts_path(entry->path, rel)) {
@@ -1662,7 +1710,8 @@ uint64_t do_read(int fd, void *buf, size_t count) {
     }
 
     if (entry->type == FD_PIPE) {
-        if (count == 0 || count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
+        if (count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
+        if (count == 0) { return 0; }
         uint8_t *kbuf = malloc(count);
         if (!kbuf) { return (uint64_t)-ENOMEM; }
         int64_t got = read_unix_handle((unix_handle_t *)entry->handle, kbuf, count, entry->flags);
@@ -1750,7 +1799,7 @@ uint64_t do_write(int fd, const void *buf, size_t count) {
 
 
     if (entry->type == FD_STREAM) {
-        tty_idx = current_task_ptr->ctty_idx >= 0 && current_task_ptr->ctty_idx < NUM_TTYS ? current_task_ptr->ctty_idx : keyboard_tty;
+        tty_idx = current_task_ptr->ctty_idx >= 0 && current_task_ptr->ctty_idx < NUM_TTYS ? current_task_ptr->ctty_idx : kbd_tty;
         uint64_t processed = 0;
         while (processed < count) {
             poll_usb_hcds();
@@ -1772,7 +1821,7 @@ uint64_t do_write(int fd, const void *buf, size_t count) {
             uint8_t *kbuf = count <= sizeof(local_buf) ? local_buf : malloc(count);
             if (!kbuf) { return (uint64_t)-ENOMEM; }
             if (read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count) < 0) { if (kbuf != local_buf) free(kbuf); return (uint64_t)-EFAULT; }
-            res = write_device(rel, kbuf, count, entry->offset);
+            res = write_device(rel, kbuf, count, entry->offset, entry->handle);
             if ((int64_t)res >= 0) entry->offset += res;
             if (kbuf != local_buf) free(kbuf);
         } else if (is_devpts_path(entry->path, rel)) {
@@ -1801,7 +1850,8 @@ uint64_t do_write(int fd, const void *buf, size_t count) {
     }
 
     if (entry->type == FD_PIPE) {
-        if (count == 0 || count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
+        if (count > MAX_IO_COUNT) { return (uint64_t)-EINVAL; }
+        if (count == 0) { return 0; }
         uint8_t *kbuf = count <= sizeof(local_buf) ? local_buf : malloc(count);
         if (!kbuf) { return (uint64_t)-ENOMEM; }
         if (read_vmm(current_task_ptr->ctx, kbuf, (uint64_t)buf, count) < 0) { if (kbuf != local_buf) free(kbuf); return (uint64_t)-EFAULT; }
@@ -2086,6 +2136,26 @@ static void check_signals_context(syscall_frame_t *frame, bool from_syscall, boo
                         if (tasks[_j]->state != TASK_DEAD && tasks[_j]->pid == current_task_ptr->ppid) {
                             tasks[_j]->pending_signals |= (1ULL << SIGCHLD);
                             break;
+                        }
+                    }
+                    // A parent blocked in waitpid() sleeps in TASK_STOPPED;
+                    // the pending SIGCHLD bit alone never schedules it, so
+                    // wake it explicitly. Otherwise fg + Ctrl+Z hangs the
+                    // shell forever (only exit woke waiters, never a stop).
+                    if (sched_locked) {
+                        wake_waiting_parent(current_task_ptr->pid, current_task_ptr->ppid);
+                    } else {
+                        // IRQ context: sched_lock not held, so don't touch
+                        // the runqueue; marking READY is enough for the
+                        // scheduler fallback to pick it up.
+                        for (int _j = 0; _j < MAX_TASKS; _j++) {
+                            if (tasks[_j]->state == TASK_STOPPED && !tasks[_j]->stopped_by_signal &&
+                                tasks[_j]->pid == current_task_ptr->ppid &&
+                                (tasks[_j]->waiting_for == -1 || tasks[_j]->waiting_for == current_task_ptr->pid)) {
+                                tasks[_j]->waiting_for = 0;
+                                tasks[_j]->state = TASK_READY;
+                                break;
+                            }
                         }
                     }
                     // Yield to scheduler. syscall_entry holds sched_lock, and

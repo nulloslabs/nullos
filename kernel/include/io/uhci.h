@@ -94,7 +94,7 @@ typedef struct {
     uint8_t *pending_dma_buf;
     uint64_t pending_dma_phys;
     uint16_t pending_len;
-    int keyboard_cursor;
+    int kbd_cursor;
 } uhci_controller_t;
 
 void init_uhci(pci_device_t *dev);

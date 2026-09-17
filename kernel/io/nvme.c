@@ -248,12 +248,14 @@ bool make_nvme_ctrl_name(char *name, size_t name_size) {
     return true;
 }
 
-uint64_t read_nvme_ctrl(void *buf, uint64_t count, uint64_t offset, int index) {
+uint64_t read_nvme_ctrl(void *buf, uint64_t count, uint64_t offset, int index, void *handle) {
+    (void)handle;
     (void)buf; (void)count; (void)offset; (void)index;
     return 0;
 }
 
-uint64_t write_nvme_ctrl(const void *buf, uint64_t count, uint64_t offset, int index) {
+uint64_t write_nvme_ctrl(const void *buf, uint64_t count, uint64_t offset, int index, void *handle) {
+    (void)handle;
     (void)buf; (void)count; (void)offset; (void)index;
     return 0;
 }
@@ -278,7 +280,8 @@ bool make_nvme_disk_name(char *name, size_t name_size, int index) {
     return true;
 }
 
-uint64_t read_nvme_device(void *buf, uint64_t count, uint64_t offset, int index) {
+uint64_t read_nvme_device(void *buf, uint64_t count, uint64_t offset, int index, void *handle) {
+    (void)handle;
     if (index < 0 || index >= (int)g_nvme_ctrl.ns_count) return (uint64_t)-ENODEV;
     if (!count) return 0;
     if (!buf) return (uint64_t)-EINVAL;
@@ -318,7 +321,8 @@ uint64_t read_nvme_device(void *buf, uint64_t count, uint64_t offset, int index)
     return completed;
 }
 
-uint64_t write_nvme_device(const void *buf, uint64_t count, uint64_t offset, int index) {
+uint64_t write_nvme_device(const void *buf, uint64_t count, uint64_t offset, int index, void *handle) {
+    (void)handle;
     if (index < 0 || index >= (int)g_nvme_ctrl.ns_count) return (uint64_t)-ENODEV;
     if (!count) return 0;
     if (!buf) return (uint64_t)-EINVAL;

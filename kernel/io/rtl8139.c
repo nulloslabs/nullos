@@ -140,7 +140,7 @@ void init_rtl8139(pci_device_t *dev) {
     rtl_write32(RTL_TCR, 0x03000700);
     rtl_write16(RTL_IMR, RTL_INT_ROK | RTL_INT_TOK | RTL_INT_RER | RTL_INT_TER | RTL_INT_RXOVW);
 
-    pci_request_irq(dev, poll_rtl8139);
+    request_pci_irq(dev, poll_rtl8139);
 
     log("rtl8139: initialized rtl8139\n");
 

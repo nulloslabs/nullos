@@ -8,6 +8,7 @@
 #include <main/string.h>
 #include <main/sched.h>
 #include <io/pty.h>
+#include <io/devices.h>
 #include <io/sockets.h>
 #include <io/unix_sockets.h>
 #include <mm/mm.h>
@@ -53,10 +54,11 @@ int alloc_fd_handle(fd_table_t *table, const char *path, fd_type_t type, uint32_
         if (!table->entries[i]) {
             fd_entry_t *e = malloc(sizeof(fd_entry_t));
             if (!e) return -ENOMEM;
-            e->open   = true;
-            e->type   = type;
+            e->open = true;
+            e->type = type;
             e->offset = 0;
-            e->flags  = flags;
+            e->flags = flags & ~O_CLOEXEC;
+            e->fd_flags = (flags & O_CLOEXEC) ? FD_CLOEXEC : 0;
             e->handle = handle;
             strncpy(e->path, path, 255);
             e->path[255] = '\0';
@@ -85,6 +87,7 @@ int free_fd(fd_table_t *table, int fd) {
         int idx = pty_slave_path_idx(e->path);
         if (idx >= 0)
             release_pty_slave(idx);
+        release_devtmpfs_device(e->path, e->handle);
     } else if (e->type == FD_PIPE) {
         release_unix_handle((unix_handle_t *)e->handle);
     } else if (e->type == FD_SOCKET) {
