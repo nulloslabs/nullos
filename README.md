@@ -84,7 +84,7 @@ make
 **3. Run in QEMU**
 
 ```bash
-make qemu
+make run
 ```
 
 > [!NOTE]
