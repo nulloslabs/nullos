@@ -1,7 +1,7 @@
 DEBUG ?= 0
 
 CC = cc
-CFLAGS = -std=c11 -MMD -MP
+CFLAGS = -O2 -std=c11 -MMD -MP
 ifeq ($(DEBUG),1)
 	CFLAGS := -g $(CFLAGS)
 endif
