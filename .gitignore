@@ -5,7 +5,6 @@
 *.tar*
 *.iso
 
-
 kernel/nullkrnl
 iso/main/
 initrd/main/
