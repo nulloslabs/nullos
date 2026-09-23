@@ -10,7 +10,7 @@ struct utsname utsname;
 
 void cache_utsname(void) {
     strlcpy(utsname.sysname, KERNEL_SYSNAME, sizeof(utsname.sysname));
-    strlcpy(utsname.nodename, DEFAULT_HOSTNAME, sizeof(utsname.nodename));
+    strlcpy(utsname.nodename, HOSTNAME_DEFAULT, sizeof(utsname.nodename));
     strlcpy(utsname.release, KERNEL_RELEASE, sizeof(utsname.release));
     strlcpy(utsname.version, __DATE__ " " __TIME__, sizeof(utsname.version));
     strlcpy(utsname.machine, "x86_64", sizeof(utsname.machine));

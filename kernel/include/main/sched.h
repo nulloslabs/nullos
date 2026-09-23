@@ -18,32 +18,32 @@
 #include <syscalls/syscalls.h>
 #endif
 
-#define MAX_TASKS 4096
-#define PID_MAX 32768
-#define USER_STACK_SIZE (1 * 1024 * 1024)
+#define MAX_TASKS           4096
+#define PID_MAX             32768
+#define USER_STACK_SIZE     (1 * 1024 * 1024)
 #define TASK_STDIN_BUF_SIZE 256
-#define LOAD_FIXED_1 2048UL
-#define LOAD_EXP_1 1884UL
-#define LOAD_EXP_5 2014UL
-#define LOAD_EXP_15 2037UL
-#define LOAD_UPDATE_US 5000000ULL
+#define LOAD_FIXED_1        2048UL
+#define LOAD_EXP_1          1884UL
+#define LOAD_EXP_5          2014UL
+#define LOAD_EXP_15         2037UL
+#define LOAD_UPDATE_US      5000000ULL
 
-#define TASK_DEAD 0
-#define TASK_READY 1
-#define TASK_RUNNING 2
-#define TASK_ZOMBIE 3
-#define TASK_STOPPED 4
-#define TASK_REAPED 5
+#define TASK_DEAD     0
+#define TASK_READY    1
+#define TASK_RUNNING  2
+#define TASK_ZOMBIE   3
+#define TASK_STOPPED  4
+#define TASK_REAPED   5
 #define TASK_SLEEPING 6
 
 #define TASK_RING_0 0
 #define TASK_RING_3 3
 
-#define TASK_KSTACK_OFFSET 48
+#define TASK_KSTACK_OFFSET           48
 #define TASK_SYSCALL_USER_RSP_OFFSET 56
 
-#define NICE_MIN (-20)
-#define NICE_MAX 19
+#define NICE_MIN    (-20)
+#define NICE_MAX    19
 #define NICE_0_LOAD 1024U
 
 #define SCHED_WAKEUP_GRANULARITY_US 4000ULL

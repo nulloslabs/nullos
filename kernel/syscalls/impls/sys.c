@@ -248,10 +248,10 @@ void sys_sethostname(syscall_frame_t *frame) {
     bool priv = current_task_ptr && current_task_ptr->euid == 0;
 
     if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
-    if (!name || len == 0 || len >= MAX_HOSTNAME_LEN) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!name || len == 0 || len >= HOSTNAME_MAX_LEN) { frame->rax = (uint64_t)-EINVAL; return; }
     if (!user_range_ok(current_task_ptr->ctx, (uint64_t)name, len)) { frame->rax = (uint64_t)-EFAULT; return; }
 
-    char name_buf[MAX_HOSTNAME_LEN];
+    char name_buf[HOSTNAME_MAX_LEN];
     if (read_vmm(current_task_ptr->ctx, name_buf, (uint64_t)name, len) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
     name_buf[len] = '\0';
 
@@ -264,7 +264,7 @@ void sys_setdomainname(syscall_frame_t *frame) {
     bool priv = current_task_ptr && current_task_ptr->euid == 0;
 
     if (!priv) { frame->rax = (uint64_t)-EPERM; return; }
-    if (!name || len == 0 || len >= MAX_HOSTNAME_LEN) { frame->rax = (uint64_t)-EINVAL; return; }
+    if (!name || len == 0 || len >= HOSTNAME_MAX_LEN) { frame->rax = (uint64_t)-EINVAL; return; }
     if (!user_range_ok(current_task_ptr->ctx, (uint64_t)name, len)) { frame->rax = (uint64_t)-EFAULT; return; }
 
     char name_buf[MAX_DOMAINNAME_LEN];

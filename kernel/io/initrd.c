@@ -390,6 +390,11 @@ static bool archive_has_entry(const char *norm_path) {
     return archive_entry_idx(norm_path) >= 0;
 }
 
+static bool check_initrd_overlay_shadow(const char *path) {
+    int archive_idx = archive_entry_idx(path);
+    return (archive_idx >= 0 && (!archive_tombstone_bits || !archive_tombstone_bits[archive_idx]));
+}
+
 static void get_norm_path_ex(const char *path, char *out_norm, size_t out_size, bool follow_final);
 
 static void get_norm_path(const char *path, char *out_norm, size_t out_size) {
@@ -960,6 +965,7 @@ int get_initrd_entry(int index, directory_entry_t *entry) {
     for (int i = 0; i < modified_capacity; i++) {
         if (!modified_files[i].is_active) continue;
         if (modified_files[i].is_tombstone) continue;
+        if (check_initrd_overlay_shadow(modified_files[i].path)) continue;
 
         if (count == index) {
             size_t plen = strlen(modified_files[i].path);
@@ -1041,6 +1047,7 @@ int next_initrd_child(int *index, const char *dir_norm, char *child_name, size_t
     int overlay_start = (*index >= archive_entry_count) ? *index - archive_entry_count : 0;
     for (int i = overlay_start; i < modified_capacity; i++) {
         if (!modified_files[i].is_active || modified_files[i].is_tombstone) continue;
+        if (check_initrd_overlay_shadow(modified_files[i].path)) continue;
 
         const char *path = modified_files[i].path;
         if (path[0] == '.' && path[1] == '/') path += 2;
@@ -1111,8 +1118,7 @@ int count_initrd_children(const char *path) {
     for (int i = 0; i < modified_capacity; i++) {
         if (!modified_files[i].is_active || modified_files[i].is_tombstone) continue;
         if (!initrd_path_is_direct_child(modified_files[i].path, prefix, prefix_len)) continue;
-        int archive_idx = archive_entry_idx(modified_files[i].path);
-        if (archive_idx >= 0 && (!archive_tombstone_bits || !archive_tombstone_bits[archive_idx])) continue;
+        if (check_initrd_overlay_shadow(modified_files[i].path)) continue;
         count++;
     }
     return count;
