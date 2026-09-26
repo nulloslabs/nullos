@@ -71,7 +71,7 @@ int check_parent_access(const char *path, bool modify);
 bool stat_proc(const char *abs_path, const char *orig_path, struct stat *kst, bool follow_self);
 int proc_open_common(char *abs_path, size_t abs_size, uint32_t flags);
 int open_tmpfs_common(const char *abs_path, uint32_t flags, mode_t mode);
-int open_ext4_common(const char *abs_path, uint32_t flags);
+int open_ext4_common(const char *abs_path, uint32_t flags, mode_t mode);
 int open_iso9660_common(const char *abs_path, uint32_t flags);
 int open_fat32_common(const char *abs_path, uint32_t flags);
 uint64_t resolve_futex_key(uint32_t *uaddr, syscall_frame_t *frame);

@@ -444,6 +444,10 @@ void get_absolute_path(const char *in, char *out_abs, size_t out_size) {
     }
 }
 
+int create_initrd(const char *path, mode_t mode, uid_t uid, gid_t gid) {
+    return write_initrd(path, NULL, 0, (uint32_t)mode | S_IFREG, uid, gid);
+}
+
 initrd_file_t read_initrd(const char *path) {
     char current_path[256];
     strncpy(current_path, path, sizeof(current_path) - 1);

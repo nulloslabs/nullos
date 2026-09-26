@@ -72,6 +72,7 @@ typedef struct {
 
 void get_absolute_path(const char *in, char *out_abs, size_t out_size);
 void resolve_link_target(const char *base_path_abs, const char *link_target, char *out_abs, size_t out_size);
+int create_initrd(const char *path, mode_t mode, uid_t uid, gid_t gid);
 initrd_file_t read_initrd(const char *path);
 initrd_file_t stat_initrd(const char *path);
 initrd_file_t stat_initrd_nofollow(const char *path);

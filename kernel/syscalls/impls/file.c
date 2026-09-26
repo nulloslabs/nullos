@@ -220,7 +220,7 @@ void sys_open(syscall_frame_t *frame) {
     }
 
     {
-        int er = open_ext4_common(abs_path, flags);
+        int er = open_ext4_common(abs_path, flags, mode);
         if (er != 1) { frame->rax = (uint64_t)er; return; }
     }
 
@@ -249,7 +249,7 @@ void sys_open(syscall_frame_t *frame) {
     if ((flags & O_CREAT) && !file.data && !file.mode) {
         int access = check_parent_access(abs_path, true);
         if (access < 0) { frame->rax = (uint64_t)access; return; }
-        int r = write_initrd(abs_path, "", 0, apply_current_umask(mode) | S_IFREG, current_task_ptr->fsuid, current_task_ptr->fsgid);
+        int r = create_initrd(abs_path, apply_current_umask(mode), current_task_ptr->fsuid, current_task_ptr->fsgid);
         if (r < 0) { frame->rax = (uint64_t)r; return; }
         file = read_initrd(abs_path);
     }
@@ -692,65 +692,111 @@ void sys_sendfile(syscall_frame_t *frame) {
         return;
     }
 
-    // Only support file-to-file for now
-    if (in_entry->type != FD_FILE || out_entry->type != FD_FILE) {
+    bool in_ok = in_entry->type == FD_FILE || in_entry->type == FD_TMPFS || in_entry->type == FD_EXT4 || in_entry->type == FD_VFAT || in_entry->type == FD_ISO9660;
+    bool out_ok = out_entry->type == FD_FILE || out_entry->type == FD_TMPFS || out_entry->type == FD_EXT4 || out_entry->type == FD_VFAT;
+    if (!in_ok || !out_ok) {
         frame->rax = (uint64_t)-EINVAL; return;
     }
 
-    initrd_file_t in_file = read_initrd(in_entry->path);
-    if (!in_file.data) { frame->rax = (uint64_t)-EBADF; return; }
-    if (!can_access_initrd(&in_file, 1, 0, 0)) { frame->rax = (uint64_t)-EACCES; return; }
-
-    initrd_file_t out_file = read_initrd(out_entry->path);
-    if (!out_file.mode || !can_access_initrd(&out_file, 0, 1, 0)) {
-        frame->rax = (uint64_t)-EACCES;
-        return;
-    }
-
-    int64_t offset = 0;
+    int64_t in_offset = 0;
     if (offset_ptr) {
         if (!user_write_range_ok(current_task_ptr->ctx, (uint64_t)offset_ptr, sizeof(int64_t))) { frame->rax = (uint64_t)-EFAULT; return; }
-        if (read_vmm(current_task_ptr->ctx, &offset, (uint64_t)offset_ptr, sizeof(int64_t)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+        if (read_vmm(current_task_ptr->ctx, &in_offset, (uint64_t)offset_ptr, sizeof(int64_t)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
     } else {
-        offset = (int64_t)in_entry->offset;
+        in_offset = (int64_t)in_entry->offset;
     }
+    if (in_offset < 0) { frame->rax = (uint64_t)-EINVAL; return; }
+    uint64_t out_offset = out_entry->offset;
 
-    if (offset < 0 || (uint64_t)offset > in_file.size) { frame->rax = (uint64_t)-EINVAL; return; }
-
-    uint64_t avail = in_file.size - (uint64_t)offset;
-    uint64_t to_copy = (count < avail) ? count : avail;
-
-    if (to_copy == 0) { frame->rax = 0; return; }
-
-    // Read source data from initrd
-    if (out_entry->offset > UINT64_MAX - to_copy) { frame->rax = (uint64_t)-EFBIG; return; }
-    uint64_t new_size = out_entry->offset + to_copy;
-    if (out_file.size > new_size) new_size = out_file.size;
-    if (new_size > INITRD_MAX_FILE_SIZE) { frame->rax = (uint64_t)-EFBIG; return; }
-
-    void *new_data = malloc(new_size);
-    if (!new_data) { frame->rax = (uint64_t)-ENOMEM; return; }
-
-    memset(new_data, 0, new_size);
-    if (out_file.data && out_file.size)
-        memcpy(new_data, out_file.data, out_file.size);
-    memcpy((uint8_t *)new_data + out_entry->offset, (uint8_t *)in_file.data + (uint64_t)offset, to_copy);
-
-    int res = write_initrd(out_entry->path, new_data, new_size, out_file.mode ? out_file.mode : 0644, out_file.mode ? out_file.uid : current_task_ptr->euid, out_file.mode ? out_file.gid : current_task_ptr->egid);
-    free(new_data);
-
-    if (res < 0) { frame->rax = (uint64_t)res; return; }
-
-    out_entry->offset += to_copy;
-    offset += (int64_t)to_copy;
+    uint8_t chunk[4096];
+    uint64_t total = 0;
+    while (total < count) {
+        uint64_t amount = count - total;
+        if (amount > sizeof(chunk)) amount = sizeof(chunk);
+        int64_t got = -EIO;
+        if (in_entry->type == FD_FILE) {
+            initrd_file_t in_file = read_initrd(in_entry->path);
+            if (!in_file.data && in_file.size) got = -EBADF;
+            else if ((uint64_t)in_offset + total > in_file.size) got = 0;
+            else {
+                got = in_file.size - ((uint64_t)in_offset + total);
+                if ((uint64_t)got > amount) got = amount;
+                if (got) memcpy(chunk, (uint8_t *)in_file.data + (uint64_t)in_offset + total, got);
+            }
+        } else if (in_entry->type == FD_TMPFS) {
+            tmpfs_file_t in_file = read_tmpfs(in_entry->path);
+            if (!in_file.mode) got = -EBADF;
+            else if ((uint64_t)in_offset + total >= in_file.size) got = 0;
+            else {
+                got = in_file.size - ((uint64_t)in_offset + total);
+                if ((uint64_t)got > amount) got = amount;
+                memcpy(chunk, (uint8_t *)in_file.data + (uint64_t)in_offset + total, got);
+            }
+        } else if (in_entry->type == FD_EXT4) {
+            got = read_ext4(in_entry->path, chunk, amount, (uint64_t)in_offset + total);
+        } else if (in_entry->type == FD_VFAT) {
+            got = read_vfat(in_entry->path, chunk, amount, (uint64_t)in_offset + total);
+        } else {
+            got = read_iso9660(in_entry->path, chunk, amount, (uint64_t)in_offset + total);
+        }
+        if (got < 0) {
+            if (total > 0) break;
+            frame->rax = (uint64_t)got;
+            return;
+        }
+        if (got == 0) break;
+        int64_t wrote = -EIO;
+        if (out_entry->type == FD_FILE) {
+            initrd_file_t out_file = read_initrd(out_entry->path);
+            if (!out_file.mode) wrote = -EBADF;
+            else {
+                if (out_offset + total > UINT64_MAX - (uint64_t)got) wrote = -EFBIG;
+                else {
+                    uint64_t new_size = out_offset + total + (uint64_t)got;
+                    if (out_file.size > new_size) new_size = out_file.size;
+                    if (new_size > INITRD_MAX_FILE_SIZE) wrote = -EFBIG;
+                    else {
+                        void *new_data = malloc(new_size ? new_size : 1);
+                        if (!new_data) wrote = -ENOMEM;
+                        else {
+                            memset(new_data, 0, new_size);
+                            if (out_file.data && out_file.size) memcpy(new_data, out_file.data, out_file.size);
+                            memcpy((uint8_t *)new_data + out_offset + total, chunk, got);
+                            int res = write_initrd(out_entry->path, new_data, new_size, out_file.mode, out_file.uid, out_file.gid);
+                            free(new_data);
+                            wrote = res < 0 ? res : got;
+                        }
+                    }
+                }
+            }
+        } else if (out_entry->type == FD_TMPFS) {
+            tmpfs_file_t out_file = read_tmpfs(out_entry->path);
+            if (!out_file.mode) wrote = -EBADF;
+            else wrote = write_tmpfs_partial(out_entry->path, chunk, out_offset + total, got, out_file.mode, out_file.uid, out_file.gid);
+        } else if (out_entry->type == FD_EXT4) {
+            wrote = write_ext4(out_entry->path, chunk, got, out_offset + total, false);
+        } else {
+            wrote = write_vfat(out_entry->path, chunk, got, out_offset + total);
+        }
+        if (wrote < 0) {
+            if (total > 0) break;
+            frame->rax = (uint64_t)wrote;
+            return;
+        }
+        if (wrote == 0) break;
+        total += (uint64_t)wrote;
+        if (wrote < got) break;
+    }
 
     if (offset_ptr) {
-        if (write_vmm(current_task_ptr->ctx, (uint64_t)offset_ptr, &offset, sizeof(int64_t)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
+        int64_t final_offset = in_offset + (int64_t)total;
+        if (write_vmm(current_task_ptr->ctx, (uint64_t)offset_ptr, &final_offset, sizeof(int64_t)) < 0) { frame->rax = (uint64_t)-EFAULT; return; }
     } else {
-        in_entry->offset = (uint64_t)offset;
+        in_entry->offset = (uint64_t)in_offset + total;
     }
+    out_entry->offset = out_offset + total;
 
-    frame->rax = to_copy;
+    frame->rax = total;
 }
 
 void sys_fcntl(syscall_frame_t *frame) {
@@ -906,7 +952,15 @@ void sys_ftruncate(syscall_frame_t *frame) {
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
     if (!fd_allows_write(entry)) { frame->rax = (uint64_t)-EBADF; return; }
 
-    if (entry->type == FD_EXT4) { frame->rax = (uint64_t)-EROFS; return; }
+    if (entry->type == FD_EXT4) {
+        struct stat st;
+        if (stat_ext4(entry->path, &st, true) < 0) { frame->rax = (uint64_t)-ENOENT; return; }
+        if (!can_access_stat_mode(&st, 0, 1, 0)) { frame->rax = (uint64_t)-EACCES; return; }
+        int r = truncate_ext4(entry->path, length);
+        if (r == 0 && entry->offset > length) entry->offset = length;
+        frame->rax = (uint64_t)r;
+        return;
+    }
     if (entry->type == FD_ISO9660) { frame->rax = (uint64_t)-EROFS; return; }
     if (entry->type == FD_VFAT) {
         struct stat st;
@@ -1263,6 +1317,15 @@ void sys_rename(syscall_frame_t *frame) {
     build_abs_path(old, abs_old, sizeof(abs_old));
     build_abs_path(new, abs_new, sizeof(abs_new));
 
+    if (check_ext4_path(abs_old) || check_ext4_path(abs_new)) {
+        int parent_access = check_parent_access(abs_old, true);
+        if (parent_access < 0) { frame->rax = (uint64_t)parent_access; return; }
+        parent_access = check_parent_access(abs_new, true);
+        if (parent_access < 0) { frame->rax = (uint64_t)parent_access; return; }
+        frame->rax = (uint64_t)rename_ext4(abs_old, abs_new);
+        return;
+    }
+
     int access = reject_procfs_mutation(abs_old);
     if (access < 0) { frame->rax = (uint64_t)access; return; }
     access = reject_procfs_mutation(abs_new);
@@ -1277,6 +1340,8 @@ void sys_rename(syscall_frame_t *frame) {
         frame->rax = (uint64_t)rename_tmpfs(abs_old, abs_new);
         return;
     }
+
+    if (check_vfat_path(abs_old) || check_vfat_path(abs_new)) { frame->rax = (uint64_t)-EOPNOTSUPP; return; }
 
     initrd_file_t file = read_initrd(abs_old);
     if (!file.mode) { frame->rax = (uint64_t)-ENOENT; return; }
@@ -1306,6 +1371,13 @@ void sys_mkdir(syscall_frame_t *frame) {
 
     char abs_path[256];
     build_abs_path(path_buf, abs_path, sizeof(abs_path));
+
+    if (check_ext4_path(abs_path)) {
+        int parent_access = check_parent_access(abs_path, true);
+        if (parent_access < 0) { frame->rax = (uint64_t)parent_access; return; }
+        frame->rax = (uint64_t)mkdir_ext4(abs_path, apply_current_umask(mode), current_task_ptr->fsuid, current_task_ptr->fsgid);
+        return;
+    }
 
     int access = reject_procfs_mutation(abs_path);
     if (access < 0) { frame->rax = (uint64_t)access; return; }
@@ -1340,6 +1412,13 @@ void sys_rmdir(syscall_frame_t *frame) {
 
     char abs_path[256];
     build_abs_path(path_buf, abs_path, sizeof(abs_path));
+
+    if (check_ext4_path(abs_path)) {
+        int parent_access = check_parent_access(abs_path, true);
+        if (parent_access < 0) { frame->rax = (uint64_t)parent_access; return; }
+        frame->rax = (uint64_t)rmdir_ext4(abs_path);
+        return;
+    }
 
     int access = reject_virtual_removal(abs_path);
     if (access < 0) { frame->rax = (uint64_t)access; return; }
@@ -1378,6 +1457,14 @@ void sys_link(syscall_frame_t *frame) {
     build_abs_path(old, abs_old, sizeof(abs_old));
     build_abs_path(new, abs_new, sizeof(abs_new));
 
+    if (check_ext4_path(abs_old) || check_ext4_path(abs_new)) {
+        int parent_access = check_parent_access(abs_new, true);
+        if (parent_access < 0) { frame->rax = (uint64_t)parent_access; return; }
+        frame->rax = (uint64_t)link_ext4(abs_old, abs_new);
+        return;
+    }
+    if (check_vfat_path(abs_old) || check_vfat_path(abs_new)) { frame->rax = (uint64_t)-EOPNOTSUPP; return; }
+
     int access = reject_procfs_mutation(abs_old);
     if (access < 0) { frame->rax = (uint64_t)access; return; }
     access = reject_procfs_mutation(abs_new);
@@ -1414,6 +1501,13 @@ void sys_unlink(syscall_frame_t *frame) {
 
     char abs_path[256];
     get_absolute_path(path_buf, abs_path, sizeof(abs_path));
+
+    if (check_ext4_path(abs_path)) {
+        int parent_access = check_parent_access(abs_path, true);
+        if (parent_access < 0) { frame->rax = (uint64_t)parent_access; return; }
+        frame->rax = (uint64_t)unlink_ext4(abs_path);
+        return;
+    }
 
     int access = reject_virtual_removal(abs_path);
     if (access < 0) { frame->rax = (uint64_t)access; return; }
@@ -1454,6 +1548,13 @@ void sys_symlink(syscall_frame_t *frame) {
 
     char abs_linkpath_buf[256];
     get_absolute_path(linkpath_buf, abs_linkpath_buf, sizeof(abs_linkpath_buf));
+
+    if (check_ext4_path(abs_linkpath_buf)) {
+        int parent_access = check_parent_access(abs_linkpath_buf, true);
+        if (parent_access < 0) { frame->rax = (uint64_t)parent_access; return; }
+        frame->rax = (uint64_t)symlink_ext4(target_buf, abs_linkpath_buf, current_task_ptr->fsuid, current_task_ptr->fsgid);
+        return;
+    }
 
     int access = reject_procfs_mutation(abs_linkpath_buf);
     if (access < 0) { frame->rax = (uint64_t)access; return; }
@@ -1570,7 +1671,13 @@ void sys_chmod(syscall_frame_t *frame) {
     char abs_path[256];
     get_absolute_path(path_buf, abs_path, sizeof(abs_path));
 
-    if (check_ext4_path(abs_path)) { frame->rax = (uint64_t)-EROFS; return; }
+    if (check_ext4_path(abs_path)) {
+        struct stat st;
+        if (stat_ext4(abs_path, &st, true) < 0) { frame->rax = (uint64_t)-ENOENT; return; }
+        if (current_task_ptr->euid != 0 && current_task_ptr->euid != st.st_uid) { frame->rax = (uint64_t)-EPERM; return; }
+        frame->rax = (uint64_t)chmod_ext4(abs_path, mode, true);
+        return;
+    }
     if (check_iso9660_path(abs_path)) { frame->rax = (uint64_t)-EROFS; return; }
     if (check_vfat_path(abs_path)) {
         struct stat vst;
@@ -1603,7 +1710,13 @@ void sys_fchmod(syscall_frame_t *frame) {
     fd_entry_t *entry = get_current_fd(fd);
     if (!entry) { frame->rax = (uint64_t)-EBADF; return; }
 
-    if (entry->type == FD_EXT4) { frame->rax = (uint64_t)-EROFS; return; }
+    if (entry->type == FD_EXT4) {
+        struct stat st;
+        if (stat_ext4(entry->path, &st, true) < 0) { frame->rax = (uint64_t)-ENOENT; return; }
+        if (current_task_ptr->euid != 0 && current_task_ptr->euid != st.st_uid) { frame->rax = (uint64_t)-EPERM; return; }
+        frame->rax = (uint64_t)chmod_ext4(entry->path, mode, true);
+        return;
+    }
     if (entry->type == FD_ISO9660) { frame->rax = (uint64_t)-EROFS; return; }
     if (entry->type == FD_VFAT) {
         struct stat vst;
@@ -2264,7 +2377,7 @@ void sys_openat(syscall_frame_t *frame) {
     }
 
     {
-        int er = open_ext4_common(abs_path, flags);
+        int er = open_ext4_common(abs_path, flags, mode);
         if (er != 1) { frame->rax = (uint64_t)er; return; }
     }
 
@@ -2293,7 +2406,7 @@ void sys_openat(syscall_frame_t *frame) {
     if ((flags & O_CREAT) && !file.data && !file.mode) {
         int access = check_parent_access(abs_path, true);
         if (access < 0) { frame->rax = (uint64_t)access; return; }
-        int r = write_initrd(abs_path, "", 0, apply_current_umask(mode) | S_IFREG, current_task_ptr->fsuid, current_task_ptr->fsgid);
+        int r = create_initrd(abs_path, apply_current_umask(mode), current_task_ptr->fsuid, current_task_ptr->fsgid);
         if (r < 0) { frame->rax = (uint64_t)r; return; }
         file = read_initrd(abs_path);
     }
@@ -2432,6 +2545,13 @@ void sys_unlinkat(syscall_frame_t *frame) {
 
     if (res < 0) { frame->rax = (uint64_t)res; return; }
 
+    if (check_ext4_path(abs_path)) {
+        int parent_access = check_parent_access(abs_path, true);
+        if (parent_access < 0) { frame->rax = (uint64_t)parent_access; return; }
+        frame->rax = (flags & AT_REMOVEDIR) ? (uint64_t)rmdir_ext4(abs_path) : (uint64_t)unlink_ext4(abs_path);
+        return;
+    }
+
     int mutation_status = reject_virtual_removal(abs_path);
     if (mutation_status < 0) { frame->rax = (uint64_t)mutation_status; return; }
     mutation_status = check_parent_access(abs_path, true);
@@ -2444,6 +2564,11 @@ void sys_unlinkat(syscall_frame_t *frame) {
         } else {
             frame->rax = (uint64_t)delete_tmpfs(abs_path);
         }
+        return;
+    }
+
+    if (check_vfat_path(abs_path)) {
+        frame->rax = (flags & AT_REMOVEDIR) ? (uint64_t)rmdir_vfat(abs_path) : (uint64_t)unlink_vfat(abs_path);
         return;
     }
 
@@ -2478,6 +2603,13 @@ void sys_symlinkat(syscall_frame_t *frame) {
     char abs_path[256];
     int res = build_abs_path_at(newdirfd, path_buf, abs_path, sizeof(abs_path));
     if (res < 0) { frame->rax = (uint64_t)res; return; }
+
+    if (check_ext4_path(abs_path)) {
+        int parent_access = check_parent_access(abs_path, true);
+        if (parent_access < 0) { frame->rax = (uint64_t)parent_access; return; }
+        frame->rax = (uint64_t)symlink_ext4(target_buf, abs_path, current_task_ptr->fsuid, current_task_ptr->fsgid);
+        return;
+    }
 
     int mutation_status = reject_procfs_mutation(abs_path);
     if (mutation_status < 0) { frame->rax = (uint64_t)mutation_status; return; }
@@ -2601,8 +2733,20 @@ void sys_fchmodat(syscall_frame_t *frame) {
     int res = build_abs_path_at(dirfd, path_buf, abs_path, sizeof(abs_path));
     if (res < 0) { frame->rax = (uint64_t)res; return; }
 
-    if (check_ext4_path(abs_path)) { frame->rax = (uint64_t)-EROFS; return; }
+    if (check_ext4_path(abs_path)) {
+        struct stat st;
+        if (!stat_ext4_to_kst(abs_path, &st, false)) { frame->rax = (uint64_t)-ENOENT; return; }
+        if (current_task_ptr->euid != 0 && current_task_ptr->euid != st.st_uid) { frame->rax = (uint64_t)-EPERM; return; }
+        frame->rax = (uint64_t)chmod_ext4(abs_path, mode, !(flags & AT_SYMLINK_NOFOLLOW));
+        return;
+    }
     if (check_iso9660_path(abs_path)) { frame->rax = (uint64_t)-EROFS; return; }
+    if (check_vfat_path(abs_path)) {
+        struct stat vst;
+        if (!stat_vfat_to_kst(abs_path, &vst, false)) { frame->rax = (uint64_t)-ENOENT; return; }
+        if (current_task_ptr->euid != 0 && current_task_ptr->euid != vst.st_uid) { frame->rax = (uint64_t)-EPERM; return; }
+        frame->rax = 0; return;
+    }
 
     if (is_tmpfs_dir(abs_path)) {
         struct stat tst;

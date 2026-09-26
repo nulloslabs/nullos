@@ -39,6 +39,8 @@ static const vfs_backend_t *find_backend(const char *fs_type) {
     return NULL;
 }
 
+static bool find_vfs_mount_by_source(const char *source, vfs_mount_t *mount);
+
 static bool check_prefix(const char *path, const char *root, const char **relative) {
     size_t root_len = strlen(root);
     if (strncmp(path, root, root_len) != 0 || (path[root_len] != '/' && path[root_len] != '\0')) {
@@ -130,11 +132,12 @@ int unmount_vfs(const char *path, int flags) {
     if (flags != 0) return -EINVAL;
 
     vfs_mount_t mount;
-    if (!find_vfs_mount(path, &mount)) return -ENOENT;
+    // Accept a source device as well as the mount point itself.
+    if (!find_vfs_mount(path, &mount) && !find_vfs_mount_by_source(path, &mount)) return -ENOENT;
     const vfs_backend_t *backend = find_backend(mount.fs_type);
-    int status = backend && backend->unmount_fs ? backend->unmount_fs(path) : 0;
+    int status = backend && backend->unmount_fs ? backend->unmount_fs(mount.path) : 0;
     if (status < 0) return status;
-    return unregister_vfs_mount(path, NULL);
+    return unregister_vfs_mount(mount.path, NULL);
 }
 
 int64_t read_vfs(const char *path, void *buf, uint64_t count, uint64_t offset) {
@@ -167,6 +170,8 @@ int64_t read_vfs(const char *path, void *buf, uint64_t count, uint64_t offset) {
     }
 
     if (check_ext4_path(path)) return read_ext4(path, buf, count, offset);
+
+    if (check_vfat_path(path)) return read_vfat(path, buf, count, offset);
 
     if (check_iso9660_path(path)) return read_iso9660(path, buf, count, offset);
 
@@ -266,6 +271,20 @@ bool find_vfs_mount(const char *path, vfs_mount_t *mount) {
     spin_lock_irqsave(&mount_lock, &irq);
     for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
         if (!mounts[i].active || strcmp(mounts[i].path, path) != 0) continue;
+        if (mount) *mount = mounts[i];
+        spin_unlock_irqrestore(&mount_lock, irq);
+        return true;
+    }
+    spin_unlock_irqrestore(&mount_lock, irq);
+    return false;
+}
+
+static bool find_vfs_mount_by_source(const char *source, vfs_mount_t *mount) {
+    if (!source) return false;
+    uint64_t irq;
+    spin_lock_irqsave(&mount_lock, &irq);
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
+        if (!mounts[i].active || strcmp(mounts[i].source, source) != 0) continue;
         if (mount) *mount = mounts[i];
         spin_unlock_irqrestore(&mount_lock, irq);
         return true;

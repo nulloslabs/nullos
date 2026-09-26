@@ -107,6 +107,10 @@ void sys_mmap(syscall_frame_t *frame) {
             frame->rax = (uint64_t)-EACCES;
             return;
         }
+        if ((mapping_entry->type == FD_EXT4 || mapping_entry->type == FD_VFAT) && (flags & MAP_SHARED) && (prot & PROT_WRITE)) {
+            frame->rax = (uint64_t)-EOPNOTSUPP;
+            return;
+        }
         char rel[256];
         if (mapping_entry->type == FD_DEV && is_devtmpfs_path(mapping_entry->path, rel) && rel[0] == 'f' && rel[1] == 'b' && rel[2] >= '0' && rel[2] <= '9' && rel[3] == '\0') {
             requested_fb = true;

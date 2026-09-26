@@ -21,9 +21,11 @@ initrd:
 iso:
 	@$(MAKE) -C iso
 
-run:
+qemu:
 	@printf "  %-7s %s\n" "QEMU" "$(ISOFILE)"
 	@$(QEMU) $(QEMUFLAGS) -cdrom $(ISOFILE) -boot d
+
+run: qemu
 
 clean:
 	@$(MAKE) -C tools clean
@@ -37,4 +39,4 @@ mrproper:
 	@$(MAKE) -C initrd mrproper
 	@$(MAKE) -C iso mrproper
 
-.PHONY: all tools kernel initrd iso run clean mrproper
+.PHONY: all tools kernel initrd iso qemu run clean mrproper
