@@ -183,19 +183,19 @@ uacpi_status uacpi_kernel_io_read32(uacpi_handle handle, uacpi_size offset, uacp
 
 uacpi_status uacpi_kernel_io_write8(uacpi_handle handle, uacpi_size offset, uacpi_u8 in_value) {
     if ((uintptr_t)handle + offset > 0xFFFF) return UACPI_STATUS_INVALID_ARGUMENT;
-    outb((uint16_t)((uintptr_t)handle + offset), in_value);
+    outb(in_value, (uint16_t)((uintptr_t)handle + offset));
     return UACPI_STATUS_OK;
 }
 
 uacpi_status uacpi_kernel_io_write16(uacpi_handle handle, uacpi_size offset, uacpi_u16 in_value) {
     if ((uintptr_t)handle + offset > 0xFFFE) return UACPI_STATUS_INVALID_ARGUMENT;
-    outw((uint16_t)((uintptr_t)handle + offset), in_value);
+    outw(in_value, (uint16_t)((uintptr_t)handle + offset));
     return UACPI_STATUS_OK;
 }
 
 uacpi_status uacpi_kernel_io_write32(uacpi_handle handle, uacpi_size offset, uacpi_u32 in_value) {
     if ((uintptr_t)handle + offset > 0xFFFC) return UACPI_STATUS_INVALID_ARGUMENT;
-    outl((uint16_t)((uintptr_t)handle + offset), in_value);
+    outl(in_value, (uint16_t)((uintptr_t)handle + offset));
     return UACPI_STATUS_OK;
 }
 

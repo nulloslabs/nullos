@@ -80,13 +80,13 @@ static bool ac97_muted = false;
 
 // --- IO Helpers ---
 static uint16_t read_nam16(uint8_t reg) { return inw(nam_base + reg); }
-static void write_nam16(uint8_t reg, uint16_t v) { outw(nam_base + reg, v); }
+static void write_nam16(uint8_t reg, uint16_t v) { outw(v, nam_base + reg); }
 static uint8_t read_nabm8(uint8_t reg) { return inb(nabm_base + reg); }
 static uint16_t read_nabm16(uint8_t reg) { return inw(nabm_base + reg); }
 static uint32_t read_nabm32(uint8_t reg) { return inl(nabm_base + reg); }
-static void write_nabm8(uint8_t reg, uint8_t v) { outb(nabm_base + reg, v); }
-static void write_nabm16(uint8_t reg, uint16_t v) { outw(nabm_base + reg, v); }
-static void write_nabm32(uint8_t reg, uint32_t v) { outl(nabm_base + reg, v); }
+static void write_nabm8(uint8_t reg, uint8_t v) { outb(v, nabm_base + reg); }
+static void write_nabm16(uint8_t reg, uint16_t v) { outw(v, nabm_base + reg); }
+static void write_nabm32(uint8_t reg, uint32_t v) { outl(v, nabm_base + reg); }
 
 static int outstanding(void) {
     uint8_t civ = read_nabm8(AC97_NABM_PCM_OUT_CIV);

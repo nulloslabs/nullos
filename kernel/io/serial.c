@@ -39,7 +39,7 @@ static void putc_serial_unlocked(uint16_t port, char c) {
     // Just in case if terminal dosen't support just "\n" for newlines but needs "\r\n" instead
     if (c == '\n') putc_serial_unlocked(port, '\r');
     while (!(inb(port + 5) & 0x20));
-    outb(port, c);
+    outb(c, port);
 }
 
 void putc_serial(uint16_t port, char c) {
@@ -199,20 +199,20 @@ void init_serial_ports(void) {
         uint16_t port = serial_ports[i]; // This is our port value.
 
         // Initialize the port.
-        outb(port + 1, 0x00);
-        outb(port + 3, 0x80);
-        outb(port + 0, 0x03);
-        outb(port + 1, 0x00);
-        outb(port + 3, 0x03);
-        outb(port + 2, 0xC7);
-        outb(port + 4, 0x0B);
-        outb(port + 4, 0x1E);
-        outb(port + 0, 0xAE);
+        outb(0x00, port + 1);
+        outb(0x80, port + 3);
+        outb(0x03, port + 0);
+        outb(0x00, port + 1);
+        outb(0x03, port + 3);
+        outb(0xC7, port + 2);
+        outb(0x0B, port + 4);
+        outb(0x1E, port + 4);
+        outb(0xAE, port + 0);
 
         if (inb(port + 0) != 0xAE) continue; // Check if port is faulty/not present.
 
         // Enable the port for use.
-        outb(port + 4, 0x0F);
+        outb(0x0F, port + 4);
     }
     log("serial: initialized serial ports\n");
 }

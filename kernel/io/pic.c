@@ -7,7 +7,7 @@ void mask_pic_irq(uint8_t irq) {
     uint16_t port = irq < 8 ? PIC1_DATA : PIC2_DATA;
     uint8_t bit = irq < 8 ? irq : irq - 8;
     uint8_t mask = inb(port);
-    outb(port, mask | (1 << bit));
+    outb(mask | (1 << bit), port);
 }
 
 void unmask_pic_irq(uint8_t irq) {
@@ -15,37 +15,37 @@ void unmask_pic_irq(uint8_t irq) {
     uint16_t port = irq < 8 ? PIC1_DATA : PIC2_DATA;
     uint8_t bit = irq < 8 ? irq : irq - 8;
     uint8_t mask = inb(port);
-    outb(port, mask & ~(1 << bit));
+    outb(mask & ~(1 << bit), port);
 }
 
 void eoi_pic(void) {
     // Send EOI (End of interrupt) to master controller
-    outb(PIC1_CMD, 0x20);
+    outb(0x20, PIC1_CMD);
     // Send EOI to slave controller
-    outb(PIC2_CMD, 0x20);
+    outb(0x20, PIC2_CMD);
 }
 
 void disable_pic(void) {
     // Mask all IRQs on both PICs
-    outb(PIC1_DATA, 0xFF);
-    outb(PIC2_DATA, 0xFF);
+    outb(0xFF, PIC1_DATA);
+    outb(0xFF, PIC2_DATA);
 }
 
 void remap_pic(void) {
-    outb(PIC1_CMD, 0x11);
-    outb(PIC2_CMD, 0x11);
-    io_wait();
-    outb(PIC1_DATA, 0x20);
-    outb(PIC2_DATA, 0x28);
-    io_wait();
-    outb(PIC1_DATA, 0x04);
-    outb(PIC2_DATA, 0x02);
-    io_wait();
-    outb(PIC1_DATA, 0x01);
-    outb(PIC2_DATA, 0x01);
-    io_wait();
-    outb(PIC1_DATA, 0xFF);
-    outb(PIC2_DATA, 0xFF);
+    outb(0x11, PIC1_CMD);
+    outb(0x11, PIC2_CMD);
+    wait_io();
+    outb(0x20, PIC1_DATA);
+    outb(0x28, PIC2_DATA);
+    wait_io();
+    outb(0x04, PIC1_DATA);
+    outb(0x02, PIC2_DATA);
+    wait_io();
+    outb(0x01, PIC1_DATA);
+    outb(0x01, PIC2_DATA);
+    wait_io();
+    outb(0xFF, PIC1_DATA);
+    outb(0xFF, PIC2_DATA);
 
     mask_pic_irq(0);
     mask_pic_irq(1);

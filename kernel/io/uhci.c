@@ -311,14 +311,13 @@ static void update_uhci_port(uhci_controller_t *ctrl, int port, uint16_t set, ui
     uint16_t value = status & UHCI_PORT_RW;
     value &= ~clear;
     value |= set;
-    outw(ctrl->io_base + reg, value);
+    outw(value, ctrl->io_base + reg);
 }
 
 static void clear_uhci_port_changes(uhci_controller_t *ctrl, int port) {
     uint16_t reg = UHCI_PORTSC1 + (uint16_t)port * 2;
     uint16_t status = inw(ctrl->io_base + reg);
-    outw(ctrl->io_base + reg,
-         (status & UHCI_PORT_RW) | (status & UHCI_PORT_RWC));
+    outw((status & UHCI_PORT_RW) | (status & UHCI_PORT_RWC), ctrl->io_base + reg);
 }
 
 static bool reset_uhci_port(uhci_controller_t *ctrl, int port) {
@@ -390,13 +389,13 @@ void poll_uhci_ports(void) {
         if (hc_status & (UHCI_STS_HCSYSERR | UHCI_STS_HCPROCESS |
                          UHCI_STS_HCHALTED)) {
             log("uhci: controller stopped, status=0x%x\n", hc_status);
-            outw(io_base + UHCI_USBCMD, 0);
+            outw(0, io_base + UHCI_USBCMD);
             ctrl->initialized = 0;
             continue;
         }
         if (hc_status & (UHCI_STS_USBINT | UHCI_STS_USBERRINT |
                          UHCI_STS_RESUME))
-            outw(io_base + UHCI_USBSTS, hc_status & 0x1F);
+            outw(hc_status & 0x1F, io_base + UHCI_USBSTS);
 
         for (int i = 0; i < ctrl->num_ports; i++) {
             uint16_t port_reg = UHCI_PORTSC1 + (uint16_t)i * 2;
@@ -584,13 +583,13 @@ void init_uhci(pci_device_t *dev) {
     // UHCI BIOS Handoff: disable USB Legacy Support (SMI generation)
     write_pci_word(dev->bus, dev->dev, dev->func, 0xC0, 0x8F00);
 
-    outw(io_base + UHCI_USBINTR, 0);
-    outw(io_base + UHCI_USBCMD, UHCI_CMD_GRESET);
+    outw(0, io_base + UHCI_USBINTR);
+    outw(UHCI_CMD_GRESET, io_base + UHCI_USBCMD);
     sleep(50);
-    outw(io_base + UHCI_USBCMD, 0);
+    outw(0, io_base + UHCI_USBCMD);
     sleep(10);
 
-    outw(io_base + UHCI_USBCMD, UHCI_CMD_HCRESET);
+    outw(UHCI_CMD_HCRESET, io_base + UHCI_USBCMD);
     bool reset_done = false;
     for (int i = 0; i < 1000; i++) {
         if (!(inw(io_base + UHCI_USBCMD) & UHCI_CMD_HCRESET)) {
@@ -603,8 +602,8 @@ void init_uhci(pci_device_t *dev) {
         log("uhci: host controller reset timed out\n");
         return;
     }
-    outw(io_base + UHCI_USBINTR, 0);
-    outw(io_base + UHCI_USBCMD, 0);
+    outw(0, io_base + UHCI_USBINTR);
+    outw(0, io_base + UHCI_USBCMD);
 
     void *frame_list_raw = pmalloc_dma32();
     if (!frame_list_raw) {
@@ -657,19 +656,19 @@ void init_uhci(pci_device_t *dev) {
     ctrl->num_ports = detect_uhci_ports(ctrl);
 
     __sync_synchronize();
-    outl(io_base + UHCI_FLBASEADD, (uint32_t)ctrl->frame_list_phys);
-    outw(io_base + UHCI_FRNUM, 0);
-    outw(io_base + UHCI_USBSTS, UHCI_STS_USBINT | UHCI_STS_USBERRINT |
+    outl((uint32_t)ctrl->frame_list_phys, io_base + UHCI_FLBASEADD);
+    outw(0, io_base + UHCI_FRNUM);
+    outw(UHCI_STS_USBINT | UHCI_STS_USBERRINT |
                                       UHCI_STS_RESUME | UHCI_STS_HCSYSERR |
-                                      UHCI_STS_HCPROCESS);
+                                      UHCI_STS_HCPROCESS, io_base + UHCI_USBSTS);
 
-    outb(io_base + UHCI_SOFMOD, 64);
-    outw(io_base + UHCI_USBINTR, 0x0000);
-    outw(io_base + UHCI_USBCMD, UHCI_CMD_RS | UHCI_CMD_CF | UHCI_CMD_MAXP);
+    outb(64, io_base + UHCI_SOFMOD);
+    outw(0x0000, io_base + UHCI_USBINTR);
+    outw(UHCI_CMD_RS | UHCI_CMD_CF | UHCI_CMD_MAXP, io_base + UHCI_USBCMD);
     sleep(2);
     if (inw(io_base + UHCI_USBSTS) & UHCI_STS_HCHALTED) {
         log("uhci: controller failed to start, status=0x%x\n", inw(io_base + UHCI_USBSTS));
-        outw(io_base + UHCI_USBCMD, 0);
+        outw(0, io_base + UHCI_USBCMD);
         pfree((void *)ctrl->pending_dma_phys);
         pfree((void *)virt_to_phys(ctrl->pending_td));
         pfree((void *)virt_to_phys(ctrl->term_td));

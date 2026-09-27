@@ -173,7 +173,7 @@ bool resolve_arp(uint32_t ip, uint8_t mac_out[6]) {
             memcpy(mac_out, arp_cached_mac, 6);
             return true;
         }
-        io_wait();
+        wait_io();
     }
     return false;
 }

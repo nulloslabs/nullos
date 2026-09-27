@@ -28,7 +28,7 @@ void set_ps2_kbd_leds(uint8_t leds) {
     uint8_t status = inb(0x64);
     if (status == 0xFF || (status & 0x02)) return;
 
-    outb(0x60, 0xED);
+    outb(0xED, 0x60);
     ps2_led_retries = 0;
     ps2_led_phase = 1;
 }
@@ -39,14 +39,14 @@ void handle_ps2_scancode(uint8_t sc) {
             ps2_led_retries = 0;
             if (ps2_led_phase == 1) {
                 ps2_transaction_leds = ps2_pending_leds;
-                outb(0x60, ps2_transaction_leds);
+                outb(ps2_transaction_leds, 0x60);
                 ps2_led_phase = 2;
             } else {
                 ps2_applied_leds = ps2_transaction_leds;
                 ps2_leds_applied = true;
                 ps2_led_phase = 0;
                 if (ps2_pending_leds != ps2_applied_leds) {
-                    outb(0x60, 0xED);
+                    outb(0xED, 0x60);
                     ps2_led_phase = 1;
                 }
             }
@@ -55,7 +55,7 @@ void handle_ps2_scancode(uint8_t sc) {
 
         if (sc == 0xFE) {
             if (++ps2_led_retries <= 3) {
-                outb(0x60, ps2_led_phase == 1 ? 0xED : ps2_transaction_leds);
+                outb(ps2_led_phase == 1 ? 0xED : ps2_transaction_leds, 0x60);
             } else {
                 ps2_led_phase = 0;
             }

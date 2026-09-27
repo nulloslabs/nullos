@@ -142,16 +142,16 @@ void init_apic_timer(uint32_t hz) {
 
         // Calibrate: use a short busy-wait with PIT channel 2
         // Set up PIT channel 2 for ~10ms one-shot
-        outb(0x61, (inb(0x61) & 0xFD) | 0x01);
-        outb(0x43, 0xB0); // Channel 2, lobyte/hibyte, mode 0
+        outb((inb(0x61) & 0xFD) | 0x01, 0x61);
+        outb(0xB0, 0x43); // Channel 2, lobyte/hibyte, mode 0
         uint16_t pit_count = 11932; // ~10ms at 1.193182 MHz
-        outb(0x42, pit_count & 0xFF);
-        outb(0x42, (pit_count >> 8) & 0xFF);
+        outb(pit_count & 0xFF, 0x42);
+        outb((pit_count >> 8) & 0xFF, 0x42);
 
         // Reset PIT gate to start counting
         uint8_t tmp = inb(0x61) & 0xFE;
-        outb(0x61, tmp);
-        outb(0x61, tmp | 1);
+        outb(tmp, 0x61);
+        outb(tmp | 1, 0x61);
 
         // Start LAPIC timer with max initial count
         write_msr(X2APIC_MSR_LVT_TIMER, LAPIC_TIMER_MASKED | 32);
@@ -174,15 +174,15 @@ void init_apic_timer(uint32_t hz) {
         lapic_write(LAPIC_TIMER_DCR, divide);
 
         // Calibrate with PIT channel 2
-        outb(0x61, (inb(0x61) & 0xFD) | 0x01);
-        outb(0x43, 0xB0);
+        outb((inb(0x61) & 0xFD) | 0x01, 0x61);
+        outb(0xB0, 0x43);
         uint16_t pit_count = 11932;
-        outb(0x42, pit_count & 0xFF);
-        outb(0x42, (pit_count >> 8) & 0xFF);
+        outb(pit_count & 0xFF, 0x42);
+        outb((pit_count >> 8) & 0xFF, 0x42);
 
         uint8_t tmp = inb(0x61) & 0xFE;
-        outb(0x61, tmp);
-        outb(0x61, tmp | 1);
+        outb(tmp, 0x61);
+        outb(tmp | 1, 0x61);
 
         lapic_write(LAPIC_TIMER_LVT, LAPIC_TIMER_MASKED | 32);
         lapic_write(LAPIC_TIMER_ICR, 0xFFFFFFFF);

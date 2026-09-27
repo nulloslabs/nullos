@@ -1,8 +1,8 @@
 #include <stdint.h>
 #include <io/io.h>
 
-void outb(uint16_t port, uint8_t val) {
-    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
+void outb(uint8_t value, uint16_t port) {
+    __asm__ volatile ("outb %0, %1" : : "a"(value), "Nd"(port));
 }
 
 uint8_t inb(uint16_t port) {
@@ -11,8 +11,8 @@ uint8_t inb(uint16_t port) {
     return ret;
 }
 
-void outw(uint16_t port, uint16_t val) {
-    __asm__ volatile ("outw %0, %1" : : "a"(val), "Nd"(port));
+void outw(uint16_t value, uint16_t port) {
+    __asm__ volatile ("outw %0, %1" : : "a"(value), "Nd"(port));
 }
 
 uint16_t inw(uint16_t port) {
@@ -21,8 +21,8 @@ uint16_t inw(uint16_t port) {
     return ret;
 }
 
-void outl(uint16_t port, uint32_t val) {
-    __asm__ volatile ("outl %0, %1" : : "a"(val), "Nd"(port));
+void outl(uint32_t value, uint16_t port) {
+    __asm__ volatile ("outl %0, %1" : : "a"(value), "Nd"(port));
 }
 
 uint32_t inl(uint16_t port) {
@@ -31,6 +31,6 @@ uint32_t inl(uint16_t port) {
     return ret;
 }
 
-void io_wait(void) {
-    outb(0x80, 0);
+void wait_io(void) {
+    outb(0, 0x80);
 }

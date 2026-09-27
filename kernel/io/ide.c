@@ -27,7 +27,7 @@ void delay_ide_400ns(const ide_device_t *device) {
 }
 
 void select_ide_device(const ide_device_t *device) {
-    outb(device->io_base + IDE_REG_DRIVE, 0xA0 | (device->slave << 4));
+    outb(0xA0 | (device->slave << 4), device->io_base + IDE_REG_DRIVE);
     delay_ide_400ns(device);
 }
 
@@ -114,16 +114,16 @@ int prepare_ide_dma(const ide_device_t *device, uint32_t bytes, bool read) {
 
     uint8_t command = inb(device->bus_master_base + IDE_BM_COMMAND) & ~(IDE_BM_START | IDE_BM_READ);
     if (read) command |= IDE_BM_READ;
-    outb(device->bus_master_base + IDE_BM_COMMAND, command);
-    outb(device->bus_master_base + IDE_BM_STATUS, inb(device->bus_master_base + IDE_BM_STATUS) | IDE_BM_ERROR | IDE_BM_INTERRUPT);
-    outl(device->bus_master_base + IDE_BM_PRDT, (uint32_t)prdt_phys);
+    outb(command, device->bus_master_base + IDE_BM_COMMAND);
+    outb(inb(device->bus_master_base + IDE_BM_STATUS) | IDE_BM_ERROR | IDE_BM_INTERRUPT, device->bus_master_base + IDE_BM_STATUS);
+    outl((uint32_t)prdt_phys, device->bus_master_base + IDE_BM_PRDT);
     return 0;
 }
 
 int start_ide_dma(const ide_device_t *device) {
     uint8_t command = inb(device->bus_master_base + IDE_BM_COMMAND) & ~IDE_BM_START;
     __asm__ volatile ("mfence" ::: "memory");
-    outb(device->bus_master_base + IDE_BM_COMMAND, command | IDE_BM_START);
+    outb(command | IDE_BM_START, device->bus_master_base + IDE_BM_COMMAND);
 
     int result = -ETIMEDOUT;
     for (uint32_t i = 0; i < IDE_TIMEOUT; i++) {
@@ -139,8 +139,8 @@ int start_ide_dma(const ide_device_t *device) {
         __asm__ volatile ("pause");
     }
 
-    outb(device->bus_master_base + IDE_BM_COMMAND, command);
-    outb(device->bus_master_base + IDE_BM_STATUS, inb(device->bus_master_base + IDE_BM_STATUS) | IDE_BM_ERROR | IDE_BM_INTERRUPT);
+    outb(command, device->bus_master_base + IDE_BM_COMMAND);
+    outb(inb(device->bus_master_base + IDE_BM_STATUS) | IDE_BM_ERROR | IDE_BM_INTERRUPT, device->bus_master_base + IDE_BM_STATUS);
     __asm__ volatile ("mfence" ::: "memory");
     if (result == 0) result = wait_ide_not_busy(device);
     return result;
@@ -151,11 +151,11 @@ static void detect_ide_devices(void) {
         ide_device_t device;
         get_ide_device(i, &device);
         select_ide_device(&device);
-        outb(device.io_base + IDE_REG_SECTOR_COUNT, 0);
-        outb(device.io_base + IDE_REG_LBA_LOW, 0);
-        outb(device.io_base + IDE_REG_LBA_MID, 0);
-        outb(device.io_base + IDE_REG_LBA_HIGH, 0);
-        outb(device.io_base + IDE_REG_COMMAND, 0xEC);
+        outb(0, device.io_base + IDE_REG_SECTOR_COUNT);
+        outb(0, device.io_base + IDE_REG_LBA_LOW);
+        outb(0, device.io_base + IDE_REG_LBA_MID);
+        outb(0, device.io_base + IDE_REG_LBA_HIGH);
+        outb(0xEC, device.io_base + IDE_REG_COMMAND);
 
         uint8_t status = inb(device.io_base + IDE_REG_STATUS);
         if (!status || status == 0xFF) continue;
@@ -198,8 +198,8 @@ void init_ide(pci_device_t *dev) {
 
     uint32_t command = read_pci(dev->bus, dev->dev, dev->func, 0x04);
     write_pci(dev->bus, dev->dev, dev->func, 0x04, command | 0x5);
-    outb(ide_channels[0][1], 0x02);
-    outb(ide_channels[1][1], 0x02);
+    outb(0x02, ide_channels[0][1]);
+    outb(0x02, ide_channels[1][1]);
 
     uint64_t data_phys = virt_to_phys(ide_dma_data);
     uint64_t prdt_phys = virt_to_phys(ide_prdt);

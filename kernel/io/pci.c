@@ -203,7 +203,7 @@ uint32_t read_pci(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg) {
         uint32_t v = *(volatile uint32_t*)base;
         return v;
     }
-    outl(0xCF8, 0x80000000u | ((uint32_t)bus << 16) | ((uint32_t)dev << 11) | ((uint32_t)func << 8) | (reg & 0xFC));
+    outl(0x80000000u | ((uint32_t)bus << 16) | ((uint32_t)dev << 11) | ((uint32_t)func << 8) | (reg & 0xFC), 0xCF8);
     return inl(0xCFC);
 }
 
@@ -218,8 +218,8 @@ void write_pci(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg, uint32_t val
         *p = val;
         return;
     }
-    outl(0xCF8, 0x80000000u | ((uint32_t)bus << 16) | ((uint32_t)dev << 11) | ((uint32_t)func << 8) | (reg & 0xFC));
-    outl(0xCFC, val);
+    outl(0x80000000u | ((uint32_t)bus << 16) | ((uint32_t)dev << 11) | ((uint32_t)func << 8) | (reg & 0xFC), 0xCF8);
+    outl(val, 0xCFC);
 }
 
 uint16_t read_pci_word(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg) {
@@ -227,7 +227,7 @@ uint16_t read_pci_word(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg) {
         volatile uint16_t *p = (volatile uint16_t*)get_ecam_ptr(bus, dev, func, reg);
         return *p;
     }
-    outl(0xCF8, 0x80000000u | ((uint32_t)bus << 16) | ((uint32_t)dev << 11) | ((uint32_t)func << 8) | (reg & 0xFC));
+    outl(0x80000000u | ((uint32_t)bus << 16) | ((uint32_t)dev << 11) | ((uint32_t)func << 8) | (reg & 0xFC), 0xCF8);
     return inw(0xCFC + (reg & 2));
 }
 
@@ -237,8 +237,8 @@ void write_pci_word(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg, uint16_
         *p = val;
         return;
     }
-    outl(0xCF8, 0x80000000u | ((uint32_t)bus << 16) | ((uint32_t)dev << 11) | ((uint32_t)func << 8) | (reg & 0xFC));
-    outw(0xCFC + (reg & 2), val);
+    outl(0x80000000u | ((uint32_t)bus << 16) | ((uint32_t)dev << 11) | ((uint32_t)func << 8) | (reg & 0xFC), 0xCF8);
+    outw(val, 0xCFC + (reg & 2));
 }
 
 uint16_t vendor_pci(uint8_t bus, uint8_t dev, uint8_t func) {

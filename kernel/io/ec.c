@@ -32,10 +32,10 @@ static uacpi_status ec_read_byte(ec_controller_t *ec, uint8_t address, uint8_t *
     ec_drain_output(ec);
     uacpi_status status = ec_wait_status(ec, EC_STATUS_IBF, 0);
     if (uacpi_unlikely_error(status)) return status;
-    outb(ec->command_port, EC_COMMAND_READ);
+    outb(EC_COMMAND_READ, ec->command_port);
     status = ec_wait_status(ec, EC_STATUS_IBF, 0);
     if (uacpi_unlikely_error(status)) return status;
-    outb(ec->data_port, address);
+    outb(address, ec->data_port);
     status = ec_wait_status(ec, EC_STATUS_OBF, EC_STATUS_OBF);
     if (uacpi_unlikely_error(status)) return status;
     *value = inb(ec->data_port);
@@ -46,13 +46,13 @@ static uacpi_status ec_write_byte(ec_controller_t *ec, uint8_t address, uint8_t 
     ec_drain_output(ec);
     uacpi_status status = ec_wait_status(ec, EC_STATUS_IBF, 0);
     if (uacpi_unlikely_error(status)) return status;
-    outb(ec->command_port, EC_COMMAND_WRITE);
+    outb(EC_COMMAND_WRITE, ec->command_port);
     status = ec_wait_status(ec, EC_STATUS_IBF, 0);
     if (uacpi_unlikely_error(status)) return status;
-    outb(ec->data_port, address);
+    outb(address, ec->data_port);
     status = ec_wait_status(ec, EC_STATUS_IBF, 0);
     if (uacpi_unlikely_error(status)) return status;
-    outb(ec->data_port, value);
+    outb(value, ec->data_port);
     return ec_wait_status(ec, EC_STATUS_IBF, 0);
 }
 

@@ -17,9 +17,9 @@ static net_device_t rtl8139_net_device;
 static uint8_t rtl_read8(uint8_t reg) { return inb(rtl8139.io_base + reg); }
 static uint16_t rtl_read16(uint8_t reg) { return inw(rtl8139.io_base + reg); }
 static uint32_t rtl_read32(uint8_t reg) { return inl(rtl8139.io_base + reg); }
-static void rtl_write8(uint8_t reg, uint8_t v) { outb(rtl8139.io_base + reg, v); }
-static void rtl_write16(uint8_t reg, uint16_t v) { outw(rtl8139.io_base + reg, v); }
-static void rtl_write32(uint8_t reg, uint32_t v) { outl(rtl8139.io_base + reg, v); }
+static void rtl_write8(uint8_t reg, uint8_t v) { outb(v, rtl8139.io_base + reg); }
+static void rtl_write16(uint8_t reg, uint16_t v) { outw(v, rtl8139.io_base + reg); }
+static void rtl_write32(uint8_t reg, uint32_t v) { outl(v, rtl8139.io_base + reg); }
 
 static void receive_rtl8139(uint64_t *irq) {
     if (!rtl8139_ready) return;
@@ -87,7 +87,7 @@ bool send_rtl8139(const void *data, uint16_t len) {
     int timeout = 100000;
     while (!(rtl_read32(tsd_regs[slot]) & RTL_TSD_OWN) && timeout--) {
         spin_unlock_irqrestore(&rtl_lock, irq);
-        io_wait();
+        wait_io();
         spin_lock_irqsave(&rtl_lock, &irq);
     }
     if (timeout <= 0) { spin_unlock_irqrestore(&rtl_lock, irq); return false; }

@@ -20,22 +20,22 @@ void reboot(void) {
         uint8_t status = inb(0x64);
         if (status == 0xFF) break;
         if (!(status & 0x02)) {
-            outb(0x64, 0xFE);
+            outb(0xFE, 0x64);
             sleep(20);
             break;
         }
         __asm__ volatile ("pause");
     }
-    outb(0xCF9, 0x02);
-    outb(0xCF9, 0x06);
+    outb(0x02, 0xCF9);
+    outb(0x06, 0xCF9);
     halt();
 }
 
 void poweroff(void) {
     begin_power_transition();
     // Try emulator ports first and then actual uACPI poweroff
-    outw(0x604, 0x2000);
-    outw(0xB004, 0x2000);
+    outw(0x2000, 0x604);
+    outw(0x2000, 0xB004);
     uacpi_enter_sleep_state_simple(UACPI_SLEEP_STATE_S5);
     halt();
 }

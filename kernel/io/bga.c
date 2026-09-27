@@ -15,13 +15,13 @@ static uint32_t bga_vram_size = 0;
 static bool bga_ready = false;
 
 static uint16_t read_bga_register(uint16_t index) {
-    outw(BGA_IOPORT_INDEX, index);
+    outw(index, BGA_IOPORT_INDEX);
     return inw(BGA_IOPORT_DATA);
 }
 
 static void write_bga_register(uint16_t index, uint16_t value) {
-    outw(BGA_IOPORT_INDEX, index);
-    outw(BGA_IOPORT_DATA, value);
+    outw(index, BGA_IOPORT_INDEX);
+    outw(value, BGA_IOPORT_DATA);
 }
 
 static uint32_t get_bga_vram_size(pci_device_t *dev, uint32_t bar0) {
@@ -48,7 +48,7 @@ static bool is_bpp_supported_by_bga(uint16_t bpp) {
 }
 
 static void program_bga_palette(bool eight_bit_dac) {
-    outb(BGA_DAC_WRITE_INDEX, 0);
+    outb(0, BGA_DAC_WRITE_INDEX);
 
     for (uint16_t i = 0; i < 256; i++) {
         uint32_t color = palette_color_for_bga((uint8_t)i);
@@ -62,9 +62,9 @@ static void program_bga_palette(bool eight_bit_dac) {
             blue >>= 2;
         }
 
-        outb(BGA_DAC_DATA, red);
-        outb(BGA_DAC_DATA, green);
-        outb(BGA_DAC_DATA, blue);
+        outb(red, BGA_DAC_DATA);
+        outb(green, BGA_DAC_DATA);
+        outb(blue, BGA_DAC_DATA);
     }
 }
 

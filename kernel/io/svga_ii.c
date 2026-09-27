@@ -20,13 +20,13 @@ static bool svga_ii_ready = false;
 static spinlock_t svga_ii_fifo_lock = SPINLOCK_INIT;
 
 static uint32_t read_svga_ii_register(uint32_t index) {
-    outl(svga_ii_io_base + SVGA_II_INDEX_PORT, index);
+    outl(index, svga_ii_io_base + SVGA_II_INDEX_PORT);
     return inl(svga_ii_io_base + SVGA_II_VALUE_PORT);
 }
 
 static void write_svga_ii_register(uint32_t index, uint32_t value) {
-    outl(svga_ii_io_base + SVGA_II_INDEX_PORT, index);
-    outl(svga_ii_io_base + SVGA_II_VALUE_PORT, value);
+    outl(index, svga_ii_io_base + SVGA_II_INDEX_PORT);
+    outl(value, svga_ii_io_base + SVGA_II_VALUE_PORT);
 }
 
 static int sync_svga_ii(void) {

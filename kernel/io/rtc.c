@@ -27,8 +27,8 @@ typedef struct {
 } rtc_time_t;
 
 static uint8_t read_rtc_register(uint8_t reg) {
-    outb(CMOS_ADDR, reg | 0x80);
-    io_wait();
+    outb(reg | 0x80, CMOS_ADDR);
+    wait_io();
     return inb(CMOS_DATA);
 }
 

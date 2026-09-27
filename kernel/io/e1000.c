@@ -29,7 +29,7 @@ static uint32_t read_mmio32(uint32_t reg) { return *(volatile uint32_t *)(e1000_
 
 static void reset_e1000_tx(void) {
     write_mmio32(E1000_TCTL, read_mmio32(E1000_TCTL) & ~TCTL_EN);
-    for (int i = 0; i < 8; i++) io_wait();
+    for (int i = 0; i < 8; i++) wait_io();
     write_mmio32(E1000_TDH, 0);
     write_mmio32(E1000_TDT, 0);
     for (int i = 0; i < E1000_NUM_TX_DESC; i++) {
@@ -53,14 +53,14 @@ static bool wait_e1000_tx(uint16_t descriptor) {
 // Detect EEPROM and read MAC
 static bool detect_eeprom(void) {
     write_mmio32(E1000_EEPROM, 0x1); 
-    for (int i = 0; i < 1000 && !(read_mmio32(E1000_EEPROM) & 0x10); i++) io_wait();
+    for (int i = 0; i < 1000 && !(read_mmio32(E1000_EEPROM) & 0x10); i++) wait_io();
     return (read_mmio32(E1000_EEPROM) & 0x10) != 0;
 }
 
 static uint16_t read_eeprom(uint8_t addr) {
     uint32_t temp = 0;
     write_mmio32(E1000_EEPROM, 1 | ((uint32_t)(addr) << 8));
-    while (!((temp = read_mmio32(E1000_EEPROM)) & (1 << 4))) io_wait();
+    while (!((temp = read_mmio32(E1000_EEPROM)) & (1 << 4))) wait_io();
     return (uint16_t)((temp >> 16) & 0xFFFF);
 }
 

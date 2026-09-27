@@ -16,16 +16,16 @@ static int first_atapi = -1;
 static uint32_t read_atapi_be32(const uint8_t *data) { return ((uint32_t)data[0] << 24) | ((uint32_t)data[1] << 16) | ((uint32_t)data[2] << 8) | data[3]; }
 
 static void write_atapi_packet(const ide_device_t *device, const uint8_t packet[12]) {
-    for (int i = 0; i < 6; i++) outw(device->io_base + IDE_REG_DATA, (uint16_t)packet[i * 2] | ((uint16_t)packet[i * 2 + 1] << 8));
+    for (int i = 0; i < 6; i++) outw((uint16_t)packet[i * 2] | ((uint16_t)packet[i * 2 + 1] << 8), device->io_base + IDE_REG_DATA);
 }
 
 static int identify_atapi(const ide_device_t *device) {
     select_ide_device(device);
-    outb(device->io_base + IDE_REG_SECTOR_COUNT, 0);
-    outb(device->io_base + IDE_REG_LBA_LOW, 0);
-    outb(device->io_base + IDE_REG_LBA_MID, 0);
-    outb(device->io_base + IDE_REG_LBA_HIGH, 0);
-    outb(device->io_base + IDE_REG_COMMAND, ATAPI_COMMAND_IDENTIFY_PACKET);
+    outb(0, device->io_base + IDE_REG_SECTOR_COUNT);
+    outb(0, device->io_base + IDE_REG_LBA_LOW);
+    outb(0, device->io_base + IDE_REG_LBA_MID);
+    outb(0, device->io_base + IDE_REG_LBA_HIGH);
+    outb(ATAPI_COMMAND_IDENTIFY_PACKET, device->io_base + IDE_REG_COMMAND);
     uint8_t status = inb(device->io_base + IDE_REG_STATUS);
     if (!status || status == 0xFF || wait_ide_not_busy(device) < 0 || wait_ide_drq(device) < 0) return -ENODEV;
 
@@ -38,10 +38,10 @@ static int send_atapi_packet_pio(const ide_device_t *device, const uint8_t packe
     if (size && !data) return -EINVAL;
     if (size) memset(data, 0, size);
     select_ide_device(device);
-    outb(device->io_base + IDE_REG_FEATURES, 0);
-    outb(device->io_base + IDE_REG_LBA_MID, size & 0xFF);
-    outb(device->io_base + IDE_REG_LBA_HIGH, size >> 8);
-    outb(device->io_base + IDE_REG_COMMAND, ATAPI_COMMAND_PACKET);
+    outb(0, device->io_base + IDE_REG_FEATURES);
+    outb(size & 0xFF, device->io_base + IDE_REG_LBA_MID);
+    outb(size >> 8, device->io_base + IDE_REG_LBA_HIGH);
+    outb(ATAPI_COMMAND_PACKET, device->io_base + IDE_REG_COMMAND);
     if (wait_ide_drq(device) < 0) return -EIO;
     write_atapi_packet(device, packet);
     if (wait_ide_drq(device) < 0) return -EIO;
@@ -90,10 +90,10 @@ static int transfer_atapi(int index, uint32_t lba, uint32_t sectors) {
     packet[9] = sectors;
 
     select_ide_device(device);
-    outb(device->io_base + IDE_REG_FEATURES, 1);
-    outb(device->io_base + IDE_REG_LBA_MID, bytes & 0xFF);
-    outb(device->io_base + IDE_REG_LBA_HIGH, (bytes >> 8) & 0xFF);
-    outb(device->io_base + IDE_REG_COMMAND, ATAPI_COMMAND_PACKET);
+    outb(1, device->io_base + IDE_REG_FEATURES);
+    outb(bytes & 0xFF, device->io_base + IDE_REG_LBA_MID);
+    outb((bytes >> 8) & 0xFF, device->io_base + IDE_REG_LBA_HIGH);
+    outb(ATAPI_COMMAND_PACKET, device->io_base + IDE_REG_COMMAND);
     if (wait_ide_drq(device) < 0) return -EIO;
     write_atapi_packet(device, packet);
     return start_ide_dma(device);

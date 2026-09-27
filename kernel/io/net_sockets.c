@@ -125,7 +125,7 @@ static int64_t inet_op_recvfrom(socket_t *sock, void *buf, size_t len, int flags
             poll_tcp(inet->tcp_sock);
             update_interval_timers();
             if (signal_pending()) return -EINTR;
-            io_wait();
+            wait_io();
         }
         if (src_addr && addrlen && *addrlen >= sizeof(sockaddr_in_t)) {
             sockaddr_in_t *in = (sockaddr_in_t *)src_addr;

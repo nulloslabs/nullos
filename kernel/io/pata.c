@@ -14,11 +14,11 @@ static int first_pata = -1;
 
 static int identify_pata(const ide_device_t *device, uint64_t *sectors) {
     select_ide_device(device);
-    outb(device->io_base + IDE_REG_SECTOR_COUNT, 0);
-    outb(device->io_base + IDE_REG_LBA_LOW, 0);
-    outb(device->io_base + IDE_REG_LBA_MID, 0);
-    outb(device->io_base + IDE_REG_LBA_HIGH, 0);
-    outb(device->io_base + IDE_REG_COMMAND, PATA_COMMAND_IDENTIFY);
+    outb(0, device->io_base + IDE_REG_SECTOR_COUNT);
+    outb(0, device->io_base + IDE_REG_LBA_LOW);
+    outb(0, device->io_base + IDE_REG_LBA_MID);
+    outb(0, device->io_base + IDE_REG_LBA_HIGH);
+    outb(PATA_COMMAND_IDENTIFY, device->io_base + IDE_REG_COMMAND);
     uint8_t status = inb(device->io_base + IDE_REG_STATUS);
     if (!status || status == 0xFF || wait_ide_not_busy(device) < 0) return -ENODEV;
     if (inb(device->io_base + IDE_REG_LBA_MID) || inb(device->io_base + IDE_REG_LBA_HIGH)) return -ENODEV;
@@ -38,20 +38,20 @@ static int transfer_pata(int index, uint32_t lba, uint8_t sectors, bool write) {
     if (status < 0) return status;
     if (wait_ide_not_busy(device) < 0) return -EIO;
 
-    outb(device->io_base + IDE_REG_DRIVE, 0xE0 | (device->slave << 4) | ((lba >> 24) & 0x0F));
+    outb(0xE0 | (device->slave << 4) | ((lba >> 24) & 0x0F), device->io_base + IDE_REG_DRIVE);
     delay_ide_400ns(device);
-    outb(device->io_base + IDE_REG_SECTOR_COUNT, sectors);
-    outb(device->io_base + IDE_REG_LBA_LOW, lba & 0xFF);
-    outb(device->io_base + IDE_REG_LBA_MID, (lba >> 8) & 0xFF);
-    outb(device->io_base + IDE_REG_LBA_HIGH, (lba >> 16) & 0xFF);
-    outb(device->io_base + IDE_REG_COMMAND, write ? PATA_COMMAND_WRITE_DMA : PATA_COMMAND_READ_DMA);
+    outb(sectors, device->io_base + IDE_REG_SECTOR_COUNT);
+    outb(lba & 0xFF, device->io_base + IDE_REG_LBA_LOW);
+    outb((lba >> 8) & 0xFF, device->io_base + IDE_REG_LBA_MID);
+    outb((lba >> 16) & 0xFF, device->io_base + IDE_REG_LBA_HIGH);
+    outb(write ? PATA_COMMAND_WRITE_DMA : PATA_COMMAND_READ_DMA, device->io_base + IDE_REG_COMMAND);
     return start_ide_dma(device);
 }
 
 static int flush_pata_cache(int index) {
     ide_device_t *device = &pata_devices[index];
-    outb(device->io_base + IDE_REG_DRIVE, 0xE0 | (device->slave << 4));
-    outb(device->io_base + IDE_REG_COMMAND, PATA_COMMAND_CACHE_FLUSH);
+    outb(0xE0 | (device->slave << 4), device->io_base + IDE_REG_DRIVE);
+    outb(PATA_COMMAND_CACHE_FLUSH, device->io_base + IDE_REG_COMMAND);
     return wait_ide_not_busy(device);
 }
 
