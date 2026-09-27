@@ -1,7 +1,7 @@
 #pragma once
 
-#include <stdint.h>
-#include <stdbool.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stdbool.h>
 #include <binfmt/elf.h>
 
 #define panic(msg, ...) dopanic(__func__, (msg) __VA_OPT__(,) __VA_ARGS__)

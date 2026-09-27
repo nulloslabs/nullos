@@ -1,7 +1,7 @@
 #pragma once
 
-#include <stdint.h>
-#include <stdbool.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stdbool.h>
 
 bool is_hpet_available(void);
 uint64_t read_hpet_counter(void);

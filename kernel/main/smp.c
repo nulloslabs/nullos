@@ -1,4 +1,4 @@
-#include <stdbool.h>
+#include <freestanding/stdbool.h>
 #include <crypto/rng.h>
 #include <main/assert.h>
 #include <main/gdt.h>

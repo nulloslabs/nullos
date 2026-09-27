@@ -1,7 +1,11 @@
 #pragma once
 
-#include <stdint.h>
-#include <sys/types.h>
+#include <freestanding/stdint.h>
+#include <freestanding/sys/types.h>
+
+#define ITIMER_REAL    0
+#define ITIMER_VIRTUAL 1
+#define ITIMER_PROF    2
 
 typedef long suseconds_t;
 
@@ -14,7 +18,3 @@ struct itimerval {
     struct timeval it_interval;
     struct timeval it_value;
 };
-
-#define ITIMER_REAL    0
-#define ITIMER_VIRTUAL 1
-#define ITIMER_PROF    2

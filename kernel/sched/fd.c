@@ -1,8 +1,8 @@
-#include <stdint.h>
-#include <stdbool.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <sys/epoll.h>
+#include <freestanding/stdint.h>
+#include <freestanding/errno.h>
+#include <freestanding/fcntl.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/sys/epoll.h>
 #include <drivers/devices/devices.h>
 #include <drivers/tty/pty.h>
 #include <main/assert.h>

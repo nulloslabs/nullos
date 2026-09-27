@@ -14,7 +14,7 @@ else
 endif
 
 CC = $(CROSS)gcc
-CFLAGS := -O2 -m64 -std=c11 -Wall -Wextra -I$(INCLUDE_DIR)/include/ -I$(INCLUDE_DIR)/include/freestanding/ -I$(INCLUDE_DIR)/include/generated/ -I$(INCLUDE_DIR)/include/limine/ -I$(INCLUDE_DIR)/uacpi/include/ -DKERNEL_RELEASE=\"$(KERNEL_RELEASE)\" -ffreestanding -nostdlib -nostdinc -fno-builtin -nodefaultlibs -nostartfiles -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie -fno-lto -fno-stack-check -mno-red-zone -mcmodel=kernel -mabi=sysv -march=x86-64 -mtune=generic -mno-sse -mno-sse2 -mno-mmx -mno-80387 -MMD -MP
+CFLAGS := -O2 -m64 -std=c11 -Wall -Wextra -I$(INCLUDE_DIR)/include/ -I$(INCLUDE_DIR)/include/freestanding/ -I$(INCLUDE_DIR)/include/generated/ -I$(INCLUDE_DIR)/uacpi/include/ -DKERNEL_RELEASE=\"$(KERNEL_RELEASE)\" -ffreestanding -nostdlib -nostdinc -fno-builtin -nodefaultlibs -nostartfiles -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie -fno-lto -fno-stack-check -mno-red-zone -mcmodel=kernel -mabi=sysv -march=x86-64 -mtune=generic -mno-sse -mno-sse2 -mno-mmx -mno-80387 -MMD -MP
 ifeq ($(DEBUG),1)
 	CFLAGS := -g $(CFLAGS)
 endif

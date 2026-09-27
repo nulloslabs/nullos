@@ -1,9 +1,9 @@
 #pragma once
 
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <sound/asound.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/sound/asound.h>
 
 #define SND_CTL_NUMID_VOLUME 1
 #define SND_CTL_NUMID_SWITCH 2

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <stdint.h>
+#include <freestanding/stdint.h>
 
 struct madt_header {
     uint32_t local_apic_addr;

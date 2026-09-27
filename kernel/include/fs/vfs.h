@@ -1,10 +1,10 @@
 #pragma once
 
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <sys/types.h>
-#include <time.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/sys/types.h>
+#include <freestanding/time.h>
 
 #define VFS_MAX_MOUNTS 16
 #define VFS_SOURCE_MAX 256

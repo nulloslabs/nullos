@@ -1,6 +1,6 @@
 #pragma once
 
-#include <stddef.h>
+#include <freestanding/stddef.h>
 
 char *index(const char *s, int c);
 char *rindex(const char *s, int c);

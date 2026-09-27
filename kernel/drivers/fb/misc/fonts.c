@@ -1,8 +1,8 @@
-#include <stdint.h>
-#include <errno.h>
-#include <limine.h>
+#include <freestanding/stdint.h>
+#include <freestanding/errno.h>
 #include <drivers/fb/misc/fonts.h>
 #include <fs/vfs.h>
+#include <limine/limine.h>
 #include <main/halt.h>
 #include <main/limine_req.h>
 #include <main/log.h>

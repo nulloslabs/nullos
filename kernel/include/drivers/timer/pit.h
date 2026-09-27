@@ -1,6 +1,6 @@
 #pragma once
 
-#include <stdint.h>
+#include <freestanding/stdint.h>
 
 uint16_t read_pit_counter(void);
 void init_pit(uint32_t hz);

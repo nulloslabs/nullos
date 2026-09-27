@@ -1,11 +1,11 @@
 #pragma once
 
-#include <stdint.h>
-#include <stddef.h>
-#include <stdbool.h>
-#include <dirent.h>
-#include <sys/stat.h>
-#include <sys/types.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/dirent.h>
+#include <freestanding/sys/stat.h>
+#include <freestanding/sys/types.h>
 #include <main/spinlocks.h>
 // Defines
 

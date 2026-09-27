@@ -1,7 +1,7 @@
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdarg.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdarg.h>
+#include <freestanding/stdbool.h>
 #include <main/boot_args.h>
 #include <main/log.h>
 #include <main/spinlocks.h>

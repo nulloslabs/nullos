@@ -1,6 +1,6 @@
 #pragma once
 
-#include <stdint.h>
+#include <freestanding/stdint.h>
 
 #define SI_LOAD_SHIFT 16
 

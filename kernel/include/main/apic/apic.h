@@ -1,6 +1,6 @@
 #pragma once
 
-#include <stdint.h>
+#include <freestanding/stdint.h>
 // LAPIC register offsets (for xAPIC MMIO)
 #define LAPIC_ID 0x020
 #define LAPIC_VERSION 0x030

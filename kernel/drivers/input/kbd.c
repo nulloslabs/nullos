@@ -1,7 +1,7 @@
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <signal.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/signal.h>
 #include <drivers/acpi/power.h>
 #include <drivers/input/kbd.h>
 #include <drivers/ps2/ps2_keyboard.h>

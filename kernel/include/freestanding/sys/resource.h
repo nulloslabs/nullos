@@ -1,7 +1,7 @@
 #pragma once
 
-#include <stdint.h>
-#include <sys/time.h>
+#include <freestanding/stdint.h>
+#include <freestanding/sys/time.h>
 
 #define RLIM_INFINITY     ((rlim_t)-1)
 #define RLIMIT_CPU        0

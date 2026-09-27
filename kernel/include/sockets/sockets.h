@@ -1,12 +1,12 @@
 #pragma once
 
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <sys/types.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/fcntl.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/netinet/in.h>
+#include <freestanding/sys/socket.h>
+#include <freestanding/sys/types.h>
 #include <main/spinlocks.h>
 
 #define ETH_P_ALL 0x0003

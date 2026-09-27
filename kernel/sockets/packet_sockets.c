@@ -1,5 +1,5 @@
-#include <stdbool.h>
-#include <errno.h>
+#include <freestanding/errno.h>
+#include <freestanding/stdbool.h>
 #include <drivers/net/net.h>
 #include <main/spinlocks.h>
 #include <mm/mm.h>

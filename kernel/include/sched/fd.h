@@ -1,9 +1,9 @@
 #pragma once
 
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <sys/types.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/sys/types.h>
 
 #define FD_MAX 1024
 #define AT_FDCWD -100

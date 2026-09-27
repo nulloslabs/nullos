@@ -1,7 +1,7 @@
 #pragma once
 
-#include <stdint.h>
-#include <stdbool.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stdbool.h>
 
 #define EPOLLIN      0x0001
 #define EPOLLPRI     0x0002

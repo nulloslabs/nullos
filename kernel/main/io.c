@@ -1,4 +1,4 @@
-#include <stdint.h>
+#include <freestanding/stdint.h>
 #include <main/io.h>
 
 void outb(uint8_t value, uint16_t port) {

@@ -10,10 +10,10 @@
 #define PMM_PAGE_ALLOCATED (-1)
 
 #ifndef __ASSEMBLY__
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <limine.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdbool.h>
+#include <limine/limine.h>
 
 typedef enum {
     PMM_ZONE_DMA32,

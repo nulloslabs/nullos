@@ -1,13 +1,13 @@
 #pragma once
 
-#include <stdbool.h>
-#include <stdint.h>
-#include <stddef.h>
-#include <sys/stat.h>
-#include <sys/time.h>
-#include <sys/resource.h>
-#include <sys/epoll.h>
-#include <sys/statx.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/sys/stat.h>
+#include <freestanding/sys/time.h>
+#include <freestanding/sys/resource.h>
+#include <freestanding/sys/epoll.h>
+#include <freestanding/sys/statx.h>
 #include <fs/initrd.h>
 
 #define USER_ADDR_MAX 0x0000800000000000ULL

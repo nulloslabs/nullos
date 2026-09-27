@@ -1,6 +1,6 @@
 #pragma once
 
-#include <stdint.h>
+#include <freestanding/stdint.h>
 
 extern unsigned char current_font[16384];
 extern uint8_t current_font_w;

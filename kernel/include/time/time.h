@@ -1,6 +1,6 @@
 #pragma once
 
-#include <stdint.h>
+#include <freestanding/stdint.h>
 
 uint64_t get_monotonic_time_us(void);
 uint64_t get_raw_time_counter(void);

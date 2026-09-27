@@ -1,5 +1,5 @@
-#include <errno.h>
-#include <signal.h>
+#include <freestanding/errno.h>
+#include <freestanding/signal.h>
 #include <drivers/tty/pts_devices.h>
 #include <drivers/tty/pty.h>
 #include <fs/devpts.h>

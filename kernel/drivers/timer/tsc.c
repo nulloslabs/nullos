@@ -1,4 +1,4 @@
-#include <stdint.h>
+#include <freestanding/stdint.h>
 #include <drivers/timer/tsc.h>
 #include <main/limine_req.h>
 

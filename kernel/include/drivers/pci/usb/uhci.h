@@ -1,7 +1,7 @@
 #pragma once
 
-#include <stdint.h>
-#include <stdbool.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stdbool.h>
 #include <drivers/pci/pci.h>
 #include <drivers/usb/usb.h>
 

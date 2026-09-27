@@ -1,13 +1,13 @@
 #pragma once
 
-#include <stdint.h>
-#include <stddef.h>
-#include <stdbool.h>
-#include <dirent.h>
-#include <sys/stat.h>
-#include <sys/statx.h>
-#include <sys/types.h>
-#include <time.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/dirent.h>
+#include <freestanding/sys/stat.h>
+#include <freestanding/sys/statx.h>
+#include <freestanding/sys/types.h>
+#include <freestanding/time.h>
 #include <main/spinlocks.h>
 
 #define EXT4_SUPER_OFFSET        1024ULL

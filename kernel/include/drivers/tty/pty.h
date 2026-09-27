@@ -1,9 +1,9 @@
 #pragma once
 
-#include <stdint.h>
-#include <stdbool.h>
-#include <termios.h>
-#include <sys/types.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/termios.h>
+#include <freestanding/sys/types.h>
 #include <drivers/tty/tty.h>
 
 #define NUM_PTYS 16

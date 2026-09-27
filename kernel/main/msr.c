@@ -1,4 +1,4 @@
-#include <stdint.h>
+#include <freestanding/stdint.h>
 #include <main/msr.h>
 
 uint64_t read_msr(uint32_t msr) {

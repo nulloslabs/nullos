@@ -1,7 +1,7 @@
 #pragma once
 
-#include <stdbool.h>
-#include <stddef.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdbool.h>
 
 void add_entropy_bytes(const void *buf, size_t len);
 void get_random_bytes(void *buf, size_t len);

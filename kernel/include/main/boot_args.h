@@ -1,6 +1,6 @@
 #pragma once
 
-#include <stdbool.h>
+#include <freestanding/stdbool.h>
 
 const char *get_boot_args(void);
 bool has_boot_arg(const char *key);

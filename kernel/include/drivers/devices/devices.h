@@ -1,7 +1,7 @@
 #pragma once
 
-#include <stdint.h>
-#include <sys/types.h>
+#include <freestanding/stdint.h>
+#include <freestanding/sys/types.h>
 
 typedef enum {
     DISK_BUS_NONE = 0,

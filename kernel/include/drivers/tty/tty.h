@@ -1,9 +1,9 @@
 #pragma once
 
-#include <stdint.h>
-#include <stdbool.h>
-#include <sys/types.h>
-#include <termios.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/sys/types.h>
+#include <freestanding/termios.h>
 #include <main/spinlocks.h>
 
 #define NUM_TTYS          8

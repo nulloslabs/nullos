@@ -1,28 +1,28 @@
 #pragma once
 
-#include <stdint.h>
+#include <freestanding/stdint.h>
 
-#define STATX_TYPE        0x00000001U
-#define STATX_MODE        0x00000002U
-#define STATX_NLINK       0x00000004U
-#define STATX_UID         0x00000008U
-#define STATX_GID         0x00000010U
-#define STATX_ATIME       0x00000020U
-#define STATX_MTIME       0x00000040U
-#define STATX_CTIME       0x00000080U
-#define STATX_INO         0x00000100U
-#define STATX_SIZE        0x00000200U
-#define STATX_BLOCKS      0x00000400U
-#define STATX_BASIC_STATS 0x000007ffU
-#define STATX_BTIME       0x00000800U
-#define STATX_MNT_ID      0x00001000U
-#define STATX_DIOALIGN    0x00002000U
-#define STATX_MNT_ID_UNIQUE 0x00004000U
-#define STATX_SUBVOL      0x00008000U
-#define STATX_WRITE_ATOMIC 0x00010000U
+#define STATX_TYPE           0x00000001U
+#define STATX_MODE           0x00000002U
+#define STATX_NLINK          0x00000004U
+#define STATX_UID            0x00000008U
+#define STATX_GID            0x00000010U
+#define STATX_ATIME          0x00000020U
+#define STATX_MTIME          0x00000040U
+#define STATX_CTIME          0x00000080U
+#define STATX_INO            0x00000100U
+#define STATX_SIZE           0x00000200U
+#define STATX_BLOCKS         0x00000400U
+#define STATX_BASIC_STATS    0x000007ffU
+#define STATX_BTIME          0x00000800U
+#define STATX_MNT_ID         0x00001000U
+#define STATX_DIOALIGN       0x00002000U
+#define STATX_MNT_ID_UNIQUE  0x00004000U
+#define STATX_SUBVOL         0x00008000U
+#define STATX_WRITE_ATOMIC   0x00010000U
 #define STATX_DIO_READ_ALIGN 0x00020000U
-#define STATX__RESERVED   0x80000000U
-#define STATX_ALL         0x00000fffU
+#define STATX__RESERVED      0x80000000U
+#define STATX_ALL            0x00000fffU
 
 #define STATX_ATTR_COMPRESSED   0x00000004ULL
 #define STATX_ATTR_IMMUTABLE    0x00000010ULL

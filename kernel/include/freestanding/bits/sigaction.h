@@ -1,7 +1,7 @@
 #pragma once
 
-#include <asm-generic/signal.h>
-#include <stddef.h>
+#include <freestanding/asm-generic/signal.h>
+#include <freestanding/stddef.h>
 
 #define sa_handler   __sigaction_handler.__sa_handler
 #define sa_sigaction __sigaction_handler.__sa_sigaction

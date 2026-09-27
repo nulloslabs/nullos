@@ -1,11 +1,11 @@
 #pragma once
 
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <time.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/sys/types.h>
+#include <freestanding/sys/stat.h>
+#include <freestanding/time.h>
 #include <main/spinlocks.h>
 
 #define TMPFS_MAX_NAME      128

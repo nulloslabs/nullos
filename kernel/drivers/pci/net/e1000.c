@@ -1,4 +1,4 @@
-#include <stdbool.h>
+#include <freestanding/stdbool.h>
 #include <drivers/net/net.h>
 #include <drivers/pci/net/e1000.h>
 #include <main/io.h>

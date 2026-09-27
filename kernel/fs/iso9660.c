@@ -1,7 +1,7 @@
-#include <stdbool.h>
-#include <stdint.h>
-#include <errno.h>
-#include <sys/mount.h>
+#include <freestanding/stdint.h>
+#include <freestanding/errno.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/sys/mount.h>
 #include <drivers/devices/devices.h>
 #include <fs/iso9660.h>
 #include <mm/mm.h>

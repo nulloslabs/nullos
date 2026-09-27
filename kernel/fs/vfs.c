@@ -1,7 +1,7 @@
-#include <errno.h>
-#include <sys/mount.h>
-#include <sys/stat.h>
-#include <time.h>
+#include <freestanding/errno.h>
+#include <freestanding/sys/mount.h>
+#include <freestanding/sys/stat.h>
+#include <freestanding/time.h>
 #include <fs/devtmpfs.h>
 #include <fs/ext4.h>
 #include <fs/initrd.h>

@@ -1,8 +1,8 @@
-#include <stdbool.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <sys/types.h>
-#include <sys/stat.h>
+#include <freestanding/errno.h>
+#include <freestanding/fcntl.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/sys/types.h>
+#include <freestanding/sys/stat.h>
 #include <binfmt/elf.h>
 #include <crypto/rng.h>
 #include <fs/devtmpfs.h>

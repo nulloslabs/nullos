@@ -1,7 +1,7 @@
 #pragma once
 
-#include <stdint.h>
-#include <stddef.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
 #include <mm/vmm.h>
 #include <sched/sched.h>
 

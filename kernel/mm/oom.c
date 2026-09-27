@@ -1,5 +1,5 @@
-#include <stddef.h>
-#include <signal.h>
+#include <freestanding/stddef.h>
+#include <freestanding/signal.h>
 #include <main/log.h>
 #include <main/panic.h>
 #include <mm/mm.h>

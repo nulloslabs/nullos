@@ -1,3 +1,3 @@
 #pragma once
 
-#include <linux/kd.h>
+#include <freestanding/linux/kd.h>

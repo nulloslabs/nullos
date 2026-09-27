@@ -1,6 +1,6 @@
 #pragma once
 
-#include <stdbool.h>
+#include <freestanding/stdbool.h>
 
 #define CR4_SMEP (1ULL << 20)
 

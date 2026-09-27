@@ -1,8 +1,8 @@
-#include <stddef.h>
-#include <stdint.h>
-#include <stdbool.h>
-#include <signal.h>
-#include <sys/kd.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/signal.h>
+#include <freestanding/sys/kd.h>
 #include <drivers/input/kbd.h>
 #include <drivers/tty/pty.h>
 #include <drivers/tty/tty.h>

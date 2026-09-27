@@ -1,8 +1,8 @@
 #pragma once
 
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdbool.h>
 #include <drivers/usb/usb.h>
 
 #define USB_MSC_CLASS              0x08

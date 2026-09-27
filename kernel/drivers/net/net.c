@@ -1,5 +1,5 @@
-#include <stdbool.h>
-#include <netinet/in.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/netinet/in.h>
 #include <drivers/net/dhcp.h>
 #include <drivers/net/net.h>
 #include <main/io.h>

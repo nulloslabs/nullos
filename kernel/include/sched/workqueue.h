@@ -1,6 +1,6 @@
 #pragma once
 
-#include <stdbool.h>
+#include <freestanding/stdbool.h>
 
 #define KERNEL_WORK_CAPACITY 64
 

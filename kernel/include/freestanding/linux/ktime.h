@@ -1,7 +1,7 @@
 #pragma once
 
-#include <stdint.h>
-#include <linux/types.h>
+#include <freestanding/stdint.h>
+#include <freestanding/linux/types.h>
 
 #define NSEC_PER_SEC  1000000000LL
 #define KTIME_MAX     INT64_MAX

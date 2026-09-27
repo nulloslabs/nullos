@@ -1,7 +1,7 @@
 #pragma once
 
-#include <stdint.h>
-#include <sys/socket.h>
+#include <freestanding/stdint.h>
+#include <freestanding/sys/socket.h>
 
 #define IFNAMSIZ 16
 

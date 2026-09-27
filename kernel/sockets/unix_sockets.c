@@ -1,5 +1,5 @@
-#include <stdbool.h>
-#include <errno.h>
+#include <freestanding/errno.h>
+#include <freestanding/stdbool.h>
 #include <fs/tmpfs.h>
 #include <main/spinlocks.h>
 #include <mm/mm.h>

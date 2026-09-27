@@ -1,5 +1,5 @@
 #pragma once
 
-#include <stdint.h>
+#include <freestanding/stdint.h>
 
 typedef int64_t ktime_t;

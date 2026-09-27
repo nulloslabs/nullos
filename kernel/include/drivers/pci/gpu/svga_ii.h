@@ -1,6 +1,6 @@
 #pragma once
 
-#include <stdint.h>
+#include <freestanding/stdint.h>
 #include <drivers/pci/pci.h>
 
 #define SVGA_II_VENDOR 0x15AD

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <stdint.h>
+#include <freestanding/stdint.h>
 
 typedef enum {
     FB_NONE = 0,   // No framebuffer driver

@@ -1,7 +1,7 @@
 #pragma once
 
-#include <stdint.h>
-#include <stddef.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
 
 size_t get_fpu_state_size(void);
 void save_fpu_state(void *area);

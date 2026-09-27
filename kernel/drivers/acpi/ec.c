@@ -1,4 +1,4 @@
-#include <stdint.h>
+#include <freestanding/stdint.h>
 #include <drivers/acpi/ec.h>
 #include <main/io.h>
 #include <main/log.h>

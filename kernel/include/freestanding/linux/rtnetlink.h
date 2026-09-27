@@ -1,7 +1,7 @@
 #pragma once
 
-#include <stdint.h>
-#include <linux/netlink.h>
+#include <freestanding/stdint.h>
+#include <freestanding/linux/netlink.h>
 
 #define RTM_NEWLINK 16
 #define RTM_DELLINK 17

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <stdint.h>
+#include <freestanding/stdint.h>
 #include <main/spinlocks.h>
 #include <uacpi/namespace.h>
 #include <uacpi/status.h>

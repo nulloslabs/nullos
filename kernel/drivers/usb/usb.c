@@ -1,5 +1,5 @@
-#include <stdint.h>
-#include <stddef.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
 #include <drivers/pci/usb/ehci.h>
 #include <drivers/pci/usb/ohci.h>
 #include <drivers/pci/usb/uhci.h>

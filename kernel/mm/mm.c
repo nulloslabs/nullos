@@ -1,7 +1,7 @@
-#include <stddef.h>
-#include <stdint.h>
-#include <stdbool.h>
-#include <limits.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/limits.h>
 #include <main/assert.h>
 #include <main/limine_req.h>
 #include <main/log.h>

@@ -10,8 +10,8 @@
 #define KSTACK_SLOT_SIZE (KSTACK_SIZE + 2 * KSTACK_GUARD_SIZE)
 
 #ifndef __ASSEMBLY__
-#include <stdint.h>
-#include <stdbool.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stdbool.h>
 #include <mm/vmm.h>
 
 void *alloc_kstack(void);

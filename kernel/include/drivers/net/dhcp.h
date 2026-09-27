@@ -1,8 +1,8 @@
 #pragma once
 
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdbool.h>
 
 #define DHCP_CLIENT_PORT 68
 #define DHCP_SERVER_PORT 67

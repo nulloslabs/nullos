@@ -1,7 +1,7 @@
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <netinet/in.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/netinet/in.h>
 #include <crypto/rng.h>
 #include <drivers/net/dhcp.h>
 #include <drivers/net/net.h>

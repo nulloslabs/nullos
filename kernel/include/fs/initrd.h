@@ -1,10 +1,10 @@
 #pragma once
 
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <sys/types.h>
-#include <time.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/sys/types.h>
+#include <freestanding/time.h>
 
 #define MAX_MODIFIED_FILES 1024
 #define INITRD_MAX_FILE_SIZE (256ULL * 1024 * 1024)

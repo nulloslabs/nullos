@@ -1,10 +1,7 @@
-// NullOS ALSA-compatible sound ABI (subset of Linux sound/asound.h).
-// Struct layouts and ioctl numbers match Linux x86_64 exactly.
-
 #pragma once
 
-#include <stdint.h>
-#include <time.h>
+#include <freestanding/stdint.h>
+#include <freestanding/time.h>
 
 #define SNDRV_LITTLE_ENDIAN
 #define SNDRV_MASK_MAX                256
@@ -155,6 +152,7 @@
 #define SNDRV_CTL_IOCTL_PCM_PREFER_SUBDEVICE 0x40045532
 
 #define SNDRV_PROTOCOL_VERSION(major, minor, subminor) (((major) << 16) | ((minor) << 8) | (subminor))
+
 #define SNDRV_PCM_VERSION    SNDRV_PROTOCOL_VERSION(2, 0, 18)
 #define SNDRV_CTL_VERSION    SNDRV_PROTOCOL_VERSION(2, 0, 10)
 #define SNDRV_TIMER_VERSION  SNDRV_PROTOCOL_VERSION(2, 0, 8)
@@ -171,20 +169,20 @@
 #define SNDRV_TIMER_PSFLG_EXCLUSIVE   (1 << 1)
 #define SNDRV_TIMER_PSFLG_EARLY_EVENT (1 << 2)
 
-#define SNDRV_TIMER_IOCTL_PVERSION      0x80045400
-#define SNDRV_TIMER_IOCTL_NEXT_DEVICE   0xC0145401
-#define SNDRV_TIMER_IOCTL_GINFO         0xC0F85403
-#define SNDRV_TIMER_IOCTL_GPARAMS       0x40485404
-#define SNDRV_TIMER_IOCTL_GSTATUS       0xC0505405
-#define SNDRV_TIMER_IOCTL_SELECT        0x40345410
-#define SNDRV_TIMER_IOCTL_INFO          0x80E85411
-#define SNDRV_TIMER_IOCTL_PARAMS        0x40505412
-#define SNDRV_TIMER_IOCTL_STATUS        0x80605414
-#define SNDRV_TIMER_IOCTL_START         0x54A0
-#define SNDRV_TIMER_IOCTL_STOP          0x54A1
-#define SNDRV_TIMER_IOCTL_CONTINUE      0x54A2
-#define SNDRV_TIMER_IOCTL_PAUSE         0x54A3
+#define SNDRV_TIMER_IOCTL_PVERSION    0x80045400
+#define SNDRV_TIMER_IOCTL_NEXT_DEVICE 0xC0145401
+#define SNDRV_TIMER_IOCTL_GINFO       0xC0F85403
+#define SNDRV_TIMER_IOCTL_GPARAMS     0x40485404
+#define SNDRV_TIMER_IOCTL_GSTATUS     0xC0505405
+#define SNDRV_TIMER_IOCTL_SELECT      0x40345410
+#define SNDRV_TIMER_IOCTL_INFO        0x80E85411
+#define SNDRV_TIMER_IOCTL_PARAMS      0x40505412
+#define SNDRV_TIMER_IOCTL_STATUS      0x80605414
 #define SNDRV_TIMER_IOCTL_TREAD       0x40045402
+#define SNDRV_TIMER_IOCTL_START       0x54A0
+#define SNDRV_TIMER_IOCTL_STOP        0x54A1
+#define SNDRV_TIMER_IOCTL_CONTINUE    0x54A2
+#define SNDRV_TIMER_IOCTL_PAUSE       0x54A3
 
 typedef unsigned long snd_pcm_uframes_t;
 typedef long snd_pcm_sframes_t;

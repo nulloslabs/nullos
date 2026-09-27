@@ -1,7 +1,7 @@
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <errno.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/errno.h>
+#include <freestanding/stdbool.h>
 #include <drivers/disk/nvme.h>
 #include <drivers/pci/pci.h>
 #include <main/io.h>

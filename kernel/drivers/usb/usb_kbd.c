@@ -1,6 +1,6 @@
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdbool.h>
 #include <drivers/input/kbd.h>
 #include <drivers/tty/tty.h>
 #include <drivers/usb/usb.h>

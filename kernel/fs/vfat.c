@@ -1,6 +1,6 @@
-#include <stdbool.h>
-#include <errno.h>
-#include <time.h>
+#include <freestanding/errno.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/time.h>
 #include <drivers/devices/devices.h>
 #include <fs/vfat.h>
 #include <mm/mm.h>

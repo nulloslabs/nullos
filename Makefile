@@ -21,7 +21,7 @@ initrd:
 iso:
 	@$(MAKE) -C iso
 
-qemu:
+qemu: iso
 	@printf "  %-7s %s\n" "QEMU" "$(ISOFILE)"
 	@$(QEMU) $(QEMUFLAGS) -cdrom $(ISOFILE) -boot d
 

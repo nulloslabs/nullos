@@ -1,12 +1,12 @@
-#include <stdint.h>
-#include <stdbool.h>
-#include <errno.h>
-#include <limine.h>
+#include <freestanding/stdint.h>
+#include <freestanding/errno.h>
+#include <freestanding/stdbool.h>
 #include <drivers/fb/fb.h>
 #include <drivers/fb/misc/fonts.h>
 #include <drivers/pci/gpu/bga.h>
 #include <drivers/pci/gpu/svga_ii.h>
 #include <drivers/pci/gpu/virtio_gpu.h>
+#include <limine/limine.h>
 #include <main/halt.h>
 #include <main/limine_req.h>
 #include <main/terminal.h>

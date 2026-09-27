@@ -1,8 +1,8 @@
-#include <stdint.h>
-#include <stdbool.h>
-#include <errno.h>
-#include <sys/statx.h>
-#include <sys/mount.h>
+#include <freestanding/stdint.h>
+#include <freestanding/errno.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/sys/statx.h>
+#include <freestanding/sys/mount.h>
 #include <drivers/devices/devices.h>
 #include <fs/ext4.h>
 #include <mm/mm.h>

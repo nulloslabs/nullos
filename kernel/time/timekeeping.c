@@ -1,4 +1,4 @@
-#include <stdint.h>
+#include <freestanding/stdint.h>
 #include <main/spinlocks.h>
 #include <time/time.h>
 #include <time/timekeeping.h>

@@ -1,6 +1,6 @@
-#include <stdbool.h>
-#include <errno.h>
-#include <sys/stat.h>
+#include <freestanding/errno.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/sys/stat.h>
 #include <crypto/rng.h>
 #include <drivers/devices/devices.h>
 #include <drivers/disk/atapi.h>

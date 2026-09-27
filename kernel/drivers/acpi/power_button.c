@@ -1,4 +1,4 @@
-#include <signal.h>
+#include <freestanding/signal.h>
 #include <drivers/acpi/power.h>
 #include <drivers/acpi/power_button.h>
 #include <main/log.h>

@@ -1,7 +1,7 @@
-#include <stdint.h>
-#include <stdbool.h>
-#include <cpuid.h>
-#include <dirent.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/cpuid.h>
+#include <freestanding/dirent.h>
 #include <fs/devtmpfs.h>
 #include <fs/procfs.h>
 #include <fs/vfs.h>

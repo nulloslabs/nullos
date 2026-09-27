@@ -1,6 +1,6 @@
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdbool.h>
 #include <drivers/disk/atapi.h>
 #include <drivers/disk/nvme.h>
 #include <drivers/disk/pata.h>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <stdint.h>
+#include <freestanding/stdint.h>
 #include <main/smp.h>
 
 #define GDT_SYSRET_BASE 0x10

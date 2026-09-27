@@ -13,7 +13,7 @@
 991:
 .endm
 #else
-#include <stdbool.h>
+#include <freestanding/stdbool.h>
 
 extern bool smap_enabled;
 

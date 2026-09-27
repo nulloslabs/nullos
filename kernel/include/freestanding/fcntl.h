@@ -15,30 +15,28 @@
 #define O_NOFOLLOW  0x020000
 #define O_CLOEXEC   0x080000
 
-#define AT_FDCWD            -100
-#define AT_SYMLINK_NOFOLLOW 0x100
-#define AT_REMOVEDIR        0x200
-#define AT_SYMLINK_FOLLOW   0x400
-#define AT_EACCESS          0x200
-#define AT_NO_AUTOMOUNT     0x800
-#define AT_EMPTY_PATH       0x1000
-#define AT_STATX_SYNC_TYPE   0x6000
+#define AT_FDCWD              -100
+#define AT_SYMLINK_NOFOLLOW   0x100
+#define AT_REMOVEDIR          0x200
+#define AT_SYMLINK_FOLLOW     0x400
+#define AT_EACCESS            0x200
+#define AT_NO_AUTOMOUNT       0x800
+#define AT_EMPTY_PATH         0x1000
+#define AT_STATX_SYNC_TYPE    0x6000
 #define AT_STATX_SYNC_AS_STAT 0x0000
-#define AT_STATX_FORCE_SYNC  0x2000
-#define AT_STATX_DONT_SYNC   0x4000
+#define AT_STATX_FORCE_SYNC   0x2000
+#define AT_STATX_DONT_SYNC    0x4000
 
-#define F_DUPFD     0
-#define F_GETFD     1
-#define F_SETFD     2
-#define F_GETFL     3
-#define F_SETFL     4
-#define F_GETLK     5
-#define F_SETLK     6
-#define F_SETLKW    7
+#define F_DUPFD         0
+#define F_GETFD         1
+#define F_SETFD         2
+#define F_GETFL         3
+#define F_SETFL         4
+#define F_GETLK         5
+#define F_SETLK         6
+#define F_SETLKW        7
 #define F_DUPFD_CLOEXEC 1030
 
-// Per-fd descriptor flags (F_GETFD/F_SETFD), separate from the file status
-// flags in entry->flags (F_GETFL/F_SETFL).
 #define FD_CLOEXEC      1
 #define FD_CLOEXEC_EXEC 2
 

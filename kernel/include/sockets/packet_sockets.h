@@ -1,6 +1,6 @@
 #pragma once
 
-#include <stdint.h>
+#include <freestanding/stdint.h>
 #include <sockets/sockets.h>
 
 int  create_packet_socket_obj(int type, int protocol, socket_t **out);

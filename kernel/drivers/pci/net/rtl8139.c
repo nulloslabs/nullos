@@ -1,5 +1,5 @@
-#include <stdint.h>
-#include <stdbool.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stdbool.h>
 #include <drivers/net/net.h>
 #include <drivers/pci/net/rtl8139.h>
 #include <main/io.h>

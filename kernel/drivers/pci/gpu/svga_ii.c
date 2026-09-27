@@ -1,6 +1,6 @@
-#include <stdint.h>
-#include <stdbool.h>
-#include <errno.h>
+#include <freestanding/stdint.h>
+#include <freestanding/errno.h>
+#include <freestanding/stdbool.h>
 #include <drivers/fb/fb.h>
 #include <drivers/pci/pci.h>
 #include <drivers/pci/gpu/svga_ii.h>

@@ -1,8 +1,8 @@
 #pragma once
 
-#include <stdbool.h>
-#include <stdint.h>
-#include <stddef.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdbool.h>
 
 #define PATA_COMMAND_READ_DMA    0xC8
 #define PATA_COMMAND_WRITE_DMA   0xCA

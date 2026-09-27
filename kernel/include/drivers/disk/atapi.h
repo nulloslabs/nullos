@@ -1,7 +1,7 @@
 #pragma once
 
-#include <stdbool.h>
-#include <stdint.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stdbool.h>
 
 #define ATAPI_COMMAND_IDENTIFY_PACKET 0xA1
 #define ATAPI_COMMAND_PACKET          0xA0

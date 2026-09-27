@@ -1,7 +1,7 @@
 #pragma once
 
-#include <stdint.h>
-#include <stdarg.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stdarg.h>
 
 #define COM1 0x3F8
 #define COM2 0x2F8

@@ -1,5 +1,5 @@
-#include <stdint.h>
-#include <errno.h>
+#include <freestanding/stdint.h>
+#include <freestanding/errno.h>
 #include <main/assert.h>
 #include <mm/pf.h>
 #include <mm/pmm.h>

@@ -1,5 +1,5 @@
-#include <errno.h>
-#include <asm/unistd.h>
+#include <freestanding/errno.h>
+#include <freestanding/asm/unistd.h>
 #include <drivers/tty/tty.h>
 #include <main/gdt.h>
 #include <main/log.h>

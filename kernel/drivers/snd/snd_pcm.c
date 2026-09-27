@@ -1,8 +1,8 @@
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <errno.h>
-#include <sound/asound.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/errno.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/sound/asound.h>
 #include <drivers/devices/devices.h>
 #include <drivers/snd/audio.h>
 #include <drivers/snd/snd.h>

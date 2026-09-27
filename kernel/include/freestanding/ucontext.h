@@ -1,8 +1,8 @@
 #pragma once
 
-#include <stdint.h>
-#include <stddef.h>
-#include <signal.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stddef.h>
+#include <freestanding/signal.h>
 
 #define UC_SIGCONTEXT_SS     0x2
 #define UC_STRICT_RESTORE_SS 0x4
@@ -52,12 +52,13 @@ struct sigcontext {
     uint64_t fpstate;
     uint64_t reserved1[8];
 };
+
 struct ucontext {
-    uint64_t           uc_flags;
-    struct ucontext   *uc_link;
-    stack_t            uc_stack;
-    struct sigcontext  uc_mcontext;
-    sigset_t           uc_sigmask;
+    uint64_t uc_flags;
+    struct ucontext *uc_link;
+    stack_t uc_stack;
+    struct sigcontext uc_mcontext;
+    sigset_t uc_sigmask;
 };
 
 _Static_assert(sizeof(struct _fpstate) == 512, "FXSAVE area must be 512 bytes");

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <stdbool.h>
+#include <freestanding/stdbool.h>
 #include <drivers/pci/pci.h>
 #include <drivers/usb/usb.h>
 

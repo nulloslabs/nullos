@@ -1,5 +1,5 @@
 #pragma once
 
-#include <stdint.h>
+#include <freestanding/stdint.h>
 
 int handle_pf(uint64_t cr2, uint64_t error_code);

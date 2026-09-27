@@ -1,39 +1,39 @@
 #pragma once
 
-#include <stddef.h>
-#include <sys/uio.h>
+#include <freestanding/stddef.h>
+#include <freestanding/sys/uio.h>
 
-#define AF_UNSPEC 0
-#define AF_UNIX   1
-#define AF_LOCAL  AF_UNIX
-#define AF_INET   2
-#define AF_INET6  10
+#define AF_UNSPEC  0
+#define AF_UNIX    1
+#define AF_LOCAL   AF_UNIX
+#define AF_INET    2
+#define AF_INET6   10
 #define AF_NETLINK 16
-#define AF_PACKET 17
+#define AF_PACKET  17
 
-#define PF_UNSPEC AF_UNSPEC
-#define PF_UNIX   AF_UNIX
-#define PF_LOCAL  AF_LOCAL
-#define PF_INET   AF_INET
-#define PF_INET6  AF_INET6
+#define PF_UNSPEC  AF_UNSPEC
+#define PF_UNIX    AF_UNIX
+#define PF_LOCAL   AF_LOCAL
+#define PF_INET    AF_INET
+#define PF_INET6   AF_INET6
 #define PF_NETLINK AF_NETLINK
-#define PF_PACKET AF_PACKET
+#define PF_PACKET  AF_PACKET
 
 #define SOCK_STREAM    1
 #define SOCK_DGRAM     2
 #define SOCK_RAW       3
 #define SOCK_SEQPACKET 5
-#define SOCK_TYPE_MASK 0x000f
+#define SOCK_TYPE_MASK 0x000F
 #define SOCK_NONBLOCK  0x0800
 #define SOCK_CLOEXEC   0x080000
 
-#define SOL_SOCKET 1
-#define SO_REUSEADDR 2
-#define SO_KEEPALIVE 9
-#define SO_BROADCAST 6
-#define SO_LINGER 13
-#define SO_ERROR 4
-#define SO_TYPE 3
+#define SOL_SOCKET      1
+#define SO_REUSEADDR    2
+#define SO_TYPE         3
+#define SO_ERROR        4
+#define SO_BROADCAST    6
+#define SO_KEEPALIVE    9
+#define SO_LINGER       13
 #define SO_BINDTODEVICE 25
 
 #define MSG_OOB       0x01
@@ -42,8 +42,8 @@
 #define MSG_DONTWAIT  0x40
 #define MSG_WAITALL   0x100
 
-#define SHUT_RD 0
-#define SHUT_WR 1
+#define SHUT_RD   0
+#define SHUT_WR   1
 #define SHUT_RDWR 2
 
 typedef unsigned int socklen_t;
@@ -66,11 +66,11 @@ struct linger {
 };
 
 struct msghdr {
-    void         *msg_name;
-    socklen_t     msg_namelen;
+    void *msg_name;
+    socklen_t msg_namelen;
     struct iovec *msg_iov;
-    size_t        msg_iovlen;
-    void         *msg_control;
-    size_t        msg_controllen;
-    int           msg_flags;
+    size_t msg_iovlen;
+    void *msg_control;
+    size_t msg_controllen;
+    int msg_flags;
 };

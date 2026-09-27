@@ -1,4 +1,4 @@
-#include <stdbool.h>
+#include <freestanding/stdbool.h>
 #include <main/cpu_info.h>
 #include <main/log.h>
 #include <main/panic.h>

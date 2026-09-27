@@ -1,5 +1,5 @@
-#include <stdint.h>
-#include <stdbool.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stdbool.h>
 #include <main/cpu_info.h>
 #include <main/log.h>
 #include <mm/smap.h>
