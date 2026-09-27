@@ -2,8 +2,8 @@
 
 #include <freestanding/stdint.h>
 
-#define __SI_MAX_SIZE  128
-#define __SI_PAD_SIZE  ((__SI_MAX_SIZE / sizeof(int)) - 4)
+#define __SI_MAX_SIZE 128
+#define __SI_PAD_SIZE ((__SI_MAX_SIZE / sizeof(int)) - 4)
 
 typedef int __pid_t_;
 typedef unsigned int __uid_t_;

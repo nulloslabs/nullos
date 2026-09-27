@@ -5,36 +5,48 @@
 
 #define IFNAMSIZ 16
 
-#define IFF_UP          0x0001
-#define IFF_BROADCAST   0x0002
-#define IFF_LOOPBACK    0x0008
-#define IFF_RUNNING     0x0040
-#define IFF_MULTICAST   0x1000
+#define IFF_UP        0x0001
+#define IFF_BROADCAST 0x0002
+#define IFF_LOOPBACK  0x0008
+#define IFF_RUNNING   0x0040
+#define IFF_MULTICAST 0x1000
 
-#define SIOCGIFNAME     0x8910
-#define SIOCGIFCONF     0x8912
-#define SIOCGIFFLAGS    0x8913
-#define SIOCSIFFLAGS    0x8914
-#define SIOCGIFADDR     0x8915
-#define SIOCSIFADDR     0x8916
-#define SIOCGIFBRDADDR  0x8919
-#define SIOCSIFBRDADDR  0x891a
-#define SIOCGIFNETMASK  0x891b
-#define SIOCSIFNETMASK  0x891c
-#define SIOCGIFMTU      0x8921
-#define SIOCSIFMTU      0x8922
-#define SIOCGIFHWADDR   0x8927
-#define SIOCGIFINDEX    0x8933
-#define SIOCGIFTXQLEN   0x8942
-#define SIOCSIFTXQLEN   0x8943
+#define SIOCGIFNAME    0x8910
+#define SIOCGIFCONF    0x8912
+#define SIOCGIFFLAGS   0x8913
+#define SIOCSIFFLAGS   0x8914
+#define SIOCGIFADDR    0x8915
+#define SIOCSIFADDR    0x8916
+#define SIOCGIFBRDADDR 0x8919
+#define SIOCSIFBRDADDR 0x891A
+#define SIOCGIFNETMASK 0x891B
+#define SIOCSIFNETMASK 0x891C
+#define SIOCGIFMTU     0x8921
+#define SIOCSIFMTU     0x8922
+#define SIOCGIFHWADDR  0x8927
+#define SIOCGIFINDEX   0x8933
+#define SIOCGIFTXQLEN  0x8942
+#define SIOCSIFTXQLEN  0x8943
 
-#define SIOCADDRT       0x890b
-#define SIOCDELRT       0x890c
+#define SIOCADDRT 0x890B
+#define SIOCDELRT 0x890C
 
-#define ARPHRD_ETHER    1
+#define ARPHRD_ETHER 1
 
-#define RTF_UP          0x0001
-#define RTF_GATEWAY     0x0002
+#define RTF_UP      0x0001
+#define RTF_GATEWAY 0x0002
+
+#define ifr_addr      ifr_ifru.ifru_addr
+#define ifr_broadaddr ifr_ifru.ifru_broadaddr
+#define ifr_netmask   ifr_ifru.ifru_netmask
+#define ifr_hwaddr    ifr_ifru.ifru_hwaddr
+#define ifr_flags     ifr_ifru.ifru_flags
+#define ifr_ifindex   ifr_ifru.ifru_ivalue
+#define ifr_mtu       ifr_ifru.ifru_mtu
+#define ifr_qlen      ifr_ifru.ifru_qlen
+
+#define ifc_buf ifc_ifcu.ifcu_buf
+#define ifc_req ifc_ifcu.ifcu_req
 
 struct ifmap {
     unsigned long mem_start;
@@ -64,15 +76,6 @@ struct ifreq {
     } ifr_ifru;
 };
 
-#define ifr_addr      ifr_ifru.ifru_addr
-#define ifr_broadaddr ifr_ifru.ifru_broadaddr
-#define ifr_netmask   ifr_ifru.ifru_netmask
-#define ifr_hwaddr    ifr_ifru.ifru_hwaddr
-#define ifr_flags     ifr_ifru.ifru_flags
-#define ifr_ifindex   ifr_ifru.ifru_ivalue
-#define ifr_mtu       ifr_ifru.ifru_mtu
-#define ifr_qlen      ifr_ifru.ifru_qlen
-
 struct ifconf {
     int ifc_len;
     union {
@@ -80,9 +83,6 @@ struct ifconf {
         struct ifreq *ifcu_req;
     } ifc_ifcu;
 };
-
-#define ifc_buf ifc_ifcu.ifcu_buf
-#define ifc_req ifc_ifcu.ifcu_req
 
 struct rtentry {
     unsigned long rt_pad1;

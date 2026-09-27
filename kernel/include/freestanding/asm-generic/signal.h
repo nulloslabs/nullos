@@ -50,7 +50,9 @@
 
 typedef uint64_t old_sigset_t;
 
-typedef struct { unsigned long __val[_SIGSET_NWORDS]; } sigset_t;
+typedef struct {
+    unsigned long __val[_SIGSET_NWORDS];
+} sigset_t;
 
 typedef struct sigaltstack {
     void *ss_sp;

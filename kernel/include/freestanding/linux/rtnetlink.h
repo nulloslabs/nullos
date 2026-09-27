@@ -23,9 +23,10 @@
 #define IF_OPER_UP      6
 
 #define RTA_ALIGNTO 4U
-#define RTA_ALIGN(length) (((length) + RTA_ALIGNTO - 1) & ~(RTA_ALIGNTO - 1))
-#define RTA_LENGTH(length) (RTA_ALIGN(sizeof(struct rtattr)) + (length))
-#define RTA_SPACE(length) RTA_ALIGN(RTA_LENGTH(length))
+
+#define RTA_ALIGN(length)   (((length) + RTA_ALIGNTO - 1) & ~(RTA_ALIGNTO - 1))
+#define RTA_LENGTH(length)  (RTA_ALIGN(sizeof(struct rtattr)) + (length))
+#define RTA_SPACE(length)   RTA_ALIGN(RTA_LENGTH(length))
 #define RTA_DATA(attribute) ((void *)((char *)(attribute) + RTA_LENGTH(0)))
 
 struct ifinfomsg {
