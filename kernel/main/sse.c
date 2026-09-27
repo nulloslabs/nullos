@@ -1,9 +1,9 @@
 #include <stdbool.h>
+#include <main/cpu_info.h>
 #include <main/log.h>
-#include <main/sse.h>
-#include <main/string.h>
-#include <main/machine_info.h>
 #include <main/panic.h>
+#include <main/sse.h>
+#include <util/string.h>
 
 static void save_fpu_xsave(void *area) {
     __asm__ volatile ("xsave64 (%0)"

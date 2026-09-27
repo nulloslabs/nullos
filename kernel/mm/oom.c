@@ -2,11 +2,11 @@
 #include <signal.h>
 #include <main/log.h>
 #include <main/panic.h>
-#include <main/sched.h>
-#include <main/signal.h>
 #include <mm/mm.h>
-#include <mm/vma.h>
 #include <mm/oom.h>
+#include <mm/vma.h>
+#include <sched/sched.h>
+#include <sched/signal.h>
 
 void kill_oom(void) {
     uint64_t max_usage = 0;

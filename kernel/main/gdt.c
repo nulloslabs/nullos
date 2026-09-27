@@ -1,10 +1,10 @@
 #include <main/assert.h>
-#include <main/log.h>
 #include <main/gdt.h>
-#include <main/string.h>
+#include <main/log.h>
 #include <main/panic.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
+#include <util/string.h>
 
 cpu_gdt_t cpu_gdts[MAX_CPUS];
 

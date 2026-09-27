@@ -19,11 +19,11 @@ all: $(OBJ)
 -include $(DEP)
 
 %.o: %.c Makefile ../../Makefile ../../config.mk $(FORCE_REBUILD) ../../include/limine/limine.h
-	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/syscalls/$@"
+	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/syscalls/impls/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 %.o: %.S Makefile ../../Makefile ../../config.mk $(FORCE_REBUILD) ../../include/limine/limine.h
-	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/syscalls/$@"
+	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/syscalls/impls/$@"
 	@$(AS) $(AFLAGS) -c $< -o $@
 
 clean:

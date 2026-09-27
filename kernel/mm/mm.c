@@ -3,14 +3,14 @@
 #include <stdbool.h>
 #include <limits.h>
 #include <main/assert.h>
-#include <main/log.h>
-#include <main/string.h>
-#include <main/panic.h>
 #include <main/limine_req.h>
+#include <main/log.h>
+#include <main/panic.h>
 #include <main/spinlocks.h>
 #include <mm/mm.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
+#include <util/string.h>
 
 struct memory_header *free_list_start = NULL;
 uint64_t hhdm_offset = 0;

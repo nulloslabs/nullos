@@ -1,17 +1,17 @@
 #include <stdbool.h>
 #include <errno.h>
-#include <main/log.h>
-#include <main/string.h>
+#include <main/cpu_info.h>
 #include <main/limine_req.h>
-#include <main/spinlocks.h>
-#include <main/machine_info.h>
+#include <main/log.h>
 #include <main/msr.h>
 #include <main/panic.h>
+#include <main/spinlocks.h>
+#include <mm/mm.h>
+#include <mm/pmm.h>
 #include <mm/smap.h>
 #include <mm/smep.h>
 #include <mm/vmm.h>
-#include <mm/pmm.h>
-#include <mm/mm.h>
+#include <util/string.h>
 
 static uint64_t vmalloc_cursor = 0xffffc00000000000;
 static uint64_t vuser_cursor = USER_MMAP_BASE;

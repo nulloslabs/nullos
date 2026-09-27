@@ -1,23 +1,23 @@
 #include <stdbool.h>
+#include <crypto/rng.h>
 #include <main/assert.h>
-#include <main/log.h>
-#include <main/rng.h>
-#include <main/smp.h>
-#include <main/idt.h>
 #include <main/gdt.h>
 #include <main/halt.h>
-#include <main/sched.h>
-#include <main/string.h>
+#include <main/idt.h>
 #include <main/limine_req.h>
+#include <main/log.h>
+#include <main/smp.h>
 #include <main/sse.h>
-#include <io/apic.h>
-#include <io/ioapic.h>
-#include <mm/mm.h>
+#include <main/apic/apic.h>
+#include <main/apic/ioapic.h>
 #include <mm/kstack.h>
-#include <mm/vmm.h>
+#include <mm/mm.h>
 #include <mm/smap.h>
 #include <mm/smep.h>
+#include <mm/vmm.h>
+#include <sched/sched.h>
 #include <syscalls/syscalls.h>
+#include <util/string.h>
 
 cpu_t cpus[MAX_CPUS];
 int cpu_count = 0;

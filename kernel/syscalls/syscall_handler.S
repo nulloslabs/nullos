@@ -4,7 +4,7 @@
 .extern dispatch_syscall
 
 #include <mm/smap.h>
-#include <main/sched.h>
+#include <sched/sched.h>
 
 syscall_entry:
     SANITIZE_KERNEL_FLAGS

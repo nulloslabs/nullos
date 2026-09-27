@@ -30,6 +30,7 @@ all: $(OBJ)
 clean:
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/syscalls/*.o $(SUBDIR)/syscalls/*.d"
 	@rm -rf *.o *.d
+	@$(MAKE) -C impls clean
 
 mrproper: clean
 

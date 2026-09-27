@@ -1,53 +1,53 @@
 // Look at this #include mess...
 #include <stdbool.h>
-#include <main/kernel.h>
-#include <main/panic.h>
-#include <main/gdt.h>
-#include <main/idt.h>
-#include <main/sched.h>
-#include <main/limine_req.h>
+#include <sys/utsname.h>
+#include <binfmt/elf.h>
+// Please, let this stop...
+#include <crypto/rng.h>
+#include <drivers/acpi/acpi.h>
+// Almost...there...
+#include <drivers/acpi/power_button.h>
+#include <drivers/clock/rtc.h>
+#include <drivers/devices/devices.h>
+#include <drivers/fb/fb.h>
+#include <drivers/fb/misc/fonts.h>
+#include <drivers/net/dhcp.h>
+#include <drivers/pci/pci.h>
+#include <drivers/ps2/ps2_keyboard.h>
+#include <drivers/serial/serial.h>
+#include <drivers/snd/snd.h>
+#include <drivers/timer/hpet.h>
+#include <drivers/timer/pit.h>
+#include <drivers/tty/pty.h>
+#include <drivers/tty/tty.h>
+#include <fs/initrd.h>
+#include <fs/tmpfs.h>
 // Are we there yet?
 #include <main/boot_args.h>
-#include <main/sse.h>
-#include <main/machine_info.h>
+#include <main/cpu_info.h>
+#include <main/gdt.h>
 #include <main/halt.h>
+#include <main/idt.h>
+#include <main/kernel.h>
+#include <main/limine_req.h>
+#include <main/panic.h>
+#include <main/pic.h>
 #include <main/smp.h>
-#include <main/elf.h>
-#include <main/string.h>
-#include <main/madt.h>
-#include <main/utsname.h>
-// Please, let this stop...
-#include <main/rng.h>
+#include <main/sse.h>
 #include <main/stack_protector.h>
-#include <main/workqueue.h>
-#include <io/acpi.h>
-#include <io/terminal.h>
-#include <io/fb.h>
-#include <io/initrd.h>
-#include <io/devices.h>
-#include <io/dhcp.h>
-#include <io/hpet.h>
-#include <io/rtc.h>
-#include <io/snd.h>
-#include <io/fonts.h>
-#include <io/pci.h>
-#include <io/pic.h>
-#include <io/pit.h>
-// Almost...there...
-#include <io/power_button.h>
-#include <io/apic.h>
-#include <io/tty.h>
-#include <io/pty.h>
-#include <io/serial.h>
-#include <io/tmpfs.h>
-#include <io/ps2_kbd.h>
-#include <mm/mm.h>
+#include <main/terminal.h>
+#include <main/apic/apic.h>
+#include <main/apic/madt.h>
 #include <mm/kstack.h>
+#include <mm/mm.h>
+#include <mm/oom.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
-#include <mm/oom.h>
+#include <sched/sched.h>
+#include <sched/workqueue.h>
 #include <syscalls/syscalls.h>
 // Lets never do that again.
+#include <util/string.h>
 
 __attribute__((noreturn)) void kmain(void) {
     cli();
@@ -77,7 +77,7 @@ __attribute__((noreturn)) void kmain(void) {
     init_stack_protector();
     init_pci();
     init_pci_drivers();
-    cache_machine_info();
+    cache_cpu_info();
     cache_utsname();
     init_tty();
     init_pty();

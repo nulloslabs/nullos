@@ -2,8 +2,8 @@
 #include <stdbool.h>
 #include <main/boot_args.h>
 #include <main/limine_req.h>
-#include <main/string.h>
-#include <main/strings.h>
+#include <util/string.h>
+#include <util/strings.h>
 
 const char *get_boot_args(void) {
     if (cmdline_req.response == NULL || cmdline_req.response->executable_file == NULL) return NULL;

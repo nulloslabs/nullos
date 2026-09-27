@@ -43,7 +43,7 @@ UACPI_OUTFILE = uacpi/build/libuacpi.a
 SUBDIR = kernel
 
 CONFIG_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
-CHECK_OBJ := $(foreach group,main io mm syscalls syscalls/impls,$(firstword $(wildcard $(CONFIG_DIR)/$(group)/*.o)))
+CHECK_OBJ := $(foreach group,main sched sys time util sockets crypto binfmt fs drivers/acpi drivers/pci mm syscalls syscalls/impls,$(firstword $(wildcard $(CONFIG_DIR)/$(group)/*.o)))
 DEBUG_MISMATCH := $(shell \
 	wanted=$(DEBUG); \
 	for obj in $(CHECK_OBJ); do \

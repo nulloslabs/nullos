@@ -1,0 +1,198 @@
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <cpuid.h>
+#include <drivers/timer/hpet.h>
+#include <drivers/timer/tsc.h>
+#include <main/cpu_info.h>
+#include <main/limine_req.h>
+#include <main/log.h>
+#include <mm/pmm.h>
+#include <util/string.h>
+
+const char* get_cpu_name(void) {
+    static char buf[49] = {0};
+    if (buf[0]) return buf;
+    uint32_t eax, ebx, ecx, edx;
+    for (int i = 0; i < 3; i++) {
+        __cpuid(0x80000002 + i, eax, ebx, ecx, edx);
+        memcpy(buf + i * 16 + 0,  &eax, 4);
+        memcpy(buf + i * 16 + 4,  &ebx, 4);
+        memcpy(buf + i * 16 + 8,  &ecx, 4);
+        memcpy(buf + i * 16 + 12, &edx, 4);
+    }
+    buf[48] = '\0';
+    return buf;
+}
+
+const char* get_cpu_vendor(void) {
+    static char buf[13] = {0};
+    if (buf[0]) return buf;
+    uint32_t eax, ebx, ecx, edx;
+    __cpuid(0, eax, ebx, ecx, edx);
+    memcpy(buf + 0, &ebx, 4);
+    memcpy(buf + 4, &edx, 4);
+    memcpy(buf + 8, &ecx, 4);
+    buf[12] = '\0';
+    return buf;
+}
+
+uint32_t get_cpu_family(void) {
+    static uint32_t cached = 0;
+    if (cached) return cached;
+    uint32_t eax, ebx, ecx, edx;
+    __cpuid(1, eax, ebx, ecx, edx);
+    uint32_t family = (eax >> 8) & 0xF;
+    if (family == 0xF) family += (eax >> 20) & 0xFF;
+    cached = family;
+    return cached;
+}
+
+uint32_t get_cpu_model(void) {
+    static uint32_t cached = 0;
+    if (cached) return cached;
+    uint32_t eax, ebx, ecx, edx;
+    __cpuid(1, eax, ebx, ecx, edx);
+    uint32_t model  = (eax >> 4) & 0xF;
+    uint32_t family = (eax >> 8) & 0xF;
+    if (family == 0x6 || family == 0xF) model |= ((eax >> 16) & 0xF) << 4;
+    cached = model;
+    return cached;
+}
+
+uint32_t get_cpu_stepping(void) {
+    static uint32_t cached = 0;
+    if (cached) return cached;
+    uint32_t eax, ebx, ecx, edx;
+    __cpuid(1, eax, ebx, ecx, edx);
+    cached = eax & 0xF;
+    return cached;
+}
+
+uint32_t get_cpu_cores(void) {
+    static uint32_t cached = 0;
+    if (cached) return cached;
+    uint32_t eax, ebx, ecx, edx;
+    __cpuid_count(0xB, 1, eax, ebx, ecx, edx);
+    if (ebx != 0) { cached = ebx & 0xFFFF; return cached; }
+    __cpuid(1, eax, ebx, ecx, edx);
+    cached = (ebx >> 16) & 0xFF;
+    return cached;
+}
+
+uint32_t get_cpu_threads(void) {
+    static uint32_t cached = 0;
+    if (cached) return cached;
+    uint32_t eax, ebx, ecx, edx;
+    __cpuid(0xB, eax, ebx, ecx, edx);
+    if (ebx != 0) { cached = ebx & 0xFFFF; return cached; }
+    __cpuid(1, eax, ebx, ecx, edx);
+    cached = (ebx >> 16) & 0xFF;
+    return cached;
+}
+
+uint32_t get_cpu_freq(void) {
+    static uint32_t cached = 0;
+    if (cached) return cached;
+    if (tsc_req.response && tsc_req.response->frequency) {
+        cached = (uint32_t)(tsc_req.response->frequency / 1000000ULL);
+        return cached;
+    }
+    uint32_t freq_mhz = get_hpet_freq_mhz();
+    if (!freq_mhz) return 0;
+    uint32_t samples[5];
+    for (int i = 0; i < 5; i++) {
+        uint64_t start = read_hpet_counter();
+        uint64_t tsc_start = read_tsc();
+        uint64_t ticks = (uint64_t)freq_mhz * 70000;
+        while (read_hpet_counter() - start < ticks);
+        uint64_t tsc_end = read_tsc();
+        samples[i] = (uint32_t)((tsc_end - tsc_start) / 70000);
+    }
+    uint64_t sum = 0;
+    for (int i = 0; i < 5; i++) sum += samples[i];
+    cached = (uint32_t)(sum / 5);
+    return cached;
+}
+
+size_t get_xsave_area_size(void) {
+    static size_t cached = 0;
+    if (cached) return cached;
+    if (!cpu_has_feature(CPU_FEATURE_XSAVE)) {
+        // No XSAVE: a 512-byte FXSAVE area is the legacy layout.
+        cached = 512;
+        return cached;
+    }
+    uint32_t eax, ebx, ecx, edx;
+    __cpuid_count(0xD, 0, eax, ebx, ecx, edx);
+    cached = ebx;
+    if (cached < 512) cached = 512;  // never smaller than the FXSAVE legacy region
+    return cached;
+}
+
+uint64_t get_xsave_feature_mask(void) {
+    if (!cpu_has_feature(CPU_FEATURE_XSAVE)) {
+        // FXSAVE covers x87 + SSE state only.
+        return 0x3;
+    }
+    uint32_t eax, ebx, ecx, edx;
+    __cpuid_count(0xD, 0, eax, ebx, ecx, edx);
+    return ((uint64_t)edx << 32) | (uint64_t)ebx;
+}
+
+bool cpu_has_feature(cpu_feature_t feature) {
+    static uint32_t ecx1 = 0, edx1 = 0, ebx7 = 0, edx_ext1 = 0;
+    static bool initialized = false;
+    if (!initialized) {
+        uint32_t eax, ebx, ecx, edx, max_standard_leaf;
+        __cpuid(0, max_standard_leaf, ebx, ecx, edx);
+        if (max_standard_leaf >= 1) {
+            __cpuid(1, eax, ebx, ecx1, edx1);
+        }
+        // Leaf 7 uses ECX as a subleaf selector. __cpuid() leaves that
+        // input unspecified, so explicitly request subleaf 0.
+        if (max_standard_leaf >= 7) {
+            __cpuid_count(7, 0, eax, ebx7, ecx, edx);
+        }
+        __cpuid(0x80000000, eax, ebx, ecx, edx);
+        if (eax >= 0x80000001) {
+            __cpuid(0x80000001, eax, ebx, ecx, edx_ext1);
+        }
+        initialized = true;
+    }
+    switch (feature) {
+        case CPU_FEATURE_SSE:    return (edx1 >> 25) & 1;
+        case CPU_FEATURE_SSE2:   return (edx1 >> 26) & 1;
+        case CPU_FEATURE_SSE3:   return (ecx1 >> 0) & 1;
+        case CPU_FEATURE_SSSE3:  return (ecx1 >> 9) & 1;
+        case CPU_FEATURE_SSE41:  return (ecx1 >> 19) & 1;
+        case CPU_FEATURE_SSE42:  return (ecx1 >> 20) & 1;
+        case CPU_FEATURE_AVX:    return (ecx1 >> 28) & 1;
+        case CPU_FEATURE_AVX2:   return (ebx7 >> 5) & 1;
+        case CPU_FEATURE_FPU:    return (edx1 >> 0) & 1;
+        case CPU_FEATURE_XAPIC:  return (edx1 >> 9) & 1;
+        case CPU_FEATURE_X2APIC: return (ecx1 >> 21) & 1;
+        case CPU_FEATURE_POPCNT: return (ecx1 >> 23) & 1;
+        case CPU_FEATURE_AES:    return (ecx1 >> 25) & 1;
+        case CPU_FEATURE_NX:     return (edx_ext1 >> 20) & 1;
+        case CPU_FEATURE_XSAVE:  return (ecx1 >> 26) & 1;
+        case CPU_FEATURE_OSXSAVE: return (ecx1 >> 27) & 1;
+        case CPU_FEATURE_SMEP:    return (ebx7 >> 7) & 1;
+        case CPU_FEATURE_SMAP:    return (ebx7 >> 20) & 1;
+        default: return false;
+    }
+}
+
+void cache_cpu_info(void) {
+    // Cache any info that hasn't already been cached.
+    get_cpu_name();
+    get_cpu_vendor();
+    get_cpu_family();
+    get_cpu_model();
+    get_cpu_stepping();
+    get_cpu_cores();
+    get_cpu_threads();
+    get_cpu_freq();
+    cpu_has_feature(CPU_FEATURE_FPU); // One function already caches everything.
+    log("cpu info: cached cpu info\n");
+}

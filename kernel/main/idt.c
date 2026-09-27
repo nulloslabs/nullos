@@ -1,6 +1,6 @@
-#include <main/log.h>
 #include <main/gdt.h>
 #include <main/idt.h>
+#include <main/log.h>
 
 __attribute__((aligned(16)))
 static struct idt_entry idt[256];

@@ -1,7 +1,7 @@
 #include <stdint.h>
+#include <crypto/rng.h>
 #include <main/log.h>
 #include <main/panic.h>
-#include <main/rng.h>
 #include <main/stack_protector.h>
 
 uintptr_t __stack_chk_guard = 0x6c6e726b6c6c756eULL;

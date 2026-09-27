@@ -7,7 +7,7 @@ endif
 
 include config.mk
 
-SRC := $(wildcard io/*.c) $(wildcard io/*.S) $(wildcard main/*.c) $(wildcard main/*.S) $(wildcard mm/*.c) $(wildcard mm/*.S) $(wildcard syscalls/*.c) $(wildcard syscalls/*.S) $(wildcard syscalls/impls/*.c) $(wildcard syscalls/impls/*.S)
+SRC := $(shell find binfmt crypto drivers fs main mm sched sockets sys syscalls time util \( -name '*.c' -o -name '*.S' \))
 
 OBJ := $(SRC:.c=.o)
 OBJ := $(OBJ:.S=.o)
@@ -17,7 +17,7 @@ UACPI_SRC := $(wildcard uacpi/source/*.c)
 UACPI_OBJ := $(patsubst uacpi/source/%.c,uacpi/build/%.o,$(UACPI_SRC))
 UACPI_DEP := $(UACPI_OBJ:.o=.d)
 
-SUBDIRS = main io mm syscalls
+SUBDIRS = binfmt crypto drivers fs main mm sched sockets sys syscalls time util
 
 -include $(DEP)
 -include $(UACPI_DEP)
@@ -113,10 +113,7 @@ kernel: config.mk Makefile linker.ld
 clean:
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/$(OUTFILE)"
 	@rm -f $(OUTFILE)
-	@$(MAKE) -C main clean
-	@$(MAKE) -C io clean
-	@$(MAKE) -C mm clean
-	@$(MAKE) -C syscalls clean
+	@for d in $(SUBDIRS); do $(MAKE) -C $$d clean; done
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/uacpi/build/"
 	@rm -rf uacpi/build
 

@@ -1,12 +1,12 @@
+#include <crypto/rng.h>
+#include <main/limine_req.h>
 #include <main/log.h>
 #include <main/panic.h>
-#include <main/rng.h>
-#include <main/string.h>
-#include <main/limine_req.h>
 #include <main/spinlocks.h>
-#include <main/sched.h>
-#include <mm/pmm.h>
 #include <mm/oom.h>
+#include <mm/pmm.h>
+#include <sched/sched.h>
+#include <util/string.h>
 
 static uint32_t *ref_counts = NULL;
 static int8_t *page_orders = NULL;

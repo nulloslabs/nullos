@@ -2,11 +2,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdarg.h>
-#include <main/log.h>
 #include <main/boot_args.h>
+#include <main/log.h>
 #include <main/spinlocks.h>
-#include <main/string.h>
-#include <io/terminal.h>
+#include <main/terminal.h>
+#include <util/string.h>
 
 static char log_text[LOG_TEXT_SIZE];
 static log_record_t log_records[LOG_RECORD_COUNT];

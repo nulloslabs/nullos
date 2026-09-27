@@ -2,19 +2,19 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <signal.h>
-#include <main/log.h>
-#include <main/limine_req.h>
-#include <main/elf.h>
-#include <main/halt.h>
-#include <main/sched.h>
-#include <io/terminal.h>
-#include <syscalls/syscalls.h>
-#include <syscalls/impls/helpers.h>
 #include <stdarg.h>
+#include <binfmt/elf.h>
 #include <main/assert.h>
+#include <main/halt.h>
+#include <main/limine_req.h>
+#include <main/log.h>
 #include <main/panic.h>
+#include <main/terminal.h>
 #include <mm/kstack.h>
 #include <mm/pf.h>
+#include <sched/sched.h>
+#include <syscalls/syscalls.h>
+#include <syscalls/impls/helpers.h>
 
 
 static bool is_elf_range_valid(uint64_t offset, uint64_t length, uint64_t file_size) {

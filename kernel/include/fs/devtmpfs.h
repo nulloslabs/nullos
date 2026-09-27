@@ -1,0 +1,32 @@
+#pragma once
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <drivers/devices/devices.h>
+#include <main/spinlocks.h>
+
+#define MAX_DEVTMPFS_DEVICES 64
+
+typedef struct {
+    char name[65];
+    uint64_t (*read)(void* buf, uint64_t count, uint64_t offset, int dev_idx, void *handle);
+    uint64_t (*write)(const void* buf, uint64_t count, uint64_t offset, int dev_idx, void *handle);
+    void *(*open)(int dev_idx);
+    void (*release)(void *handle);
+    uint64_t size;
+    bool active;
+    bool block;
+    int index; // Device-specific index (e.g., TTY number)
+    disk_device_bus_t bus; // Backing bus of a whole-disk block device
+} devtmpfs_device_t;
+
+extern devtmpfs_device_t devtmpfs_devices[MAX_DEVTMPFS_DEVICES];
+extern spinlock_t devtmpfs_lock;
+
+bool device_exists_on_devtmpfs(const char* name);
+const char *get_devtmpfs_device_name(int index);
+bool is_devtmpfs_path(const char *path, char *rel_out);
+bool devtmpfs_is_dir(const char *rel);
+int get_devtmpfs_dirent(const char *dir, int index, char *name_out, size_t name_size, bool *is_dir_out);
+bool is_devtmpfs_dir_path(const char *path);

@@ -1,0 +1,19 @@
+#include <stdint.h>
+#include <drivers/timer/pit.h>
+#include <main/io.h>
+#include <main/log.h>
+
+uint16_t read_pit_counter(void) {
+    outb(0x00, 0x43);
+    uint8_t lo = inb(0x40);
+    uint8_t hi = inb(0x40);
+    return (uint16_t)(hi << 8) | lo;
+}
+
+void init_pit(uint32_t hz) {
+    uint32_t divisor = 1193182 / hz;
+    outb(0x36, 0x43);
+    outb((uint8_t)(divisor & 0xFF), 0x40);
+    outb((uint8_t)((divisor >> 8) & 0xFF), 0x40);
+    log("pit: initialized pit\n");
+}

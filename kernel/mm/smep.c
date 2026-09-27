@@ -1,6 +1,6 @@
 #include <stdint.h>
 #include <stdbool.h>
-#include <main/machine_info.h>
+#include <main/cpu_info.h>
 #include <main/log.h>
 #include <mm/smep.h>
 

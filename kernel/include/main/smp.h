@@ -2,7 +2,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <main/sched.h>
+#include <sched/sched.h>
 
 #define MAX_CPUS           64
 #define CPU_INDEX_MAP_SIZE (MAX_CPUS * 2)

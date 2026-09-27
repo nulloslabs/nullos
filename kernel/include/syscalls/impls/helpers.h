@@ -8,7 +8,7 @@
 #include <sys/resource.h>
 #include <sys/epoll.h>
 #include <sys/statx.h>
-#include <io/initrd.h>
+#include <fs/initrd.h>
 
 #define USER_ADDR_MAX 0x0000800000000000ULL
 #define MAX_BRK_SIZE (256ULL * 1024ULL * 1024ULL)

@@ -1,7 +1,7 @@
 #include <stdbool.h>
-#include <main/string.h>
 #include <mm/vma.h>
 #include <mm/vmm.h>
+#include <util/string.h>
 
 static void set_name(char *dst, const char *src) {
     if (!src) { dst[0] = '\0'; return; }

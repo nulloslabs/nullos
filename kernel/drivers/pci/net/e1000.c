@@ -1,0 +1,254 @@
+#include <stdbool.h>
+#include <drivers/net/net.h>
+#include <drivers/pci/net/e1000.h>
+#include <main/io.h>
+#include <main/log.h>
+#include <main/spinlocks.h>
+#include <mm/mm.h>
+#include <mm/pmm.h>
+#include <mm/vmm.h>
+#include <util/string.h>
+
+static uint8_t mac_addr[6];
+static volatile uint8_t *e1000_mmio;
+
+static e1000_rx_desc_t *rx_descs;
+static e1000_tx_desc_t *tx_descs;
+
+static uint8_t *rx_buf[E1000_NUM_RX_DESC];
+static uint8_t *tx_buf[E1000_NUM_TX_DESC];
+
+static uint16_t rx_cur = 0;
+static uint16_t tx_cur = 0;
+static bool e1000_ready = false;
+static spinlock_t e1000_lock = SPINLOCK_INIT;
+static net_device_t e1000_net_device;
+
+static void write_mmio32(uint32_t reg, uint32_t val) { *(volatile uint32_t *)(e1000_mmio + reg) = val; }
+static uint32_t read_mmio32(uint32_t reg) { return *(volatile uint32_t *)(e1000_mmio + reg); }
+
+static void reset_e1000_tx(void) {
+    write_mmio32(E1000_TCTL, read_mmio32(E1000_TCTL) & ~TCTL_EN);
+    for (int i = 0; i < 8; i++) wait_io();
+    write_mmio32(E1000_TDH, 0);
+    write_mmio32(E1000_TDT, 0);
+    for (int i = 0; i < E1000_NUM_TX_DESC; i++) {
+        tx_descs[i].length = 0;
+        tx_descs[i].cmd = 0;
+        tx_descs[i].status = 1;
+    }
+    tx_cur = 0;
+    __asm__ volatile ("mfence" ::: "memory");
+    write_mmio32(E1000_TCTL, TCTL_EN | TCTL_PSP | TCTL_CT | TCTL_COLD);
+}
+
+static bool wait_e1000_tx(uint16_t descriptor) {
+    for (uint32_t timeout = 0; timeout < E1000_TX_TIMEOUT; timeout++) {
+        if (tx_descs[descriptor].status & 0x01) return true;
+        __asm__ volatile ("pause" ::: "memory");
+    }
+    return false;
+}
+
+// Detect EEPROM and read MAC
+static bool detect_eeprom(void) {
+    write_mmio32(E1000_EEPROM, 0x1); 
+    for (int i = 0; i < 1000 && !(read_mmio32(E1000_EEPROM) & 0x10); i++) wait_io();
+    return (read_mmio32(E1000_EEPROM) & 0x10) != 0;
+}
+
+static uint16_t read_eeprom(uint8_t addr) {
+    uint32_t temp = 0;
+    write_mmio32(E1000_EEPROM, 1 | ((uint32_t)(addr) << 8));
+    while (!((temp = read_mmio32(E1000_EEPROM)) & (1 << 4))) wait_io();
+    return (uint16_t)((temp >> 16) & 0xFFFF);
+}
+
+void get_e1000_mac(uint8_t mac[6]) { memcpy(mac, mac_addr, 6); }
+
+bool send_e1000(const void *data, uint16_t len) {
+    if (!e1000_ready || !data || !len || len > 1514) return false;
+
+    uint64_t irq;
+    spin_lock_irqsave(&e1000_lock, &irq);
+
+    if (!wait_e1000_tx(tx_cur)) {
+        log("e1000: transmit ring stalled, resetting\n");
+        reset_e1000_tx();
+    }
+
+    uint16_t send_len = len;
+    if (len < 60) send_len = 60;
+    memcpy(tx_buf[tx_cur], data, len);
+    if (len < 60) memset(tx_buf[tx_cur] + len, 0, 60 - len);
+
+    tx_descs[tx_cur].addr = (uint64_t)virt_to_phys(tx_buf[tx_cur]);
+    tx_descs[tx_cur].length = send_len;
+    tx_descs[tx_cur].cmd = CMD_EOP | CMD_IFCS | CMD_RS;
+    tx_descs[tx_cur].status = 0;
+
+    uint16_t old_cur = tx_cur;
+    tx_cur = (tx_cur + 1) % E1000_NUM_TX_DESC;
+    __asm__ volatile ("mfence" ::: "memory");
+    write_mmio32(E1000_TDT, tx_cur);
+    bool completed = wait_e1000_tx(old_cur);
+    if (!completed) {
+        log("e1000: transmit timed out, resetting\n");
+        reset_e1000_tx();
+    }
+    spin_unlock_irqrestore(&e1000_lock, irq);
+    return completed;
+}
+
+static void poll_e1000(void) {
+    if (!e1000_ready) return;
+
+    // Read interrupt cause
+    uint32_t icr = read_mmio32(E1000_ICR);
+    if (!icr) return;
+
+    if (icr & 0x80) { // Receiver Timer Interrupt (packet received)
+        while ((rx_descs[rx_cur].status & 0x1)) {
+            uint64_t irq;
+            spin_lock_irqsave(&e1000_lock, &irq);
+
+            // Re-read after locking just to be sure
+            if (!(rx_descs[rx_cur].status & 0x1)) { spin_unlock_irqrestore(&e1000_lock, irq); break; }
+
+            uint8_t *buf = rx_buf[rx_cur];
+            uint16_t size = rx_descs[rx_cur].length;
+
+            // Give descriptor back
+            rx_descs[rx_cur].status = 0;
+
+            uint16_t old_cur = rx_cur;
+            rx_cur = (rx_cur + 1) % E1000_NUM_RX_DESC;
+
+            // Update tail to allow hardware to reuse
+            write_mmio32(E1000_RDT, old_cur);
+
+            spin_unlock_irqrestore(&e1000_lock, irq);
+
+            // Pass packet to the shared stack after dropping the driver lock.
+            handle_net_packet(&e1000_net_device, buf, size);
+        }
+    }
+}
+
+void init_e1000(pci_device_t *dev) {
+    if (!dev) return;
+
+    set_pci_d0(dev);
+
+    // Enable memory-space decoding and bus mastering.
+    uint32_t cmd = read_pci(dev->bus, dev->dev, dev->func, 0x04);
+    write_pci(dev->bus, dev->dev, dev->func, 0x04, cmd | 0x0006);
+
+    // BAR0 is a 128 KiB MMIO aperture. It is not RAM and therefore is not
+    // covered by the HHDM; map it explicitly with cache-disabled attributes.
+    uint32_t bar0 = read_pci(dev->bus, dev->dev, dev->func, 0x10);
+    if (bar0 & 0x1) {
+        log("e1000: bar0 is not a memory bar\n");
+        return;
+    }
+
+    uint32_t bar_type = (bar0 >> 1) & 0x3;
+    uint64_t mmio_phys = bar0 & 0xFFFFFFF0ULL;
+    if (bar_type == 0x2) {
+        uint32_t bar1 = read_pci(dev->bus, dev->dev, dev->func, 0x14);
+        mmio_phys |= (uint64_t)bar1 << 32;
+    } else if (bar_type == 0x3) {
+        log("e1000: invalid bar0 type\n");
+        return;
+    }
+    if (mmio_phys == 0) {
+        log("e1000: invalid bar0 address\n");
+        return;
+    }
+
+    e1000_mmio = vmap_mmio(mmio_phys, E1000_MMIO_SIZE / PAGE_SIZE);
+    if (!e1000_mmio) {
+        log("e1000: unable to map bar0\n");
+        return;
+    }
+    write_mmio32(E1000_CTRL, read_mmio32(E1000_CTRL) | CTRL_SLU);
+
+    // Read MAC Address
+    if (detect_eeprom()) {
+        uint16_t temp;
+        temp = read_eeprom(0);
+        mac_addr[0] = temp & 0xFF; mac_addr[1] = temp >> 8;
+        temp = read_eeprom(1);
+        mac_addr[2] = temp & 0xFF; mac_addr[3] = temp >> 8;
+        temp = read_eeprom(2);
+        mac_addr[4] = temp & 0xFF; mac_addr[5] = temp >> 8;
+    } else {
+        uint32_t mac_lo = read_mmio32(E1000_RAL);
+        uint32_t mac_hi = read_mmio32(E1000_RAH);
+        mac_addr[0] = mac_lo & 0xFF; mac_addr[1] = (mac_lo >> 8) & 0xFF;
+        mac_addr[2] = (mac_lo >> 16) & 0xFF; mac_addr[3] = (mac_lo >> 24) & 0xFF;
+        mac_addr[4] = mac_hi & 0xFF; mac_addr[5] = (mac_hi >> 8) & 0xFF;
+    }
+
+    // Setup Multicast Table
+    for (int i = 0; i < 128; i++) write_mmio32(E1000_MTA + (i * 4), 0);
+
+    // Setup RX ring (must be 16-byte aligned and contiguous physically)
+    void *rx_descs_phys = pmalloc(); // 4KB page, plenty of room for 32 descriptors
+    if (!rx_descs_phys) return;
+    rx_descs = phys_to_virt((uint64_t)rx_descs_phys);
+    for (int i = 0; i < E1000_NUM_RX_DESC; i++) {
+        rx_buf[i] = vmalloc(8192); // Packets max 1522 bytes, allocator returns whole pages
+        rx_descs[i].addr = (uint64_t)virt_to_phys(rx_buf[i]);
+        rx_descs[i].status = 0;
+    }
+
+    // Write RX rings
+    uint64_t rx_phys = (uint64_t)rx_descs_phys;
+    write_mmio32(E1000_RDBAL, rx_phys & 0xFFFFFFFF);
+    write_mmio32(E1000_RDBAH, rx_phys >> 32);
+    write_mmio32(E1000_RDLEN, E1000_NUM_RX_DESC * sizeof(e1000_rx_desc_t));
+    write_mmio32(E1000_RDH, 0);
+    write_mmio32(E1000_RDT, E1000_NUM_RX_DESC - 1); // Last valid index
+
+    // Enable RX
+    write_mmio32(E1000_RCTL, RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE | RCTL_LPE | RCTL_BAM | RCTL_BSIZE_2048 | RCTL_SECRC);
+
+    // Setup TX ring
+    void *tx_descs_phys = pmalloc();
+    if (!tx_descs_phys) return;
+    tx_descs = phys_to_virt((uint64_t)tx_descs_phys);
+    for (int i = 0; i < E1000_NUM_TX_DESC; i++) {
+        tx_buf[i] = vmalloc(8192);
+        tx_descs[i].addr = (uint64_t)virt_to_phys(tx_buf[i]);
+        tx_descs[i].cmd = 0;
+        tx_descs[i].status = 1; // Mark as done/free initially
+    }
+
+    // Write TX rings
+    uint64_t tx_phys = (uint64_t)tx_descs_phys;
+    write_mmio32(E1000_TDBAL, tx_phys & 0xFFFFFFFF);
+    write_mmio32(E1000_TDBAH, tx_phys >> 32);
+    write_mmio32(E1000_TDLEN, E1000_NUM_TX_DESC * sizeof(e1000_tx_desc_t));
+    write_mmio32(E1000_TDH, 0);
+    write_mmio32(E1000_TDT, 0);
+
+    write_mmio32(E1000_TIPG, TIPG_IPGT | TIPG_IPGR1 | TIPG_IPGR2);
+    write_mmio32(E1000_TCTL, TCTL_EN | TCTL_PSP | TCTL_CT | TCTL_COLD);
+
+    // Enable interrupts
+    write_mmio32(E1000_IMS, 0x1F6DC);
+    write_mmio32(E1000_IMS, 0xFF & ~4);
+    read_mmio32(E1000_ICR); // clear pending
+
+    request_pci_irq(dev, poll_e1000);
+
+    log("e1000: initialized e1000\n");
+
+    e1000_ready = true;
+
+    memcpy(e1000_net_device.mac, mac_addr, 6);
+    e1000_net_device.send = send_e1000;
+    e1000_net_device.poll = poll_e1000;
+    register_net_device(&e1000_net_device);
+}

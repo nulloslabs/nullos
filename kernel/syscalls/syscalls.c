@@ -1,10 +1,10 @@
 #include <errno.h>
 #include <asm/unistd.h>
+#include <drivers/tty/tty.h>
 #include <main/gdt.h>
-#include <main/sched.h>
-#include <main/msr.h>
 #include <main/log.h>
-#include <io/tty.h>
+#include <main/msr.h>
+#include <sched/sched.h>
 #include <syscalls/syscalls.h>
 #include <syscalls/impls/file.h>
 #include <syscalls/impls/helpers.h>

@@ -1,12 +1,12 @@
 #include <stdint.h>
 #include <errno.h>
 #include <main/assert.h>
-#include <main/sched.h>
-#include <main/string.h>
-#include <mm/pmm.h>
-#include <mm/vmm.h>
-#include <mm/vma.h>
 #include <mm/pf.h>
+#include <mm/pmm.h>
+#include <mm/vma.h>
+#include <mm/vmm.h>
+#include <sched/sched.h>
+#include <util/string.h>
 
 int handle_pf(uint64_t cr2, uint64_t error_code) {
     assert(current_task_ptr != NULL);

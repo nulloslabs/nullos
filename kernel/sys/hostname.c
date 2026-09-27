@@ -1,0 +1,28 @@
+#include <stddef.h>
+#include <errno.h>
+#include <main/spinlocks.h>
+#include <sys/hostname.h>
+#include <util/string.h>
+
+static char current_hostname[HOSTNAME_MAX_LEN] = HOSTNAME_DEFAULT;
+static spinlock_t hostname_lock = SPINLOCK_INIT;
+
+int get_hostname(char *name, size_t len) {
+    if (!name || len == 0) return -EINVAL;
+    uint64_t irq;
+    spin_lock_irqsave(&hostname_lock, &irq);
+    strlcpy(name, current_hostname, len);
+    spin_unlock_irqrestore(&hostname_lock, irq);
+    return 0;
+}
+
+int set_hostname(const char *name, size_t len) {
+    if (!name) return -EINVAL;
+    if (len >= sizeof(current_hostname)) return -ENAMETOOLONG;
+
+    uint64_t irq;
+    spin_lock_irqsave(&hostname_lock, &irq);
+    strlcpy(current_hostname, name, len + 1);
+    spin_unlock_irqrestore(&hostname_lock, irq);
+    return 0;
+}
