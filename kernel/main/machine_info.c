@@ -183,18 +183,6 @@ bool cpu_has_feature(cpu_feature_t feature) {
     }
 }
 
-uint64_t get_total_ram(void) {
-    return get_total_pmm_memory();
-}
-
-uint64_t get_free_ram(void) {
-    return get_free_pmm_memory();
-}
-
-uint64_t get_used_ram(void) {
-    return get_used_pmm_memory();
-}
-
 void cache_machine_info(void) {
     // Cache any info that hasn't already been cached.
     get_cpu_name();

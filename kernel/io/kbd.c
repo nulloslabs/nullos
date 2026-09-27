@@ -157,10 +157,14 @@ char getc(void) {
             char c = scancode_to_ascii(sc);
             if (c != 0) return c;
         }
+
         cli();
+
         if (*(volatile uint32_t*)(&key_head) == *(volatile uint32_t*)(&key_tail)) {
-            __asm__ volatile ("sti; pause; hlt" ::: "memory");
+            sti();
+            wait();
         }
+
         sti();
     }
 }

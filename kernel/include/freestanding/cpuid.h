@@ -5,7 +5,7 @@
 
 static inline int get_cpuid(unsigned int leaf, unsigned int subleaf, unsigned int *a, unsigned int *b, unsigned int *c, unsigned int *d) {
     unsigned int max_leaf, ext_b, ext_c, ext_d;
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__x86_64__)
     unsigned long long f1, f2;
     __asm__ volatile (
         "pushf\n\t"

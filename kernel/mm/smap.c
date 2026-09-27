@@ -20,7 +20,7 @@ void enable_smap_for_cpu(void) {
 
     uint64_t cr4;
     __asm__ volatile ("mov %%cr4, %0" : "=r"(cr4));
-    cr4 |= CR4_SMAP;
+    cr4 |= SMAP_CR4;
     __asm__ volatile ("mov %0, %%cr4" : : "r"(cr4) : "memory");
     smap_enabled = true;
     clac();
