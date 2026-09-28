@@ -15,8 +15,7 @@ OBJ := $(OBJ:.S=.o)
 DEP := $(OBJ:.o=.d)
 
 all: $(OBJ)
-	@$(MAKE) -C controller
-	@$(MAKE) -C layout
+	@$(MAKE) -C layouts
 
 -include $(DEP)
 
@@ -31,8 +30,7 @@ all: $(OBJ)
 clean:
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/drivers/disk/*.o $(SUBDIR)/drivers/disk/*.d"
 	@rm -rf *.o *.d
-	@$(MAKE) -C controller clean
-	@$(MAKE) -C layout clean
+	@$(MAKE) -C layouts clean
 
 mrproper: clean
 

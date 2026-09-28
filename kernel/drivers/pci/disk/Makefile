@@ -15,20 +15,22 @@ OBJ := $(OBJ:.S=.o)
 DEP := $(OBJ:.o=.d)
 
 all: $(OBJ)
+	@$(MAKE) -C controllers
 
 -include $(DEP)
 
 %.o: %.c Makefile ../../../Makefile ../../../config.mk $(FORCE_REBUILD) ../../../include/limine/limine.h
-	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/drivers/disk/controller/$@"
+	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/drivers/pci/disk/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 %.o: %.S Makefile ../../../Makefile ../../../config.mk $(FORCE_REBUILD) ../../../include/limine/limine.h
-	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/drivers/disk/controller/$@"
+	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/drivers/pci/disk/$@"
 	@$(AS) $(AFLAGS) -c $< -o $@
 
 clean:
-	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/drivers/disk/controller/*.o $(SUBDIR)/drivers/disk/controller/*.d"
+	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/drivers/pci/disk/*.o $(SUBDIR)/drivers/pci/disk/*.d"
 	@rm -rf *.o *.d
+	@$(MAKE) -C controllers clean
 
 mrproper: clean
 

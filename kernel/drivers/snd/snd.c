@@ -1,5 +1,5 @@
-#include <freestanding/errno.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/errno.h>
 #include <drivers/snd/audio.h>
 #include <drivers/snd/snd.h>
 #include <drivers/snd/snd_control.h>

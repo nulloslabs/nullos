@@ -19,15 +19,15 @@ all: $(OBJ)
 -include $(DEP)
 
 %.o: %.c Makefile ../../../Makefile ../../../config.mk $(FORCE_REBUILD) ../../../include/limine/limine.h
-	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/drivers/disk/layout/$@"
+	@printf "  %-7s %s\n" "CC" "$(SUBDIR)/drivers/disk/layouts/$@"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 %.o: %.S Makefile ../../../Makefile ../../../config.mk $(FORCE_REBUILD) ../../../include/limine/limine.h
-	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/drivers/disk/layout/$@"
+	@printf "  %-7s %s\n" "AS" "$(SUBDIR)/drivers/disk/layouts/$@"
 	@$(AS) $(AFLAGS) -c $< -o $@
 
 clean:
-	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/drivers/disk/layout/*.o $(SUBDIR)/drivers/disk/layout/*.d"
+	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/drivers/disk/layouts/*.o $(SUBDIR)/drivers/disk/layouts/*.d"
 	@rm -rf *.o *.d
 
 mrproper: clean

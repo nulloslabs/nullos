@@ -1,5 +1,5 @@
-#include <freestanding/errno.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/errno.h>
 #include <main/cpu_info.h>
 #include <main/limine_req.h>
 #include <main/log.h>

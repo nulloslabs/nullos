@@ -1,7 +1,7 @@
 #pragma once
 
-#include <freestanding/stdint.h>
 #include <freestanding/stddef.h>
+#include <freestanding/stdint.h>
 #include <main/spinlocks.h>
 #include <sockets/sockets.h>
 

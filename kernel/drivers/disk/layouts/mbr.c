@@ -1,11 +1,11 @@
 #include <freestanding/stdint.h>
-#include <freestanding/errno.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/errno.h>
 #include <drivers/devices/devices.h>
-#include <drivers/disk/nvme.h>
+#include <drivers/pci/disk/controllers/nvme.h>
 #include <drivers/disk/pata.h>
 #include <drivers/disk/sata.h>
-#include <drivers/disk/layout/mbr.h>
+#include <drivers/disk/layouts/mbr.h>
 #include <drivers/usb/usb_storage.h>
 #include <fs/devtmpfs.h>
 #include <util/string.h>

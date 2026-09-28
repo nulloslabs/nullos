@@ -1,8 +1,8 @@
 #pragma once
 
 #include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stddef.h>
 #include <drivers/pci/pci.h>
 #include <main/spinlocks.h>
 #include <mm/pmm.h>

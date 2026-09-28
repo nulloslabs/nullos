@@ -1,7 +1,7 @@
 #pragma once
 
-#include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stdint.h>
 
 #define SATA_SECTOR_SIZE 512
 #define SATA_MAX_DEVICES 8

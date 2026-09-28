@@ -1,6 +1,6 @@
 #include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stddef.h>
 #include <freestanding/netinet/in.h>
 #include <crypto/rng.h>
 #include <drivers/net/dhcp.h>

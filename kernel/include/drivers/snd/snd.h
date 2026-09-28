@@ -1,8 +1,8 @@
 #pragma once
 
 #include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stddef.h>
 #include <drivers/snd/audio.h>
 #include <sched/fd.h>
 

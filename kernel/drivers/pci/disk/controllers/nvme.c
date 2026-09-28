@@ -1,8 +1,8 @@
 #include <freestanding/stdint.h>
+#include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
 #include <freestanding/errno.h>
-#include <freestanding/stdbool.h>
-#include <drivers/disk/nvme.h>
+#include <drivers/pci/disk/controllers/nvme.h>
 #include <drivers/pci/pci.h>
 #include <main/io.h>
 #include <main/log.h>

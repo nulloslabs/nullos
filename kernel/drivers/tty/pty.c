@@ -1,5 +1,5 @@
-#include <freestanding/errno.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/errno.h>
 #include <freestanding/signal.h>
 #include <drivers/tty/pty.h>
 #include <drivers/tty/tty.h>

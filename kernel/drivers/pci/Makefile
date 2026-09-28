@@ -15,6 +15,7 @@ OBJ := $(OBJ:.S=.o)
 DEP := $(OBJ:.o=.d)
 
 all: $(OBJ)
+	@$(MAKE) -C disk
 	@$(MAKE) -C gpu
 	@$(MAKE) -C net
 	@$(MAKE) -C snd
@@ -33,6 +34,7 @@ all: $(OBJ)
 clean:
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/drivers/pci/*.o $(SUBDIR)/drivers/pci/*.d"
 	@rm -rf *.o *.d
+	@$(MAKE) -C disk clean
 	@$(MAKE) -C gpu clean
 	@$(MAKE) -C net clean
 	@$(MAKE) -C snd clean

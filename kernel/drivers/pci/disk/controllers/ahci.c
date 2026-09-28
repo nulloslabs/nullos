@@ -1,9 +1,9 @@
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
-#include <freestanding/errno.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdint.h>
+#include <freestanding/errno.h>
 #include <drivers/disk/sata.h>
-#include <drivers/disk/controller/ahci.h>
+#include <drivers/pci/disk/controllers/ahci.h>
 #include <main/log.h>
 #include <main/spinlocks.h>
 #include <mm/pmm.h>

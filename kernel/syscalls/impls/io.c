@@ -1,4 +1,3 @@
-#include <freestanding/errno.h>
 #include <freestanding/stdbool.h>
 #include <freestanding/signal.h>
 #include <freestanding/flock.h>
@@ -6,6 +5,7 @@
 #include <freestanding/wait.h>
 #include <freestanding/limits.h>
 #include <freestanding/poll.h>
+#include <freestanding/errno.h>
 #include <freestanding/asm/unistd.h>
 #include <freestanding/linux/rseq.h>
 #include <freestanding/linux/types.h>
@@ -23,8 +23,8 @@
 #include <freestanding/sound/asound.h>
 #include <binfmt/elf.h>
 #include <drivers/devices/devices.h>
-#include <drivers/disk/layout/gpt.h>
-#include <drivers/disk/layout/mbr.h>
+#include <drivers/disk/layouts/gpt.h>
+#include <drivers/disk/layouts/mbr.h>
 #include <drivers/fb/fb.h>
 #include <drivers/fb/misc/fonts.h>
 #include <drivers/input/kbd.h>

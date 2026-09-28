@@ -1,8 +1,8 @@
 #pragma once
 
+#include <freestanding/stdarg.h>
 #include <freestanding/stdint.h>
 #include <freestanding/stddef.h>
-#include <freestanding/stdarg.h>
 
 #define LOG_TEXT_SIZE (128U * 1024U)
 #define LOG_RECORD_COUNT 2048U

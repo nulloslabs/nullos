@@ -1,10 +1,10 @@
-#include <freestanding/errno.h>
 #include <freestanding/stdbool.h>
 #include <freestanding/signal.h>
 #include <freestanding/flock.h>
 #include <freestanding/time.h>
 #include <freestanding/wait.h>
 #include <freestanding/limits.h>
+#include <freestanding/errno.h>
 #include <freestanding/asm/unistd.h>
 #include <freestanding/asm/prctl.h>
 #include <freestanding/linux/sched.h>
@@ -20,7 +20,7 @@
 #include <sys/utsname.h>
 #include <binfmt/elf.h>
 #include <crypto/rng.h>
-#include <drivers/disk/layout/gpt.h>
+#include <drivers/disk/layouts/gpt.h>
 #include <drivers/fb/misc/fonts.h>
 #include <drivers/tty/pts_devices.h>
 #include <drivers/tty/tty.h>

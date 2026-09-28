@@ -1,7 +1,7 @@
 #include <freestanding/stdint.h>
-#include <freestanding/errno.h>
-#include <freestanding/fcntl.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/fcntl.h>
+#include <freestanding/errno.h>
 #include <freestanding/sys/epoll.h>
 #include <drivers/devices/devices.h>
 #include <drivers/tty/pty.h>

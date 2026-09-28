@@ -1,6 +1,7 @@
 #pragma once
 
-#define NULL                   ((void *)0)
+#define NULL ((void *)0)
+
 #define offsetof(type, member) ((size_t)&(((type *)0)->member))
 
 #if defined(__x86_64__)

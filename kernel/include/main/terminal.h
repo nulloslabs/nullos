@@ -1,8 +1,8 @@
 #pragma once
 
 #include <freestanding/stdint.h>
-#include <freestanding/stdarg.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stdarg.h>
 #include <drivers/fb/fb.h>
 #include <limine/limine.h>
 

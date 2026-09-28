@@ -1,7 +1,7 @@
 #include <freestanding/stdint.h>
+#include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
 #include <freestanding/stdarg.h>
-#include <freestanding/stdbool.h>
 #include <freestanding/signal.h>
 #include <binfmt/elf.h>
 #include <main/assert.h>
@@ -15,7 +15,6 @@
 #include <sched/sched.h>
 #include <syscalls/syscalls.h>
 #include <syscalls/impls/helpers.h>
-
 
 static bool is_elf_range_valid(uint64_t offset, uint64_t length, uint64_t file_size) {
     return offset <= file_size && length <= file_size - offset;

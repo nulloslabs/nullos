@@ -1,9 +1,9 @@
-#include <freestanding/stdint.h>
 #include <freestanding/stddef.h>
-#include <freestanding/errno.h>
+#include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
 #include <freestanding/sys/stat.h>
 #include <freestanding/sys/types.h>
+#include <freestanding/errno.h>
 #include <freestanding/dirent.h>
 #include <crypto/gzip.h>
 #include <fs/initrd.h>

@@ -1,10 +1,10 @@
 #include <freestanding/stdint.h>
 #include <freestanding/stddef.h>
-#include <freestanding/errno.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/errno.h>
 #include <drivers/devices/devices.h>
-#include <drivers/disk/layout/gpt.h>
-#include <drivers/disk/layout/mbr.h>
+#include <drivers/disk/layouts/gpt.h>
+#include <drivers/disk/layouts/mbr.h>
 #include <drivers/usb/usb.h>
 #include <drivers/usb/usb_storage.h>
 #include <main/log.h>

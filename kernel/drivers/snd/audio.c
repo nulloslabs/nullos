@@ -1,7 +1,7 @@
 #include <freestanding/stdint.h>
+#include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
 #include <freestanding/errno.h>
-#include <freestanding/stdbool.h>
 #include <drivers/pci/snd/ac97.h>
 #include <drivers/snd/audio.h>
 #include <util/string.h>

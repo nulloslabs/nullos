@@ -1,6 +1,6 @@
 #include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stddef.h>
 #include <freestanding/cpuid.h>
 #include <drivers/timer/hpet.h>
 #include <drivers/timer/tsc.h>

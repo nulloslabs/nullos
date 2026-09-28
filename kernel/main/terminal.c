@@ -1,6 +1,6 @@
 #include <freestanding/stdint.h>
-#include <freestanding/stdarg.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stdarg.h>
 #include <freestanding/stdio.h>
 #include <freestanding/signal.h>
 #include <drivers/fb/fb.h>

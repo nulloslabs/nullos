@@ -1,7 +1,7 @@
 #include <freestanding/stdint.h>
-#include <freestanding/errno.h>
 #include <freestanding/stdbool.h>
-#include <drivers/disk/controller/ide.h>
+#include <freestanding/errno.h>
+#include <drivers/pci/disk/controllers/ide.h>
 #include <main/io.h>
 #include <main/log.h>
 #include <main/spinlocks.h>

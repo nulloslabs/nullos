@@ -4,6 +4,7 @@
 #include <freestanding/time.h>
 
 #define SNDRV_LITTLE_ENDIAN
+
 #define SNDRV_MASK_MAX                256
 #define AES_IEC958_STATUS_SIZE        24
 #define SNDRV_CTL_ELEM_ID_NAME_MAXLEN 44
@@ -151,12 +152,6 @@
 #define SNDRV_CTL_IOCTL_PCM_NEXT_DEVICE      0x80045530
 #define SNDRV_CTL_IOCTL_PCM_PREFER_SUBDEVICE 0x40045532
 
-#define SNDRV_PROTOCOL_VERSION(major, minor, subminor) (((major) << 16) | ((minor) << 8) | (subminor))
-
-#define SNDRV_PCM_VERSION   SNDRV_PROTOCOL_VERSION(2, 0, 18)
-#define SNDRV_CTL_VERSION   SNDRV_PROTOCOL_VERSION(2, 0, 10)
-#define SNDRV_TIMER_VERSION SNDRV_PROTOCOL_VERSION(2, 0, 8)
-
 #define SNDRV_TIMER_GLOBAL_SYSTEM  0
 #define SNDRV_TIMER_GLOBAL_RTC     1
 #define SNDRV_TIMER_GLOBAL_HPET    2
@@ -183,6 +178,12 @@
 #define SNDRV_TIMER_IOCTL_STOP        0x54A1
 #define SNDRV_TIMER_IOCTL_CONTINUE    0x54A2
 #define SNDRV_TIMER_IOCTL_PAUSE       0x54A3
+
+#define SNDRV_PCM_VERSION   SNDRV_PROTOCOL_VERSION(2, 0, 18)
+#define SNDRV_CTL_VERSION   SNDRV_PROTOCOL_VERSION(2, 0, 10)
+#define SNDRV_TIMER_VERSION SNDRV_PROTOCOL_VERSION(2, 0, 8)
+
+#define SNDRV_PROTOCOL_VERSION(major, minor, subminor) (((major) << 16) | ((minor) << 8) | (subminor))
 
 typedef unsigned long snd_pcm_uframes_t;
 typedef long snd_pcm_sframes_t;

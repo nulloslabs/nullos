@@ -1,4 +1,3 @@
-#include <freestanding/errno.h>
 #include <freestanding/stdbool.h>
 #include <freestanding/signal.h>
 #include <freestanding/flock.h>
@@ -6,6 +5,7 @@
 #include <freestanding/times.h>
 #include <freestanding/termios.h>
 #include <freestanding/limits.h>
+#include <freestanding/errno.h>
 #include <freestanding/asm/unistd.h>
 #include <freestanding/linux/rseq.h>
 #include <freestanding/linux/types.h>
@@ -18,7 +18,7 @@
 #include <freestanding/sys/random.h>
 #include <freestanding/sys/uio.h>
 #include <crypto/rng.h>
-#include <drivers/disk/layout/gpt.h>
+#include <drivers/disk/layouts/gpt.h>
 #include <drivers/fb/misc/fonts.h>
 #include <drivers/tty/pts_devices.h>
 #include <drivers/tty/tty.h>

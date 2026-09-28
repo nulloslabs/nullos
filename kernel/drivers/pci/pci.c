@@ -1,12 +1,12 @@
 #include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stddef.h>
 #include <drivers/disk/atapi.h>
-#include <drivers/disk/nvme.h>
+#include <drivers/pci/disk/controllers/nvme.h>
 #include <drivers/disk/pata.h>
 #include <drivers/disk/sata.h>
-#include <drivers/disk/controller/ahci.h>
-#include <drivers/disk/controller/ide.h>
+#include <drivers/pci/disk/controllers/ahci.h>
+#include <drivers/pci/disk/controllers/ide.h>
 #include <drivers/pci/pci.h>
 #include <drivers/pci/gpu/bga.h>
 #include <drivers/pci/gpu/svga_ii.h>

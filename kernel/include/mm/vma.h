@@ -1,8 +1,8 @@
 #pragma once
 
 #include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stddef.h>
 
 #define VMA_MAX      64
 #define VMA_NAME_MAX 64

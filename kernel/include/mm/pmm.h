@@ -11,8 +11,8 @@
 
 #ifndef __ASSEMBLY__
 #include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stddef.h>
 #include <limine/limine.h>
 
 typedef enum {

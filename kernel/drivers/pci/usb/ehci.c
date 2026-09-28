@@ -1,6 +1,6 @@
 #include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stddef.h>
 #include <drivers/pci/pci.h>
 #include <drivers/pci/usb/ehci.h>
 #include <drivers/pci/usb/ohci.h>

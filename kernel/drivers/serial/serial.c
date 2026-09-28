@@ -1,7 +1,7 @@
 #include <freestanding/stdint.h>
+#include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
 #include <freestanding/stdarg.h>
-#include <freestanding/stdbool.h>
 #include <drivers/serial/serial.h>
 #include <main/io.h>
 #include <main/log.h>

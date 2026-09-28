@@ -1,8 +1,8 @@
 #pragma once
 
 #include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stddef.h>
 #include <freestanding/sound/asound.h>
 
 #define SND_CTL_NUMID_VOLUME 1
