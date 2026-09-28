@@ -57,6 +57,24 @@ static void idle_task(void) {
 }
 
 // --- Per-CPU runqueue helpers (sched_lock must be held) ---
+
+static void refresh_deadline_us(task_t *task) {
+    if (!task) return;
+    if (task->deadline_us <= task->virtual_runtime) task->deadline_us = task->virtual_runtime + get_slice_us(task);
+}
+
+static uint64_t rq_average_runtime_us(cpu_t *cpu) {
+    uint64_t sum = 0;
+    uint64_t count = 0;
+    for (task_t *cand = cpu->rq_head; cand; cand = cand->rq_next) {
+        if (cand == dead_task || cand->state != TASK_READY) continue;
+        sum += cand->virtual_runtime;
+        count++;
+    }
+    if (!count) return cpu->minimum_virtual_runtime;
+    return sum / count;
+}
+
 static void rq_enqueue_locked(task_t *task) {
     if (!task || task->rq_queued || task->state != TASK_READY) return;
     // Pick least-loaded CPU for new/waking tasks, or last CPU if known
@@ -73,12 +91,14 @@ static void rq_enqueue_locked(task_t *task) {
         target = best;
     }
     cpu_t *cpu = &cpus[target];
+    if (!task->deadline_us) task->virtual_runtime = rq_average_runtime_us(cpu);
     task->rq_next = cpu->rq_head;
     task->rq_prev = NULL;
     if (cpu->rq_head) cpu->rq_head->rq_prev = task;
     cpu->rq_head = task;
     cpu->rq_count++;
     task->rq_queued = true;
+    refresh_deadline_us(task);
 }
 
 static void rq_dequeue_locked(task_t *task) {
@@ -123,6 +143,7 @@ static void initialize_task_scheduling(task_t *task, task_t *parent) {
     task->nice = parent ? parent->nice : 0;
     task->weight = get_weight_for_nice(task->nice);
     task->virtual_runtime = parent ? parent->virtual_runtime : 0;
+    task->deadline_us = 0;
     task->execution_start_us = 0;
     task->sleep_deadline_us = 0;
     task->running_cpu = -1;
@@ -194,60 +215,42 @@ static void update_load_averages(void) {
     }
 }
 
+static task_t *pick_next_task_us(cpu_t *cpu) {
+    uint64_t sum = 0;
+    uint64_t count = 0;
+    for (int c = 0; c < MAX_CPUS; c++) {
+        if (!cpus[c].active && c != 0) continue;
+        for (task_t *cand = cpus[c].rq_head; cand; ) {
+            task_t *next_cand = cand->rq_next;
+            if (cand == dead_task || cand->state != TASK_READY || !cand->kstack || cand->rsp == 0) rq_remove_from_cpu_locked(&cpus[c], cand);
+            else {
+                uint64_t floor = cpu->minimum_virtual_runtime > SCHED_WAKEUP_GRANULARITY_US ? cpu->minimum_virtual_runtime - SCHED_WAKEUP_GRANULARITY_US : 0;
+                if (cand->virtual_runtime < floor) cand->virtual_runtime = floor;
+                sum += cand->virtual_runtime;
+                count++;
+            }
+            cand = next_cand;
+        }
+    }
+    if (!count) return NULL;
+    uint64_t avg = sum / count;
+    task_t *best = NULL;
+    task_t *fallback = NULL;
+    uint64_t best_deadline = UINT64_MAX;
+    uint64_t best_runtime = UINT64_MAX;
+    for (int c = 0; c < MAX_CPUS; c++) {
+        if (!cpus[c].active && c != 0) continue;
+        for (task_t *cand = cpus[c].rq_head; cand; cand = cand->rq_next) {
+            if (cand->virtual_runtime < best_runtime) { best_runtime = cand->virtual_runtime; fallback = cand; }
+            if (cand->virtual_runtime <= avg && cand->deadline_us < best_deadline) { best_deadline = cand->deadline_us; best = cand; }
+        }
+    }
+    if (best) return best;
+    return fallback;
+}
 
 bool is_sched_ready(void) {
     return sched_ready;
-}
-
-task_t *get_current_task_ptr(void) {
-    return current_task_ptr;
-}
-
-void let_current_task_sleep(uint64_t duration_us) {
-    assert(current_task_ptr != NULL);
-    uint64_t now = get_monotonic_time_us();
-    current_task_ptr->sleep_deadline_us = duration_us > UINT64_MAX - now ? UINT64_MAX : now + duration_us;
-    current_task_ptr->state = TASK_SLEEPING;
-    spin_unlock(&sched_lock);
-    yield_sched();
-    spin_lock(&sched_lock);
-    current_task_ptr->sleep_deadline_us = 0;
-}
-
-int get_task_nice(task_t *task) {
-    return task ? task->nice : 0;
-}
-
-int set_task_nice(task_t *task, int nice) {
-    if (!task) return -ESRCH;
-    if (nice < NICE_MIN) nice = NICE_MIN;
-    if (nice > NICE_MAX) nice = NICE_MAX;
-    task->nice = nice;
-    task->weight = get_weight_for_nice(nice);
-    return 0;
-}
-
-task_t *task_by_pid(pid_t pid) {
-    int idx = task_index_by_pid(pid);
-    return idx < 0 ? NULL : tasks[idx];
-}
-
-int task_index_by_pid(pid_t pid) {
-    for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i] != dead_task && tasks[i]->state != TASK_DEAD && tasks[i]->pid == pid) return i;
-    }
-    return -1;
-}
-
-void release_task_slot(int task_idx) {
-    if (task_idx < 0 || task_idx >= MAX_TASKS || tasks[task_idx] == dead_task) return;
-    assert(tasks[task_idx] != NULL && tasks[task_idx] != dead_task);
-    rq_dequeue_locked(tasks[task_idx]);
-    if ((tasks[task_idx]->state == TASK_ZOMBIE || tasks[task_idx]->state == TASK_REAPED) && tasks[task_idx]->running_cpu >= 0) { tasks[task_idx]->state = TASK_REAPED; return; }
-    if (tasks[task_idx]->kstack) free_kstack(tasks[task_idx]->kstack);
-    if (tasks[task_idx]->fpu_area) vfree(tasks[task_idx]->fpu_area);
-    free(tasks[task_idx]);
-    tasks[task_idx] = dead_task;
 }
 
 uint64_t get_idle_time_us(void) {
@@ -269,14 +272,6 @@ uint64_t get_timer_interrupt_count(void) {
     return __atomic_load_n(&timer_interrupt_count, __ATOMIC_RELAXED);
 }
 
-pid_t get_last_created_pid(void) {
-    return last_created_pid;
-}
-
-void record_timer_interrupt(void) {
-    __atomic_add_fetch(&timer_interrupt_count, 1, __ATOMIC_RELAXED);
-}
-
 uint32_t get_runnable_task_count(void) {
     uint32_t count = 0;
     for (int i = 0; i < MAX_CPUS; i++) {
@@ -293,6 +288,10 @@ uint32_t get_runnable_task_count(void) {
     return count;
 }
 
+pid_t get_last_created_pid(void) {
+    return last_created_pid;
+}
+
 uint16_t get_process_count(void) {
     uint16_t count = 0;
     for (int i = 0; i < MAX_TASKS; i++) if (tasks[i]->state != TASK_DEAD) count++;
@@ -306,10 +305,8 @@ void get_load_averages(unsigned long loads[3]) {
     loads[2] = load_averages[2] << 5;
 }
 
-const vma_table_t *task_vma_table(int pid_idx) {
-    if (pid_idx < 0 || pid_idx >= MAX_TASKS) return NULL;
-    if (tasks[pid_idx]->state == TASK_DEAD) return NULL;
-    return tasks[pid_idx]->ctx ? &tasks[pid_idx]->ctx->vmas : NULL;
+task_t *get_current_task_ptr(void) {
+    return current_task_ptr;
 }
 
 pid_t create_task(void (*entry)(void), uint8_t ring, vmm_context_t *ctx, uint64_t initial_rsp) {
@@ -770,159 +767,56 @@ pid_t clone_task_flags(syscall_frame_t *frame, vmm_context_t *ctx, uint64_t flag
     return -EAGAIN;
 }
 
-void update_interval_timers(void) {
-    uint64_t now = time_get_realtime_us();
-
-    for (int i = 0; i < MAX_TASKS; i++) {
-        task_t *task = tasks[i];
-        if (task->state == TASK_DEAD || task->state == TASK_ZOMBIE ||
-            task->real_timer_deadline_us == 0 || now < task->real_timer_deadline_us) {
-            continue;
-        }
-
-        task->pending_signals |= (1ULL << SIGALRM);
-        if (task->real_timer_interval_us) {
-            uint64_t elapsed = now - task->real_timer_deadline_us;
-            uint64_t periods = elapsed / task->real_timer_interval_us + 1;
-            task->real_timer_deadline_us += periods * task->real_timer_interval_us;
-        } else {
-            task->real_timer_deadline_us = 0;
-        }
-
-        if (task->state == TASK_STOPPED) { task->state = TASK_READY; rq_enqueue_locked(task); }
-    }
+void prepare_scheduler_cpu(int cpu_index) {
+    if (cpu_index <= 0 || cpu_index >= MAX_CPUS) return;
+    pid_t pid = create_task(idle_task, 0, &kernel_context, 0);
+    int task_index = task_index_by_pid(pid);
+    if (task_index < 0) panic("unable to create cpu idle task");
+    task_t *task = tasks[task_index];
+    task->pid = 0;
+    task->ppid = 0;
+    task->state = TASK_RUNNING;
+    task->running_cpu = cpu_index;
+    task->execution_start_us = get_monotonic_time_us();
+    next_pid = 1;
+    if (processes_created) processes_created--;
+    last_created_pid = 0;
+    cpus[cpu_index].task_index = task_index;
+    cpus[cpu_index].task = task;
+    cpus[cpu_index].idle_task = task_index;
+    cpus[cpu_index].minimum_virtual_runtime = 0;
+    cpus[cpu_index].rq_head = NULL;
+    cpus[cpu_index].rq_count = 0;
 }
 
-void schedule(void) {
-    int cpu_index = get_cpu_index();
-    cpu_t *cpu = &cpus[cpu_index];
-    if (deferred_kstacks[cpu_index]) {
-        free_kstack(deferred_kstacks[cpu_index]);
-        deferred_kstacks[cpu_index] = NULL;
-    }
+void let_current_task_sleep(uint64_t duration_us) {
+    assert(current_task_ptr != NULL);
     uint64_t now = get_monotonic_time_us();
-    if (current_task == cpu->idle_task && now >= last_account_us) idle_time_us += now - last_account_us;
-    last_account_us = now;
-    update_load_averages();
-    update_interval_timers();
-    check_futex_timeouts();
-    wake_sleeping_tasks(now);
+    current_task_ptr->sleep_deadline_us = duration_us > UINT64_MAX - now ? UINT64_MAX : now + duration_us;
+    current_task_ptr->state = TASK_SLEEPING;
+    spin_unlock(&sched_lock);
+    yield_sched();
+    spin_lock(&sched_lock);
+    current_task_ptr->sleep_deadline_us = 0;
+}
 
-    int old_task = current_task;
-    task_t *old = current_task_ptr;
+int get_task_nice(task_t *task) {
+    return task ? task->nice : 0;
+}
 
-    if (old && old_task != cpu->idle_task) {
-        uint64_t elapsed = now >= old->execution_start_us ? now - old->execution_start_us : 0;
-        if (elapsed && old->weight) old->virtual_runtime += elapsed * NICE_0_LOAD / old->weight;
-        if (old->state == TASK_RUNNING) { old->state = TASK_READY; rq_enqueue_locked(old); }
-        old->running_cpu = -1;
-        if (old->state == TASK_ZOMBIE || old->state == TASK_REAPED) rq_dequeue_locked(old);
-    }
+int set_task_nice(task_t *task, int nice) {
+    if (!task) return -ESRCH;
+    if (nice < NICE_MIN) nice = NICE_MIN;
+    if (nice > NICE_MAX) nice = NICE_MAX;
+    task->nice = nice;
+    task->weight = get_weight_for_nice(nice);
+    refresh_deadline_us(task);
+    return 0;
+}
 
-    int next = cpu->idle_task;
-    uint64_t best_runtime = UINT64_MAX;
-    task_t *best_task = NULL;
-    // Fast path: scan per-CPU runqueues (O(nr_running)) with stale cleanup
-    for (int c = 0; c < MAX_CPUS; c++) {
-        if (!cpus[c].active && c != 0) continue;
-        for (task_t *cand = cpus[c].rq_head; cand; ) {
-            task_t *next_cand = cand->rq_next;
-            if (cand == dead_task || cand->state != TASK_READY || !cand->kstack || cand->rsp == 0) {
-                rq_remove_from_cpu_locked(&cpus[c], cand);
-            } else {
-                uint64_t floor = cpu->minimum_virtual_runtime > SCHED_WAKEUP_GRANULARITY_US ? cpu->minimum_virtual_runtime - SCHED_WAKEUP_GRANULARITY_US : 0;
-                if (cand->virtual_runtime < floor) cand->virtual_runtime = floor;
-                if (cand->virtual_runtime < best_runtime) { best_runtime = cand->virtual_runtime; best_task = cand; }
-            }
-            cand = next_cand;
-        }
-    }
-    // Fallback: if runqueue empty due to missed enqueue, rebuild from tasks[]
-    if (!best_task) {
-        for (int i = 0; i < MAX_TASKS; i++) {
-            task_t *t = tasks[i];
-            if (t == dead_task || t->state != TASK_READY || t->rq_queued || t->running_cpu >= 0 || !t->kstack || t->rsp == 0) continue;
-            rq_enqueue_locked(t);
-        }
-        for (int c = 0; c < MAX_CPUS; c++) {
-            if (!cpus[c].active && c != 0) continue;
-            for (task_t *cand = cpus[c].rq_head; cand; ) {
-                task_t *next_cand = cand->rq_next;
-                if (cand == dead_task || cand->state != TASK_READY || !cand->kstack || cand->rsp == 0) {
-                    rq_remove_from_cpu_locked(&cpus[c], cand);
-                } else {
-                    uint64_t floor = cpu->minimum_virtual_runtime > SCHED_WAKEUP_GRANULARITY_US ? cpu->minimum_virtual_runtime - SCHED_WAKEUP_GRANULARITY_US : 0;
-                    if (cand->virtual_runtime < floor) cand->virtual_runtime = floor;
-                    if (cand->virtual_runtime < best_runtime) { best_runtime = cand->virtual_runtime; best_task = cand; }
-                }
-                cand = next_cand;
-            }
-        }
-    }
-    if (best_task) {
-        for (int i = 0; i < MAX_TASKS; i++) if (tasks[i] == best_task) { next = i; break; }
-        rq_dequeue_locked(best_task);
-    }
-
-    bool exiting = old && (old->state == TASK_ZOMBIE || old->state == TASK_REAPED);
-    bool reap_old = exiting && (old->state == TASK_REAPED || old->ppid == 0);
-    vmm_context_t *old_ctx = old ? old->ctx : NULL;
-
-    if (next >= 0 && tasks[next] != dead_task) {
-        // Eager FPU save of the outgoing task (before its registers are
-        // clobbered by the incoming task).  Skip if the outgoing task is a
-        // zombie being reaped above — its fpu_area is already gone.
-        if (old_task != next && tasks[old_task]->fpu_area && tasks[old_task]->state != TASK_DEAD) {
-            save_fpu_state(tasks[old_task]->fpu_area);
-        }
-
-        current_task = next;
-        tasks[current_task]->state = TASK_RUNNING;
-        current_task_ptr = tasks[current_task];
-        current_task_ptr->running_cpu = cpu_index;
-        current_task_ptr->execution_start_us = now;
-        if (next != cpu->idle_task && current_task_ptr->virtual_runtime > cpu->minimum_virtual_runtime) cpu->minimum_virtual_runtime = current_task_ptr->virtual_runtime;
-        if (old_task != next) context_switch_count++;
-
-        // Ensure TSS.RSP0 is updated so Ring 3 -> Ring 0 interrupts use the correct stack!
-        // Use get_cpu_index() so APs update their own TSS, not always CPU 0's.
-        if (tasks[next]->kstack) {
-            set_tss_kstack_for_cpu(cpu_index, kstack_top(tasks[next]->kstack));
-        }
-
-        if (tasks[next]->ctx && tasks[next]->ctx != old_ctx) {
-            switch_vmm_context(tasks[next]->ctx);
-        }
-
-        write_msr(MSR_FS_BASE, tasks[next]->fs_base);
-        // The scheduler runs with kernel GS active. Keep the task pointer active
-        // and place the next task's user GS in the swapgs shadow register.
-        write_msr(MSR_GS_BASE, (uint64_t)current_task_ptr);
-        write_msr(MSR_KERNEL_GS_BASE, tasks[next]->gs_base);
-
-        // Eager FPU restore of the incoming task.  clts first so the
-        // xrstor/fxrstor doesn't #NM (TS should already be clear in our
-        // eager model, but be defensive against any path that set it).
-        if (old_task != next && tasks[next]->fpu_area) {
-            __asm__ volatile ("clts");
-            restore_fpu_state(tasks[next]->fpu_area);
-        }
-
-        if (exiting && old_ctx && old_ctx != &kernel_context) {
-            destroy_vmm_context(old_ctx);
-            old->ctx = NULL;
-        }
-
-        if (reap_old) {
-            old->stack_base = NULL;
-            if (old->kstack) {
-                deferred_kstacks[cpu_index] = old->kstack;
-                old->kstack = NULL;
-            }
-            if (old->fpu_area) { vfree(old->fpu_area); old->fpu_area = NULL; }
-            release_task_slot(old_task);
-        }
-    }
+uint64_t get_slice_us(task_t *task) {
+    if (!task || !task->weight) return SCHED_BASE_SLICE_US;
+    return SCHED_BASE_SLICE_US * NICE_0_LOAD / task->weight;
 }
 
 void wake_waiting_parent(pid_t child_pid, pid_t parent_pid) {
@@ -1020,6 +914,35 @@ void exit_task(int status) {
     idle();
 }
 
+const vma_table_t *task_vma_table(int pid_idx) {
+    if (pid_idx < 0 || pid_idx >= MAX_TASKS) return NULL;
+    if (tasks[pid_idx]->state == TASK_DEAD) return NULL;
+    return tasks[pid_idx]->ctx ? &tasks[pid_idx]->ctx->vmas : NULL;
+}
+
+task_t *task_by_pid(pid_t pid) {
+    int idx = task_index_by_pid(pid);
+    return idx < 0 ? NULL : tasks[idx];
+}
+
+int task_index_by_pid(pid_t pid) {
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (tasks[i] != dead_task && tasks[i]->state != TASK_DEAD && tasks[i]->pid == pid) return i;
+    }
+    return -1;
+}
+
+void release_task_slot(int task_idx) {
+    if (task_idx < 0 || task_idx >= MAX_TASKS || tasks[task_idx] == dead_task) return;
+    assert(tasks[task_idx] != NULL && tasks[task_idx] != dead_task);
+    rq_dequeue_locked(tasks[task_idx]);
+    if ((tasks[task_idx]->state == TASK_ZOMBIE || tasks[task_idx]->state == TASK_REAPED) && tasks[task_idx]->running_cpu >= 0) { tasks[task_idx]->state = TASK_REAPED; return; }
+    if (tasks[task_idx]->kstack) free_kstack(tasks[task_idx]->kstack);
+    if (tasks[task_idx]->fpu_area) vfree(tasks[task_idx]->fpu_area);
+    free(tasks[task_idx]);
+    tasks[task_idx] = dead_task;
+}
+
 bool signal_pending(void) {
     if (!current_task_ptr) return false;
     uint64_t unblockable = (1ULL << 9 /*SIGKILL*/) | (1ULL << 19 /*SIGSTOP*/);
@@ -1028,26 +951,129 @@ bool signal_pending(void) {
     return (current_task_ptr->pending_signals & (~blocked_shifted | unblockable)) != 0;
 }
 
-void prepare_scheduler_cpu(int cpu_index) {
-    if (cpu_index <= 0 || cpu_index >= MAX_CPUS) return;
-    pid_t pid = create_task(idle_task, 0, &kernel_context, 0);
-    int task_index = task_index_by_pid(pid);
-    if (task_index < 0) panic("unable to create cpu idle task");
-    task_t *task = tasks[task_index];
-    task->pid = 0;
-    task->ppid = 0;
-    task->state = TASK_RUNNING;
-    task->running_cpu = cpu_index;
-    task->execution_start_us = get_monotonic_time_us();
-    next_pid = 1;
-    if (processes_created) processes_created--;
-    last_created_pid = 0;
-    cpus[cpu_index].task_index = task_index;
-    cpus[cpu_index].task = task;
-    cpus[cpu_index].idle_task = task_index;
-    cpus[cpu_index].minimum_virtual_runtime = 0;
-    cpus[cpu_index].rq_head = NULL;
-    cpus[cpu_index].rq_count = 0;
+void update_interval_timers(void) {
+    uint64_t now = time_get_realtime_us();
+    for (int i = 0; i < MAX_TASKS; i++) {
+        task_t *task = tasks[i];
+        if (task->state == TASK_DEAD || task->state == TASK_ZOMBIE || task->real_timer_deadline_us == 0 || now < task->real_timer_deadline_us) continue;
+        task->pending_signals |= (1ULL << SIGALRM);
+        if (task->real_timer_interval_us) {
+            uint64_t elapsed = now - task->real_timer_deadline_us;
+            uint64_t periods = elapsed / task->real_timer_interval_us + 1;
+            task->real_timer_deadline_us += periods * task->real_timer_interval_us;
+        } else {
+            task->real_timer_deadline_us = 0;
+        }
+        if (task->state == TASK_STOPPED) { task->state = TASK_READY; rq_enqueue_locked(task); }
+    }
+}
+
+void record_timer_interrupt(void) {
+    __atomic_add_fetch(&timer_interrupt_count, 1, __ATOMIC_RELAXED);
+}
+
+void schedule(void) {
+    int cpu_index = get_cpu_index();
+    cpu_t *cpu = &cpus[cpu_index];
+    if (deferred_kstacks[cpu_index]) {
+        free_kstack(deferred_kstacks[cpu_index]);
+        deferred_kstacks[cpu_index] = NULL;
+    }
+    uint64_t now = get_monotonic_time_us();
+    if (current_task == cpu->idle_task && now >= last_account_us) idle_time_us += now - last_account_us;
+    last_account_us = now;
+    update_load_averages();
+    update_interval_timers();
+    check_futex_timeouts();
+    wake_sleeping_tasks(now);
+
+    int old_task = current_task;
+    task_t *old = current_task_ptr;
+
+    if (old && old_task != cpu->idle_task) {
+        uint64_t elapsed = now >= old->execution_start_us ? now - old->execution_start_us : 0;
+        if (elapsed && old->weight) old->virtual_runtime += elapsed * NICE_0_LOAD / old->weight;
+        refresh_deadline_us(old);
+        if (old->state == TASK_RUNNING) { old->state = TASK_READY; rq_enqueue_locked(old); }
+        old->running_cpu = -1;
+        if (old->state == TASK_ZOMBIE || old->state == TASK_REAPED) rq_dequeue_locked(old);
+    }
+
+    int next = cpu->idle_task;
+    task_t *best_task = pick_next_task_us(cpu);
+    // Fallback: if runqueue empty due to missed enqueue, rebuild from tasks[]
+    if (!best_task) {
+        for (int i = 0; i < MAX_TASKS; i++) {
+            task_t *t = tasks[i];
+            if (t == dead_task || t->state != TASK_READY || t->rq_queued || t->running_cpu >= 0 || !t->kstack || t->rsp == 0) continue;
+            rq_enqueue_locked(t);
+        }
+        best_task = pick_next_task_us(cpu);
+    }
+    if (best_task) {
+        for (int i = 0; i < MAX_TASKS; i++) if (tasks[i] == best_task) { next = i; break; }
+        rq_dequeue_locked(best_task);
+    }
+
+    bool exiting = old && (old->state == TASK_ZOMBIE || old->state == TASK_REAPED);
+    bool reap_old = exiting && (old->state == TASK_REAPED || old->ppid == 0);
+    vmm_context_t *old_ctx = old ? old->ctx : NULL;
+
+    if (next >= 0 && tasks[next] != dead_task) {
+        // Eager FPU save of the outgoing task (before its registers are
+        // clobbered by the incoming task).  Skip if the outgoing task is a
+        // zombie being reaped above — its fpu_area is already gone.
+        if (old_task != next && tasks[old_task]->fpu_area && tasks[old_task]->state != TASK_DEAD) {
+            save_fpu_state(tasks[old_task]->fpu_area);
+        }
+
+        current_task = next;
+        tasks[current_task]->state = TASK_RUNNING;
+        current_task_ptr = tasks[current_task];
+        current_task_ptr->running_cpu = cpu_index;
+        current_task_ptr->execution_start_us = now;
+        if (next != cpu->idle_task && current_task_ptr->virtual_runtime > cpu->minimum_virtual_runtime) cpu->minimum_virtual_runtime = current_task_ptr->virtual_runtime;
+        if (old_task != next) context_switch_count++;
+
+        // Ensure TSS.RSP0 is updated so Ring 3 -> Ring 0 interrupts use the correct stack!
+        // Use get_cpu_index() so APs update their own TSS, not always CPU 0's.
+        if (tasks[next]->kstack) {
+            set_tss_kstack_for_cpu(cpu_index, kstack_top(tasks[next]->kstack));
+        }
+
+        if (tasks[next]->ctx && tasks[next]->ctx != old_ctx) {
+            switch_vmm_context(tasks[next]->ctx);
+        }
+
+        write_msr(MSR_FS_BASE, tasks[next]->fs_base);
+        // The scheduler runs with kernel GS active. Keep the task pointer active
+        // and place the next task's user GS in the swapgs shadow register.
+        write_msr(MSR_GS_BASE, (uint64_t)current_task_ptr);
+        write_msr(MSR_KERNEL_GS_BASE, tasks[next]->gs_base);
+
+        // Eager FPU restore of the incoming task.  clts first so the
+        // xrstor/fxrstor doesn't #NM (TS should already be clear in our
+        // eager model, but be defensive against any path that set it).
+        if (old_task != next && tasks[next]->fpu_area) {
+            __asm__ volatile ("clts");
+            restore_fpu_state(tasks[next]->fpu_area);
+        }
+
+        if (exiting && old_ctx && old_ctx != &kernel_context) {
+            destroy_vmm_context(old_ctx);
+            old->ctx = NULL;
+        }
+
+        if (reap_old) {
+            old->stack_base = NULL;
+            if (old->kstack) {
+                deferred_kstacks[cpu_index] = old->kstack;
+                old->kstack = NULL;
+            }
+            if (old->fpu_area) { vfree(old->fpu_area); old->fpu_area = NULL; }
+            release_task_slot(old_task);
+        }
+    }
 }
 
 void init_sched(void) {

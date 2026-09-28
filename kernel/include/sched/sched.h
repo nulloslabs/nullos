@@ -47,6 +47,7 @@
 #define NICE_0_LOAD 1024U
 
 #define SCHED_WAKEUP_GRANULARITY_US 4000ULL
+#define SCHED_BASE_SLICE_US         750ULL
 
 #ifndef __ASSEMBLY__
 // TODO (maybe): Make this shit of a struct less messier
@@ -88,6 +89,7 @@ typedef struct task {
     uint64_t gs_base;
     uint32_t weight;
     uint64_t virtual_runtime;
+    uint64_t deadline_us;
     uint64_t execution_start_us;
     uint64_t sleep_deadline_us;
     int running_cpu;
@@ -142,6 +144,7 @@ void prepare_scheduler_cpu(int cpu_index);
 void let_current_task_sleep(uint64_t duration_us);
 int get_task_nice(task_t *task);
 int set_task_nice(task_t *task, int nice);
+uint64_t get_slice_us(task_t *task);
 void wake_waiting_parent(pid_t child_pid, pid_t parent_pid);
 void exit_task(int status);
 const vma_table_t *task_vma_table(int pid_idx);
