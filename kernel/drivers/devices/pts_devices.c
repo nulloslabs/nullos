@@ -1,6 +1,6 @@
 #include <freestanding/errno.h>
 #include <freestanding/signal.h>
-#include <drivers/tty/pts_devices.h>
+#include <drivers/devices/pts_devices.h>
 #include <drivers/tty/pty.h>
 #include <fs/devpts.h>
 #include <sched/sched.h>

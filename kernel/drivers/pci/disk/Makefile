@@ -15,7 +15,6 @@ OBJ := $(OBJ:.S=.o)
 DEP := $(OBJ:.o=.d)
 
 all: $(OBJ)
-	@$(MAKE) -C controllers
 
 -include $(DEP)
 
@@ -30,7 +29,6 @@ all: $(OBJ)
 clean:
 	@printf "  %-7s %s\n" "CLEAN" "$(SUBDIR)/drivers/pci/disk/*.o $(SUBDIR)/drivers/pci/disk/*.d"
 	@rm -rf *.o *.d
-	@$(MAKE) -C controllers clean
 
 mrproper: clean
 

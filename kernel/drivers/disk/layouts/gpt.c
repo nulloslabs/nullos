@@ -2,7 +2,7 @@
 #include <freestanding/stdbool.h>
 #include <freestanding/errno.h>
 #include <drivers/devices/devices.h>
-#include <drivers/pci/disk/controllers/nvme.h>
+#include <drivers/pci/disk/nvme.h>
 #include <drivers/disk/pata.h>
 #include <drivers/disk/sata.h>
 #include <drivers/disk/layouts/gpt.h>

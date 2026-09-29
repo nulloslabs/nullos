@@ -17,12 +17,11 @@
 #include <freestanding/sys/reboot.h>
 #include <freestanding/sys/epoll.h>
 #include <freestanding/sys/sysmacros.h>
-#include <sys/utsname.h>
 #include <binfmt/elf.h>
 #include <crypto/rng.h>
+#include <drivers/devices/pts_devices.h>
 #include <drivers/disk/layouts/gpt.h>
 #include <drivers/fb/misc/fonts.h>
-#include <drivers/tty/pts_devices.h>
 #include <drivers/tty/tty.h>
 #include <fs/devtmpfs.h>
 #include <fs/ext4.h>
@@ -39,6 +38,7 @@
 #include <sockets/sockets.h>
 #include <sockets/unix_sockets.h>
 #include <sys/domainname.h>
+#include <sys/utsname.h>
 #include <syscalls/syscalls.h>
 #include <syscalls/impls/helpers.h>
 #include <syscalls/impls/sched.h>

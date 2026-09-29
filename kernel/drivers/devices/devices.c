@@ -4,10 +4,10 @@
 #include <crypto/rng.h>
 #include <drivers/devices/devices.h>
 #include <drivers/disk/atapi.h>
-#include <drivers/pci/disk/controllers/nvme.h>
+#include <drivers/pci/disk/nvme.h>
 #include <drivers/disk/pata.h>
 #include <drivers/disk/sata.h>
-#include <drivers/pci/disk/controllers/ide.h>
+#include <drivers/pci/disk/ide.h>
 #include <drivers/disk/layouts/gpt.h>
 #include <drivers/disk/layouts/mbr.h>
 #include <drivers/input/kbd.h>

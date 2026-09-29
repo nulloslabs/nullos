@@ -17,15 +17,14 @@
 #include <freestanding/sys/reboot.h>
 #include <freestanding/sys/random.h>
 #include <freestanding/sys/uio.h>
-#include <sys/utsname.h>
 #include <crypto/rng.h>
 #include <drivers/acpi/power.h>
+#include <drivers/devices/pts_devices.h>
 #include <drivers/disk/layouts/mbr.h>
 #include <drivers/fb/misc/fonts.h>
 #include <drivers/input/kbd.h>
 #include <drivers/net/net.h>
 #include <drivers/serial/serial.h>
-#include <drivers/tty/pts_devices.h>
 #include <drivers/tty/pty.h>
 #include <drivers/usb/usb.h>
 #include <fs/devtmpfs.h>
@@ -41,6 +40,7 @@
 #include <sched/sched.h>
 #include <sys/domainname.h>
 #include <sys/hostname.h>
+#include <sys/utsname.h>
 #include <syscalls/syscalls.h>
 #include <syscalls/impls/helpers.h>
 #include <syscalls/impls/sys.h>

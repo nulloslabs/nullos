@@ -2,7 +2,7 @@
 #include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
 #include <freestanding/errno.h>
-#include <drivers/pci/disk/controllers/nvme.h>
+#include <drivers/pci/disk/nvme.h>
 #include <drivers/pci/pci.h>
 #include <main/io.h>
 #include <main/log.h>

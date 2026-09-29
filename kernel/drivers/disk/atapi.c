@@ -2,7 +2,7 @@
 #include <freestanding/stdbool.h>
 #include <freestanding/errno.h>
 #include <drivers/disk/atapi.h>
-#include <drivers/pci/disk/controllers/ide.h>
+#include <drivers/pci/disk/ide.h>
 #include <main/io.h>
 #include <main/log.h>
 #include <main/spinlocks.h>

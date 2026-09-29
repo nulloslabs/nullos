@@ -18,9 +18,9 @@
 #include <freestanding/sys/random.h>
 #include <freestanding/sys/uio.h>
 #include <crypto/rng.h>
+#include <drivers/devices/pts_devices.h>
 #include <drivers/disk/layouts/gpt.h>
 #include <drivers/fb/misc/fonts.h>
-#include <drivers/tty/pts_devices.h>
 #include <drivers/tty/tty.h>
 #include <fs/devtmpfs.h>
 #include <fs/ext4.h>

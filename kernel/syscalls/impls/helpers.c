@@ -20,10 +20,10 @@
 #include <freestanding/sys/sysmacros.h>
 #include <binfmt/elf.h>
 #include <drivers/devices/devices.h>
+#include <drivers/devices/pts_devices.h>
 #include <drivers/disk/layouts/gpt.h>
 #include <drivers/fb/fb.h>
 #include <drivers/net/net.h>
-#include <drivers/tty/pts_devices.h>
 #include <drivers/tty/pty.h>
 #include <drivers/tty/tty.h>
 #include <drivers/usb/usb.h>
