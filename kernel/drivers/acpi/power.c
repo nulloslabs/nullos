@@ -4,7 +4,7 @@
 #include <time/time.h>
 #include <uacpi/sleep.h>
 
-static volatile int started_power_transition;
+static volatile int started_power_transition = 0;
 
 static void begin_power_transition(void) {
     cli();
@@ -16,6 +16,7 @@ void reboot(void) {
     begin_power_transition();
     uacpi_reboot();
     if (!__sync_lock_test_and_set(&system_halted, 1)) halt_other_cpus();
+
     for (uint32_t attempt = 0; attempt < 100000; attempt++) {
         uint8_t status = inb(0x64);
         if (status == 0xFF) break;
@@ -26,6 +27,7 @@ void reboot(void) {
         }
         __asm__ volatile ("pause");
     }
+
     outb(0x02, 0xCF9);
     outb(0x06, 0xCF9);
     halt();
