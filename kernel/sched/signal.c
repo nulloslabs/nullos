@@ -1,5 +1,5 @@
-#include <freestanding/stdint.h>
 #include <freestanding/signal.h>
+#include <freestanding/stdint.h>
 #include <sched/sched.h>
 #include <sched/signal.h>
 

@@ -1,7 +1,7 @@
-#include <freestanding/stdint.h>
+#include <freestanding/signal.h>
 #include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
-#include <freestanding/signal.h>
+#include <freestanding/stdint.h>
 #include <drivers/acpi/power.h>
 #include <drivers/input/kbd.h>
 #include <drivers/ps2/ps2_keyboard.h>
@@ -25,10 +25,37 @@ static bool cad_extended_pending = false;
 static bool cad_reboot_enabled = false;
 static uint8_t lock_leds = 0;
 
-bool kbd_alt_pressed(void) { return alt_pressed; }
-bool kbd_ctrl_pressed(void) { return ctrl_pressed; }
+bool is_kbd_ctrl_pressed(void) {
+    return ctrl_pressed;
+}
 
-void set_kbd_cad_reboot(bool enabled) { cad_reboot_enabled = enabled; }
+bool is_kbd_alt_pressed(void) {
+    return alt_pressed;
+}
+
+uint8_t get_kbd_led_state(void) {
+    return lock_leds;
+}
+
+void set_kbd_cad_reboot(bool enabled) {
+    cad_reboot_enabled = enabled;
+}
+
+void handle_kbd_lock_scancode(uint8_t sc) {
+    if (sc & 0x80) return;
+
+    if (sc == 0x3A) {
+        lock_leds ^= KBD_LED_CAPS_LOCK;
+        caps_lock = (lock_leds & KBD_LED_CAPS_LOCK) != 0;
+    } else if (sc == 0x45) {
+        lock_leds ^= KBD_LED_NUM_LOCK;
+    } else {
+        return;
+    }
+
+    set_ps2_kbd_leds(lock_leds);
+    set_usb_kbd_leds(lock_leds);
+}
 
 void handle_kbd_cad_scancode(uint8_t sc) {
     if (sc == 0xE0) { cad_extended_pending = true; return; }
@@ -46,24 +73,6 @@ void handle_kbd_cad_scancode(uint8_t sc) {
             break;
         }
     }
-}
-
-uint8_t get_kbd_led_state(void) { return lock_leds; }
-
-void handle_kbd_lock_scancode(uint8_t sc) {
-    if (sc & 0x80) return;
-
-    if (sc == 0x3A) {
-        lock_leds ^= KBD_LED_CAPS_LOCK;
-        caps_lock = (lock_leds & KBD_LED_CAPS_LOCK) != 0;
-    } else if (sc == 0x45) {
-        lock_leds ^= KBD_LED_NUM_LOCK;
-    } else {
-        return;
-    }
-
-    set_ps2_kbd_leds(lock_leds);
-    set_usb_kbd_leds(lock_leds);
 }
 
 uint8_t get_scancode(void) {

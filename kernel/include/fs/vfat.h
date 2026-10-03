@@ -1,9 +1,9 @@
 #pragma once
 
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
-#include <freestanding/stdbool.h>
 #include <freestanding/dirent.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdint.h>
 #include <freestanding/sys/stat.h>
 #include <freestanding/sys/types.h>
 #include <main/spinlocks.h>

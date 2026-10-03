@@ -1,7 +1,7 @@
 #pragma once
 
-#include <freestanding/stdint.h>
 #include <freestanding/stddef.h>
+#include <freestanding/stdint.h>
 
 #define USB_SPEED_LOW       0   // 1.5 Mbps (USB 1.0)
 #define USB_SPEED_FULL      1   // 12 Mbps  (USB 1.1)

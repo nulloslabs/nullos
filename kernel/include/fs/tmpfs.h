@@ -1,10 +1,10 @@
 #pragma once
 
-#include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
-#include <freestanding/sys/types.h>
+#include <freestanding/stdint.h>
 #include <freestanding/sys/stat.h>
+#include <freestanding/sys/types.h>
 #include <freestanding/time.h>
 #include <main/spinlocks.h>
 

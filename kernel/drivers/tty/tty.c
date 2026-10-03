@@ -1,7 +1,7 @@
+#include <freestanding/signal.h>
+#include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
 #include <freestanding/stdint.h>
-#include <freestanding/stdbool.h>
-#include <freestanding/signal.h>
 #include <freestanding/sys/kd.h>
 #include <drivers/input/kbd.h>
 #include <drivers/tty/pty.h>
@@ -157,7 +157,7 @@ void tty_process_scancode(uint8_t sc) {
     // since the lower[] table would return garbage for these scancodes.
     {
         const char *fseq = NULL;
-        int table = (kbd_alt_pressed() ? 8 : 0) | (kbd_ctrl_pressed() ? 4 : 0);
+        int table = (is_kbd_alt_pressed() ? 8 : 0) | (is_kbd_ctrl_pressed() ? 4 : 0);
         uint16_t keymap_value = get_tty_keymap(table, sc);
         if ((keymap_value & 0xFF00) == KBD_KEY_CONSOLE && (keymap_value & 0xFF) < NUM_TTYS - 1) { set_kbd_tty((keymap_value & 0xFF) + 1); return; }
         switch (sc) {
@@ -210,7 +210,7 @@ void tty_process_scancode(uint8_t sc) {
             }
             echo = (lflags & ECHO) != 0;
         } else {
-            if (kbd_alt_pressed()) {
+            if (is_kbd_alt_pressed()) {
                 char esc = '\033';
                 write_tty_ring(&ptys[kbd_pty].s2m, &esc, 1);
             }
@@ -225,7 +225,7 @@ void tty_process_scancode(uint8_t sc) {
         echo = (lflags & ECHO) != 0;
     } else {
         // Alt+key: emit ESC prefix first (for apps like vi that use ESC as meta)
-        if (kbd_alt_pressed()) {
+        if (is_kbd_alt_pressed()) {
             char esc = '\033';
             write_tty_ring(&t->input, &esc, 1);
         }

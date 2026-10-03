@@ -1,10 +1,10 @@
 #pragma once
 
-#include <freestanding/stdint.h>
-#include <freestanding/stdbool.h>
 #include <freestanding/stdarg.h>
-#include <drivers/fb/fb.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/stdint.h>
 #include <limine/limine.h>
+#include <drivers/fb/fb.h>
 
 #define FONT_PENDING_BUFFER_SIZE 4096
 #define TERMINAL_MAX_COLUMNS 8192

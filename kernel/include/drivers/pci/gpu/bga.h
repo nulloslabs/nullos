@@ -37,6 +37,6 @@
 #define BGA_LFB_ENABLED 0x40
 #define BGA_NOCLEARMEM  0x80
 
-uint32_t palette_color_for_bga(uint8_t index);
+int update_bga(uint64_t x, uint64_t y, uint64_t width, uint64_t height);
 int set_bga_resolution(uint64_t xres, uint64_t yres, uint64_t xres_virtual, uint64_t yres_virtual, uint64_t xoffset, uint64_t yoffset, uint16_t bpp);
 void init_bga(pci_device_t *dev);

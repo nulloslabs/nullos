@@ -1,12 +1,12 @@
-#include <freestanding/stdint.h>
-#include <freestanding/stdbool.h>
 #include <freestanding/errno.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/stdint.h>
+#include <limine/limine.h>
 #include <drivers/fb/fb.h>
 #include <drivers/fb/misc/fonts.h>
 #include <drivers/pci/gpu/bga.h>
 #include <drivers/pci/gpu/svga_ii.h>
 #include <drivers/pci/gpu/virtio_gpu.h>
-#include <limine/limine.h>
 #include <main/halt.h>
 #include <main/limine_req.h>
 #include <main/terminal.h>
@@ -22,9 +22,11 @@ uint64_t fb_read_index(int idx, void* buf, uint64_t count, uint64_t offset) {
     if (!fb_req.response || idx >= (int)fb_req.response->framebuffer_count) return (uint64_t)-ENODEV;
     struct limine_framebuffer *fb = fb_req.response->framebuffers[idx];
     uint64_t size = (idx == 0 && fb_yres_virtual ? fb_yres_virtual : fb->height) * fb->pitch;
+
     if (offset >= size) return 0;
     if (offset + count > size) count = size - offset;
     memcpy(buf, (const uint8_t*)fb->address + offset, count);
+
     return count;
 }
 
@@ -32,12 +34,11 @@ uint64_t fb_write_index(int idx, const void* buf, uint64_t count, uint64_t offse
     if (!fb_req.response || idx >= (int)fb_req.response->framebuffer_count) return (uint64_t)-ENODEV;
     struct limine_framebuffer *fb = fb_req.response->framebuffers[idx];
     uint64_t size = (idx == 0 && fb_yres_virtual ? fb_yres_virtual : fb->height) * fb->pitch;
-    // Writing past the end of the framebuffer is "no space left on device",
-    // not "EOF". Tools like `cat urandom > /dev/fb0` rely on this to know
-    // when to surface ENOSPC instead of looping forever on a 0-byte write.
+
     if (offset >= size) return (uint64_t)-ENOSPC;
     if (count > size - offset) count = size - offset;
     memcpy((uint8_t*)fb->address + offset, buf, count);
+
     if (idx == 0 && count) {
         uint64_t first_y = offset / fb->pitch;
         uint64_t last_y = (offset + count - 1) / fb->pitch;
@@ -46,7 +47,28 @@ uint64_t fb_write_index(int idx, const void* buf, uint64_t count, uint64_t offse
             (void)update_fb(0, first_y, fb->width, last_y - first_y + 1);
         }
     }
+
     return count;
+}
+
+int update_fb(uint64_t x, uint64_t y, uint64_t width, uint64_t height) {
+    switch (current_fb_driver) {
+        case FB_NONE:
+            return -ENODEV;
+        case FB_LIMINE:
+            return 0;
+        case FB_BGA:
+            return update_bga(x, y, width, height);
+        case FB_SVGA_II:
+            return update_svga_ii(x, y, width, height);
+        case FB_VIRTIO_GPU:
+            return update_virtio_gpu(x, y, width, height);
+        default:
+            // whar (slowed+reverb)
+            return -EINVAL;
+    }
+
+    return -EINVAL;
 }
 
 int set_fb_resolution(uint64_t xres, uint64_t yres, uint64_t xres_virtual, uint64_t yres_virtual, uint64_t xoffset, uint64_t yoffset, uint16_t bpp) {
@@ -63,25 +85,6 @@ int set_fb_resolution(uint64_t xres, uint64_t yres, uint64_t xres_virtual, uint6
             return set_virtio_gpu_resolution(xres, yres, xres_virtual, yres_virtual, xoffset, yoffset, bpp);
         default:
             // whar
-            return -EINVAL;
-    }
-
-    return -EINVAL;
-}
-
-int update_fb(uint64_t x, uint64_t y, uint64_t width, uint64_t height) {
-    switch (current_fb_driver) {
-        case FB_NONE:
-            return -ENODEV;
-        case FB_LIMINE:
-        case FB_BGA:
-            return 0;
-        case FB_SVGA_II:
-            return update_svga_ii(x, y, width, height);
-        case FB_VIRTIO_GPU:
-            return update_virtio_gpu(x, y, width, height);
-        default:
-            // whar (slowed+reverb)
             return -EINVAL;
     }
 

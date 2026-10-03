@@ -1,8 +1,8 @@
-#include <freestanding/stdint.h>
+#include <freestanding/signal.h>
+#include <freestanding/stdarg.h>
 #include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
-#include <freestanding/stdarg.h>
-#include <freestanding/signal.h>
+#include <freestanding/stdint.h>
 #include <binfmt/elf.h>
 #include <main/assert.h>
 #include <main/halt.h>

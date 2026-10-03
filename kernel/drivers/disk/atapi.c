@@ -1,6 +1,6 @@
-#include <freestanding/stdint.h>
-#include <freestanding/stdbool.h>
 #include <freestanding/errno.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/stdint.h>
 #include <drivers/disk/atapi.h>
 #include <drivers/pci/disk/ide.h>
 #include <main/io.h>

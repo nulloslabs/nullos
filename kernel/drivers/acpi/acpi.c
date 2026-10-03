@@ -1,6 +1,6 @@
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
 #include <freestanding/ctype.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdint.h>
 #include <drivers/acpi/acpi.h>
 #include <drivers/acpi/ec.h>
 #include <drivers/acpi/power_button.h>

@@ -1,5 +1,5 @@
-#include <freestanding/stddef.h>
 #include <freestanding/errno.h>
+#include <freestanding/stddef.h>
 #include <main/spinlocks.h>
 #include <sys/hostname.h>
 #include <util/string.h>

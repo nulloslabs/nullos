@@ -1,5 +1,5 @@
-#include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stdint.h>
 #include <main/boot_args.h>
 #include <main/limine_req.h>
 #include <util/string.h>

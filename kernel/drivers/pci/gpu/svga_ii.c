@@ -1,6 +1,6 @@
-#include <freestanding/stdint.h>
-#include <freestanding/stdbool.h>
 #include <freestanding/errno.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/stdint.h>
 #include <drivers/fb/fb.h>
 #include <drivers/pci/pci.h>
 #include <drivers/pci/gpu/svga_ii.h>
@@ -102,6 +102,7 @@ int update_svga_ii(uint64_t x, uint64_t y, uint64_t width, uint64_t height) {
     uint32_t stop = svga_ii_fifo[SVGA_II_FIFO_STOP];
     uint32_t minimum = svga_ii_fifo[SVGA_II_FIFO_MIN];
     uint32_t maximum = svga_ii_fifo[SVGA_II_FIFO_MAX];
+
     if (minimum >= maximum || next < minimum || next >= maximum || stop < minimum || stop >= maximum) {
         spin_unlock_irqrestore(&svga_ii_fifo_lock, rflags);
         return -EIO;

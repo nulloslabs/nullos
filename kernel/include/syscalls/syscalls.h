@@ -1,7 +1,7 @@
 #pragma once
 
-#include <freestanding/stdint.h>
 #include <freestanding/stddef.h>
+#include <freestanding/stdint.h>
 
 #define SYSCALL_RFLAG_FIXED (1ULL << 1)
 #define SYSCALL_RFLAG_TF    (1ULL << 8)

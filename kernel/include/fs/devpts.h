@@ -1,7 +1,7 @@
 #pragma once
 
-#include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stdint.h>
 
 int get_pts_idx(const char *name);
 bool devpts_device_exists(const char* name);

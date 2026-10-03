@@ -1,7 +1,7 @@
 #pragma once
 
-#include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stdint.h>
 #include <sched/sched.h>
 
 #define MAX_CPUS           64

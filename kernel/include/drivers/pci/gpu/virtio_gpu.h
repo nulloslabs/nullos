@@ -1,7 +1,7 @@
 #pragma once
 
-#include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stdint.h>
 #include <drivers/pci/pci.h>
 
 #define VIRTIO_GPU_VENDOR 0x1AF4

@@ -40,6 +40,6 @@
 #define SVGA_II_CMD_UPDATE 1
 #define SVGA_II_SYNC_LIMIT 10000000
 
-int set_svga_ii_resolution(uint64_t xres, uint64_t yres, uint64_t xres_virtual, uint64_t yres_virtual, uint64_t xoffset, uint64_t yoffset, uint16_t bpp);
 int update_svga_ii(uint64_t x, uint64_t y, uint64_t width, uint64_t height);
+int set_svga_ii_resolution(uint64_t xres, uint64_t yres, uint64_t xres_virtual, uint64_t yres_virtual, uint64_t xoffset, uint64_t yoffset, uint16_t bpp);
 void init_svga_ii(pci_device_t *dev);

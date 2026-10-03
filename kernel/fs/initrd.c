@@ -1,13 +1,13 @@
+#include <freestanding/dirent.h>
+#include <freestanding/errno.h>
+#include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
 #include <freestanding/stdint.h>
-#include <freestanding/stdbool.h>
 #include <freestanding/sys/stat.h>
 #include <freestanding/sys/types.h>
-#include <freestanding/errno.h>
-#include <freestanding/dirent.h>
+#include <limine/limine.h>
 #include <crypto/gzip.h>
 #include <fs/initrd.h>
-#include <limine/limine.h>
 #include <main/limine_req.h>
 #include <main/log.h>
 #include <main/panic.h>

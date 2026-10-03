@@ -1,7 +1,7 @@
 #pragma once
 
-#include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stdint.h>
 #include <drivers/devices/devices.h>
 
 #define MBR_SIGNATURE         0xAA55

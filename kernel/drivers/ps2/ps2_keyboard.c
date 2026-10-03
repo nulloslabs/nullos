@@ -1,5 +1,5 @@
-#include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stdint.h>
 #include <drivers/input/kbd.h>
 #include <drivers/ps2/ps2_keyboard.h>
 #include <drivers/tty/tty.h>

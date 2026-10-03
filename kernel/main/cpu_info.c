@@ -1,7 +1,7 @@
-#include <freestanding/stdint.h>
+#include <freestanding/cpuid.h>
 #include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
-#include <freestanding/cpuid.h>
+#include <freestanding/stdint.h>
 #include <drivers/timer/hpet.h>
 #include <drivers/timer/tsc.h>
 #include <main/cpu_info.h>

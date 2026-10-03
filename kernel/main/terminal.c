@@ -1,13 +1,13 @@
-#include <freestanding/stdint.h>
-#include <freestanding/stdbool.h>
-#include <freestanding/stdarg.h>
-#include <freestanding/stdio.h>
 #include <freestanding/signal.h>
+#include <freestanding/stdarg.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/stdint.h>
+#include <freestanding/stdio.h>
+#include <limine/limine.h>
 #include <drivers/fb/fb.h>
 #include <drivers/fb/misc/fonts.h>
 #include <drivers/serial/serial.h>
 #include <drivers/tty/tty.h>
-#include <limine/limine.h>
 #include <main/halt.h>
 #include <main/limine_req.h>
 #include <main/log.h>
@@ -143,6 +143,16 @@ static void save_terminal_vt(int tty_idx);
 static void load_terminal_vt(int tty_idx);
 static void select_terminal_vt(int tty_idx, bool display);
 
+static void flush_backbuffer(struct limine_framebuffer *fb);
+static bool pending_scroll_flush = false;
+
+static void scroll_region_flush_pending(void) {
+    if (!pending_scroll_flush) return;
+    pending_scroll_flush = false;
+    if (!fb_req.response || fb_req.response->framebuffer_count < 1) return;
+    flush_backbuffer(fb_req.response->framebuffers[0]);
+}
+
 static void begin_fb_batch(void) { fb_batch_depth++; }
 
 static void update_terminal_fb(uint64_t x, uint64_t y, uint64_t width, uint64_t height) {
@@ -165,7 +175,10 @@ static void update_terminal_fb(uint64_t x, uint64_t y, uint64_t width, uint64_t 
 }
 
 static void end_fb_batch(void) {
-    if (!fb_batch_depth || --fb_batch_depth || !fb_update_pending) return;
+    if (!fb_batch_depth) return;
+    if (--fb_batch_depth) return;
+    scroll_region_flush_pending();
+    if (!fb_update_pending) return;
     if (!terminal_display_enabled) { fb_update_pending = false; return; }
     (void)update_fb(fb_update_x, fb_update_y, fb_update_right - fb_update_x, fb_update_bottom - fb_update_y);
     fb_update_pending = false;
@@ -612,7 +625,13 @@ static void delete_cells(uint64_t row, uint64_t column, uint64_t count, uint32_t
     blank_cells(line + cell_columns - count, count, background);
 }
 
+static void scroll_region_apply(int n_lines, uint32_t bg);
+
 static void scroll_region_both(int n_lines, uint32_t bg) {
+    scroll_region_apply(n_lines, bg);
+}
+
+static void scroll_region_apply(int n_lines, uint32_t bg) {
     if (!current_font_h || n_lines == 0) return;
     if (!fb_req.response || fb_req.response->framebuffer_count < 1) return;
     struct limine_framebuffer *fb = fb_req.response->framebuffers[0];
@@ -653,7 +672,8 @@ static void scroll_region_both(int n_lines, uint32_t bg) {
                     (reg_height - lh) * reg_bytes);
             fill_rect_backbuffer(0, top, back_buffer_width, lh, bg);
         }
-        flush_backbuffer(fb);
+        if (fb_batch_depth) pending_scroll_flush = true;
+        else flush_backbuffer(fb);
     } else {
         // No backbuffer: direct VRAM operations (legacy path)
         uint8_t *fb_addr = (uint8_t *)fb->address;
@@ -1142,7 +1162,7 @@ static void putc_unlocked(char c) {
                         fill_rect_backbuffer(cursor_x, cursor_y, fb->width - cursor_x, current_font_h, erase_color);
                         if (cursor_y + current_font_h < fb->height)
                             fill_rect_backbuffer(0, cursor_y + current_font_h, fb->width, fb->height - cursor_y - current_font_h, erase_color);
-                        flush_backbuffer(fb);
+                        flush_region_backbuffer(fb, 0, cursor_y, fb->width, fb->height - cursor_y);
                     } else {
                         for (uint64_t y = cursor_y; y < cursor_y + current_font_h && y < fb->height; y++)
                             for (uint64_t x = cursor_x; x < fb->width; x++) put_pixel_fb(x, y, erase_color);
@@ -1158,7 +1178,7 @@ static void putc_unlocked(char c) {
                         if (cursor_y > 0)
                             fill_rect_backbuffer(0, 0, fb->width, cursor_y, erase_color);
                         fill_rect_backbuffer(0, cursor_y, cursor_x + current_font_w, current_font_h, erase_color);
-                        flush_backbuffer(fb);
+                        flush_region_backbuffer(fb, 0, 0, fb->width, cursor_y + current_font_h);
                     } else {
                         for (uint64_t y = 0; y < cursor_y && y < fb->height; y++)
                             for (uint64_t x = 0; x < fb->width; x++) put_pixel_fb(x, y, erase_color);
@@ -1170,7 +1190,8 @@ static void putc_unlocked(char c) {
                     // Clear entire screen
                     if (back_buffer_available) {
                         fill_rect_backbuffer(0, 0, fb->width, fb->height, erase_color);
-                        flush_backbuffer(fb);
+                        if (fb_batch_depth) pending_scroll_flush = true;
+                        else flush_backbuffer(fb);
                     } else {
                         for (uint64_t y = 0; y < fb->height; y++)
                             for (uint64_t x = 0; x < fb->width; x++)
@@ -1202,7 +1223,7 @@ static void putc_unlocked(char c) {
                         // Erase entire line
                         fill_rect_backbuffer(0, cursor_y, fb->width, current_font_h, erase_color);
                     }
-                    flush_backbuffer(fb);
+                    flush_region_backbuffer(fb, 0, cursor_y, fb->width, current_font_h);
                 } else {
                     if (param == 0) {
                         for (uint64_t y = cursor_y; y < cursor_y + current_font_h && y < fb->height; y++)

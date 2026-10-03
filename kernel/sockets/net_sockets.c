@@ -1,6 +1,6 @@
-#include <freestanding/stdbool.h>
 #include <freestanding/errno.h>
 #include <freestanding/netinet/in.h>
+#include <freestanding/stdbool.h>
 #include <drivers/net/net.h>
 #include <main/halt.h>
 #include <main/io.h>

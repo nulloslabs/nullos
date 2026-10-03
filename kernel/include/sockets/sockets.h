@@ -1,10 +1,10 @@
 #pragma once
 
-#include <freestanding/stdint.h>
-#include <freestanding/stdbool.h>
-#include <freestanding/stddef.h>
 #include <freestanding/fcntl.h>
 #include <freestanding/netinet/in.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdint.h>
 #include <freestanding/sys/socket.h>
 #include <freestanding/sys/types.h>
 #include <main/spinlocks.h>

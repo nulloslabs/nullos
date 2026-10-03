@@ -1,5 +1,5 @@
-#include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stdint.h>
 #include <drivers/clock/rtc.h>
 #include <main/io.h>
 #include <main/log.h>

@@ -1,5 +1,5 @@
-#include <freestanding/stddef.h>
 #include <freestanding/ctype.h>
+#include <freestanding/stddef.h>
 #include <util/string.h>
 #include <util/strings.h>
 

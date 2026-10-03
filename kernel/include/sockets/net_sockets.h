@@ -1,7 +1,7 @@
 #pragma once
 
-#include <freestanding/stdint.h>
 #include <freestanding/stddef.h>
+#include <freestanding/stdint.h>
 #include <sockets/sockets.h>
 
 int create_inet_socket_obj(int type, int protocol, socket_t **out);

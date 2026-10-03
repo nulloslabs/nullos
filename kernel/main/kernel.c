@@ -1,11 +1,6 @@
-// Look at this #include mess...
-#include <freestanding/stdbool.h>
-#include <sys/utsname.h>
 #include <binfmt/elf.h>
-// Please, let this stop...
 #include <crypto/rng.h>
 #include <drivers/acpi/acpi.h>
-// Almost...there...
 #include <drivers/acpi/power_button.h>
 #include <drivers/clock/rtc.h>
 #include <drivers/devices/devices.h>
@@ -22,7 +17,6 @@
 #include <drivers/tty/tty.h>
 #include <fs/initrd.h>
 #include <fs/tmpfs.h>
-// Are we there yet?
 #include <main/boot_args.h>
 #include <main/cpu_info.h>
 #include <main/gdt.h>
@@ -45,8 +39,8 @@
 #include <mm/vmm.h>
 #include <sched/sched.h>
 #include <sched/workqueue.h>
+#include <sys/utsname.h>
 #include <syscalls/syscalls.h>
-// Lets never do that again.
 #include <util/string.h>
 
 __attribute__((noreturn)) void kmain(void) {

@@ -1,8 +1,8 @@
-#include <sys/utsname.h>
 #include <main/kernel.h>
 #include <main/log.h>
 #include <sys/domainname.h>
 #include <sys/hostname.h>
+#include <sys/utsname.h>
 #include <util/string.h>
 
 struct utsname utsname;

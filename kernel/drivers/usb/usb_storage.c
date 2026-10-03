@@ -1,7 +1,7 @@
-#include <freestanding/stdint.h>
-#include <freestanding/stddef.h>
-#include <freestanding/stdbool.h>
 #include <freestanding/errno.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/stddef.h>
+#include <freestanding/stdint.h>
 #include <drivers/devices/devices.h>
 #include <drivers/disk/layouts/gpt.h>
 #include <drivers/disk/layouts/mbr.h>

@@ -3,13 +3,13 @@
 #include <mm/kstack.h>
 
 #ifndef __ASSEMBLY__
-#include <freestanding/stdint.h>
-#include <freestanding/stdbool.h>
-#include <freestanding/signal.h>
-#include <freestanding/ucontext.h>
 #include <freestanding/linux/rseq.h>
-#include <freestanding/sys/types.h>
+#include <freestanding/signal.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/stdint.h>
 #include <freestanding/sys/resource.h>
+#include <freestanding/sys/types.h>
+#include <freestanding/ucontext.h>
 #include <main/smp.h>
 #include <main/spinlocks.h>
 #include <mm/vma.h>

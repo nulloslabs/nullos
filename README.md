@@ -28,7 +28,7 @@ A secure, fast and privacy-focused hobby OS.
 | Done | PCI(e) support |
 | Done | PS/2 keyboard support |
 | Done | Serial port support |
-| Done | SMAP, SMEP, NX-bit support |
+| Done | SMAP, SMEP and NX-bit support |
 | Done | SMP support |
 | Done | Syscall support |
 | Done | UHCI, OHCI and EHCI USB support |

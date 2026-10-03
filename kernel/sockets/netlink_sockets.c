@@ -1,8 +1,8 @@
-#include <freestanding/stdbool.h>
 #include <freestanding/errno.h>
 #include <freestanding/linux/netlink.h>
 #include <freestanding/linux/rtnetlink.h>
 #include <freestanding/net/if.h>
+#include <freestanding/stdbool.h>
 #include <drivers/net/net.h>
 #include <mm/mm.h>
 #include <sched/sched.h>

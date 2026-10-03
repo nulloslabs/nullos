@@ -1,6 +1,6 @@
-#include <freestanding/stdbool.h>
 #include <freestanding/errno.h>
 #include <freestanding/signal.h>
+#include <freestanding/stdbool.h>
 #include <drivers/tty/pty.h>
 #include <drivers/tty/tty.h>
 #include <fs/devtmpfs.h>

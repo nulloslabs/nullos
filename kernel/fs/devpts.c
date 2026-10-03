@@ -1,5 +1,5 @@
-#include <freestanding/stdbool.h>
 #include <freestanding/errno.h>
+#include <freestanding/stdbool.h>
 #include <drivers/tty/pty.h>
 #include <fs/devpts.h>
 #include <fs/vfs.h>

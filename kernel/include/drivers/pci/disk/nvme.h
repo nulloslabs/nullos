@@ -1,8 +1,8 @@
 #pragma once
 
-#include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
+#include <freestanding/stdint.h>
 #include <drivers/pci/pci.h>
 
 #define NVME_CLASS          0x01

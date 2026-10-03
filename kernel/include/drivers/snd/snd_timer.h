@@ -1,9 +1,9 @@
 #pragma once
 
-#include <freestanding/stdint.h>
+#include <freestanding/sound/asound.h>
 #include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
-#include <freestanding/sound/asound.h>
+#include <freestanding/stdint.h>
 
 #define SND_TIMER_RESOLUTION_NS 1000000
 #define SND_TIMER_DEFAULT_TICKS 100

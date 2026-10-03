@@ -1,7 +1,7 @@
 #pragma once
 
-#include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
+#include <freestanding/stdint.h>
 
 #define MAX_PCI_DEVICES 256
 #define LEGACY_IRQ_BASE 32

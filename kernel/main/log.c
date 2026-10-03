@@ -1,11 +1,13 @@
-#include <freestanding/stdint.h>
+#include <freestanding/stdarg.h>
 #include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
-#include <freestanding/stdarg.h>
+#include <freestanding/stdint.h>
+#include <drivers/serial/serial.h>
 #include <main/boot_args.h>
 #include <main/log.h>
 #include <main/spinlocks.h>
 #include <main/terminal.h>
+#include <time/time.h>
 #include <util/string.h>
 
 static char log_text[LOG_TEXT_SIZE];
@@ -123,6 +125,7 @@ static void append_record(const char *message, size_t length) {
         .offset = offset,
         .length = length,
     };
+
     record_count++;
     text_used += length;
     next_text_sequence += length;
@@ -223,7 +226,14 @@ void control_log_console(int action, int level) {
 
 int vlog(const char *fmt, va_list args) {
     char message[LOG_MESSAGE_SIZE];
-    format_output_t out = { .buf = message, .capacity = sizeof(message), .stored = 0, .total = 0 };
+    uint64_t uptime_us = get_monotonic_time_us();
+
+    format_output_t out = {
+        .buf = message,
+        .capacity = sizeof(message),
+        .stored = 0,
+        .total = 0
+    };
 
     if (!fmt) fmt = "(null)";
     for (const char *p = fmt; *p; p++) {
@@ -325,17 +335,34 @@ int vlog(const char *fmt, va_list args) {
         memcpy(message + available - copy_length, marker + marker_length - copy_length, copy_length);
         out.stored = available;
     }
+
     message[out.stored] = '\0';
     size_t length = out.stored;
 
+    char stamped[LOG_MESSAGE_SIZE + 32];
+    format_output_t ts = { .buf = stamped, .capacity = sizeof(stamped), .stored = 0, .total = 0 };
+    format_putc(&ts, '[');
+    format_number(&ts, uptime_us / 1000000, false, 10, false, 5, false, ' ');
+    format_putc(&ts, '.');
+    format_number(&ts, uptime_us % 1000000, false, 10, false, 6, false, '0');
+    format_putc(&ts, ']');
+    format_putc(&ts, ' ');
+    memcpy(stamped + ts.stored, message, length + 1);
+    length += ts.stored;
+
     uint64_t flags;
     spin_lock_irqsave(&log_lock, &flags);
-    append_record(message, length);
+    append_record(stamped, length);
     init_log_console();
     bool print_to_console = console_level > LOG_DEFAULT_LEVEL;
     spin_unlock_irqrestore(&log_lock, flags);
 
-    if (print_to_console && length) printf("%s", message);
+    if (print_to_console) {
+        printf("%s", stamped);
+    } else {
+        printf_serial(COM1, "%s", stamped);
+    }
+
     return (int)length;
 }
 

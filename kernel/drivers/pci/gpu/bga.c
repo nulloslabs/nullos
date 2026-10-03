@@ -1,6 +1,6 @@
-#include <freestanding/stdint.h>
-#include <freestanding/stdbool.h>
 #include <freestanding/errno.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/stdint.h>
 #include <drivers/fb/fb.h>
 #include <drivers/pci/pci.h>
 #include <drivers/pci/gpu/bga.h>
@@ -45,6 +45,14 @@ static bool is_bpp_supported_by_bga(uint16_t bpp) {
         default:
             return false;
     }
+}
+
+static uint32_t palette_color_for_bga(uint8_t index) {
+    uint32_t red = ((index >> 5) & 0x07) * 255 / 7;
+    uint32_t green = ((index >> 2) & 0x07) * 255 / 7;
+    uint32_t blue = (index & 0x03) * 255 / 3;
+
+    return (red << 16) | (green << 8) | blue;
 }
 
 static void program_bga_palette(bool eight_bit_dac) {
@@ -111,12 +119,12 @@ static void update_framebuffer_masks(void) {
     }
 }
 
-uint32_t palette_color_for_bga(uint8_t index) {
-    uint32_t red = ((index >> 5) & 0x07) * 255 / 7;
-    uint32_t green = ((index >> 2) & 0x07) * 255 / 7;
-    uint32_t blue = (index & 0x03) * 255 / 3;
+int update_bga(uint64_t x, uint64_t y, uint64_t width, uint64_t height) {
+    (void)x; (void)y;
+    (void)width; (void)height;
 
-    return (red << 16) | (green << 8) | blue;
+    // BGA automatically updates when you write to it, so no need to manually update it.
+    return 0;
 }
 
 int set_bga_resolution(uint64_t xres, uint64_t yres, uint64_t xres_virtual, uint64_t yres_virtual, uint64_t xoffset, uint64_t yoffset, uint16_t bpp) {

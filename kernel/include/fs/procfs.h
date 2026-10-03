@@ -1,8 +1,8 @@
 #pragma once
 
-#include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
+#include <freestanding/stdint.h>
 #include <freestanding/sys/stat.h>
 
 #define PROCFS_MAX_CONTENT 4096

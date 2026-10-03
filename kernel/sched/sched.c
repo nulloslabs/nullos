@@ -1,7 +1,7 @@
-#include <freestanding/stdbool.h>
-#include <freestanding/stddef.h>
 #include <freestanding/errno.h>
 #include <freestanding/linux/sched.h>
+#include <freestanding/stdbool.h>
+#include <freestanding/stddef.h>
 #include <drivers/usb/usb.h>
 #include <main/assert.h>
 #include <main/gdt.h>

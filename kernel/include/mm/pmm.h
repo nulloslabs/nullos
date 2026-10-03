@@ -10,9 +10,9 @@
 #define PMM_PAGE_ALLOCATED (-1)
 
 #ifndef __ASSEMBLY__
-#include <freestanding/stdint.h>
 #include <freestanding/stdbool.h>
 #include <freestanding/stddef.h>
+#include <freestanding/stdint.h>
 #include <limine/limine.h>
 
 typedef enum {

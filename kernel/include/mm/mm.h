@@ -1,7 +1,7 @@
 #pragma once
 
-#include <freestanding/stdint.h>
 #include <freestanding/stddef.h>
+#include <freestanding/stdint.h>
 
 #define HEAP_ALIGNMENT       16ULL
 #define HEAP_INITIAL_GROW    (64 * 1024ULL)
